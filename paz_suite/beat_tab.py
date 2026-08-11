@@ -22,6 +22,7 @@ import customtkinter as ctk
 from .theme import T, font, BEAT_LABELS
 from .format import fmt_clock, fmt_len
 from . import beat_engine as be
+from . import uithread
 from .widgets import Card, StatTile, JobPanel, LogView
 
 
@@ -39,6 +40,8 @@ class BeatTab(ctk.CTkFrame):
         self._result = None
         self._busy = False
         self._rows: dict = {}
+        self._missing: list = []
+        self._announced_setup = False
 
         self.grid_columnconfigure(0, weight=1, uniform="cols")
         self.grid_columnconfigure(1, weight=1, uniform="cols")
@@ -57,7 +60,7 @@ class BeatTab(ctk.CTkFrame):
     # ── thread-safe UI ──────────────────────────────────────────────────
 
     def ui(self, fn, *args, **kwargs) -> None:
-        self.after(0, lambda: fn(*args, **kwargs))
+        uithread.post(fn, *args, **kwargs)
 
     # ── layout ──────────────────────────────────────────────────────────
 
@@ -93,10 +96,12 @@ class BeatTab(ctk.CTkFrame):
         panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
         panel.grid(row=1, column=0, sticky="nsew", padx=(14, 7), pady=14)
         panel.grid_columnconfigure(0, weight=1)
-        panel.grid_rowconfigure(4, weight=1)
+        panel.grid_rowconfigure(5, weight=1)
+
+        self._build_setup(panel)
 
         song = Card(panel, title="Song")
-        song.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        song.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         song.grid_columnconfigure(0, weight=1)
         row = ctk.CTkFrame(song, fg_color="transparent")
         row.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 12))
@@ -112,7 +117,7 @@ class BeatTab(ctk.CTkFrame):
                      ).grid(row=0, column=1, padx=(8, 0))
 
         opts = Card(panel, title="Model")
-        opts.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        opts.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         body = ctk.CTkFrame(opts, fg_color="transparent")
         body.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 12))
         for c in (1, 3):
@@ -124,7 +129,8 @@ class BeatTab(ctk.CTkFrame):
             body, width=110, height=30, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
-            text_color=T.TEXT, values=list(be.CHECKPOINTS), state="readonly")
+            text_color=T.TEXT, values=list(be.CHECKPOINTS), state="readonly",
+            command=lambda _choice: self._refresh_setup())
         self.model_box.set(self.cfg.beat_checkpoint if self.cfg.beat_checkpoint
                            in be.CHECKPOINTS else be.CHECKPOINTS[0])
         self.model_box.grid(row=0, column=1, sticky="w", pady=4)
@@ -153,7 +159,7 @@ class BeatTab(ctk.CTkFrame):
         self.f16_switch.grid(row=1, column=2, columnspan=2, sticky="w", pady=(8, 0))
 
         run_row = ctk.CTkFrame(panel, fg_color="transparent")
-        run_row.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        run_row.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         self.analyze_btn = ctk.CTkButton(
             run_row, text="Analyze", width=120, height=34, corner_radius=7,
             font=font(12, "bold"), fg_color=T.ACCENT4_DEEP, hover_color=T.BTN_HOV,
@@ -165,10 +171,144 @@ class BeatTab(ctk.CTkFrame):
         self.status_label.pack(side="left", padx=(12, 0))
 
         self.jobs = JobPanel(panel)
-        self.jobs.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        self.jobs.grid(row=4, column=0, sticky="ew", pady=(0, 10))
 
         self.logview = LogView(panel)
-        self.logview.grid(row=4, column=0, sticky="nsew")
+        self.logview.grid(row=5, column=0, sticky="nsew")
+
+    # ── setup panel ──────────────────────────────────────────────────────
+    #
+    # The beat tracker's dependencies are heavy, platform-specific and not
+    # part of the suite's own requirements.txt, and the model checkpoint is
+    # fetched on first use. Both are invisible failure modes - an "install
+    # these" line in a README doesn't help when the button just doesn't
+    # work - so the tab states what's missing and can fix it in place.
+
+    def _build_setup(self, panel) -> None:
+        card = Card(panel, title="Setup")
+        card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        card.grid_columnconfigure(0, weight=1)
+
+        self.setup_label = ctk.CTkLabel(
+            card, text="Checking…", font=font(10, mono=True), text_color=T.DIM,
+            anchor="w", justify="left", wraplength=560)
+        self.setup_label.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 0))
+
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.grid(row=2, column=0, sticky="ew", padx=14, pady=(8, 12))
+        self.install_btn = ctk.CTkButton(
+            row, text="Install dependencies", width=150, height=30, corner_radius=7,
+            font=font(11, "bold"), fg_color=T.ACCENT4_DEEP, hover_color=T.BTN_HOV,
+            text_color=T.ACCENT4, command=self._install_deps)
+        self.install_btn.pack(side="left")
+        self.download_btn = ctk.CTkButton(
+            row, text="Download model", width=130, height=30, corner_radius=7,
+            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
+            command=self._download_checkpoint)
+        self.download_btn.pack(side="left", padx=(8, 0))
+        ctk.CTkButton(row, text="Re-check", width=90, height=30, corner_radius=7,
+                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                     text_color=T.DIM, command=self._refresh_setup
+                     ).pack(side="left", padx=(8, 0))
+
+    def _refresh_setup(self) -> None:
+        """Kick off a dependency probe. Off the UI thread on purpose:
+        importing torch takes seconds, and this runs while the app window
+        is still coming up."""
+        self.setup_label.configure(text="Checking…", text_color=T.DIM)
+        for btn in (self.install_btn, self.download_btn):
+            btn.configure(state="disabled")
+        checkpoint = self.model_box.get()
+        threading.Thread(target=self._probe_setup, args=(checkpoint,),
+                         daemon=True).start()
+
+    def _probe_setup(self, checkpoint: str) -> None:
+        rows = be.dependency_status()
+        self.ui(self._apply_setup, rows, be.has_ffmpeg(),
+                be.checkpoint_present(checkpoint), checkpoint)
+
+    def _apply_setup(self, rows: list, ffmpeg_ok: bool, cached: bool,
+                      checkpoint: str) -> None:
+        missing = [pkg for pkg, _p, ok, _d in rows if not ok]
+        self._missing = missing
+        bits = []
+        for package, _purpose, ok, detail in rows:
+            mark = "✓" if ok else "✗"
+            version = f" {detail}" if ok and detail else ""
+            bits.append(f"{mark} {package}{version}")
+        bits.append("✓ ffmpeg" if ffmpeg_ok else "✗ ffmpeg (needed to read audio)")
+        bits.append(f"{'✓' if cached else '·'} model {checkpoint}"
+                    f"{'' if cached else ' (downloads on first run)'}")
+
+        self.setup_label.configure(text="   ".join(bits),
+                                   text_color=T.OK if (not missing and ffmpeg_ok) else T.WARN)
+        self.install_btn.configure(
+            state="disabled" if (self._busy or not missing) else "normal",
+            text="Install dependencies" if missing else "All installed")
+        self.download_btn.configure(
+            state="disabled" if (self._busy or missing or cached) else "normal",
+            text="Downloaded" if cached else "Download model")
+        self.analyze_btn.configure(
+            state="disabled" if (self._busy or missing) else "normal")
+
+        if not self._announced_setup:
+            self._announced_setup = True
+            if missing:
+                self.logview.write(self.F("missing_deps"), "warn")
+                self.logview.write("Missing: " + ", ".join(missing), "info")
+            elif not ffmpeg_ok:
+                self.logview.write("ffmpeg isn't on PATH - it's needed to read "
+                                    "audio files. Install it and press Re-check.", "warn")
+
+    def _install_deps(self) -> None:
+        if self._busy:
+            return
+        missing = list(self._missing)
+        if not missing:
+            self._refresh_setup()
+            return
+        self._busy = True
+        self._refresh_setup()
+        self.set_status("Installing " + ", ".join(missing) + "…", T.DIM)
+        self.logview.write("Installing: " + ", ".join(missing), "head")
+        self.jobs.start("install", "pip install")
+        self.jobs.set_progress("install", 0.5, "running")
+        threading.Thread(target=self._run_install, args=(missing,), daemon=True).start()
+
+    def _run_install(self, packages: list) -> None:
+        ok, msg = be.install_dependencies(
+            packages, progress_cb=lambda line: self.ui(self.logview.write, line, "info"))
+        self.ui(self._install_done, ok, msg)
+
+    def _install_done(self, ok: bool, msg: str) -> None:
+        self._busy = False
+        self.jobs.finish("install")
+        self.logview.write(msg, "ok" if ok else "fail")
+        self.set_status(msg, T.OK if ok else T.FAIL)
+        self._refresh_setup()
+
+    def _download_checkpoint(self) -> None:
+        if self._busy:
+            return
+        checkpoint = self.model_box.get()
+        self._busy = True
+        self._refresh_setup()
+        self.set_status(f"Downloading '{checkpoint}'…", T.DIM)
+        self.jobs.start("download", f"checkpoint {checkpoint}")
+        self.jobs.set_progress("download", 0.5, "downloading")
+        threading.Thread(target=self._run_download, args=(checkpoint,), daemon=True).start()
+
+    def _run_download(self, checkpoint: str) -> None:
+        ok, msg = be.download_checkpoint(
+            checkpoint, progress_cb=lambda line: self.ui(self.logview.write, line, "info"))
+        self.ui(self._download_done, ok, msg)
+
+    def _download_done(self, ok: bool, msg: str) -> None:
+        self._busy = False
+        self.jobs.finish("download")
+        self.logview.write(msg, "ok" if ok else "fail")
+        self.set_status(msg, T.OK if ok else T.FAIL)
+        self._refresh_setup()
 
     # ── right: results + export ──────────────────────────────────────────
 
@@ -324,11 +464,7 @@ class BeatTab(ctk.CTkFrame):
     # ── dependency check ──────────────────────────────────────────────────
 
     def _check_deps(self) -> None:
-        err = be.import_error()
-        if err:
-            self.analyze_btn.configure(state="disabled")
-            self.logview.write(self.F("missing_deps"), "warn")
-            self.logview.write(err, "info")
+        self._refresh_setup()
 
     # ── song picking ──────────────────────────────────────────────────────
 
@@ -363,10 +499,9 @@ class BeatTab(ctk.CTkFrame):
         if not self._audio_path:
             self.set_status(self.F("no_file"), T.WARN)
             return
-        err = be.import_error()
-        if err:
+        if self._missing:
             self.set_status(self.F("missing_deps"), T.WARN)
-            self.logview.write(err, "fail")
+            self.logview.write("Missing: " + ", ".join(self._missing), "fail")
             return
 
         checkpoint = self.model_box.get()
@@ -380,7 +515,7 @@ class BeatTab(ctk.CTkFrame):
         self.cfg.save()
 
         self._busy = True
-        self.analyze_btn.configure(state="disabled")
+        self._refresh_setup()
         self._clear_results()
         name = os.path.basename(self._audio_path)
         self.jobs.start("analyze", name)
@@ -413,14 +548,14 @@ class BeatTab(ctk.CTkFrame):
 
     def _analyze_failed(self, message: str) -> None:
         self._busy = False
-        self.analyze_btn.configure(state="normal")
+        self._refresh_setup()
         self.jobs.finish("analyze")
         self.logview.write(f"Analysis failed: {message}", "fail")
         self.set_status("Analysis failed - see log.", T.FAIL)
 
     def _analyze_done(self, result) -> None:
         self._busy = False
-        self.analyze_btn.configure(state="normal")
+        self._refresh_setup()
         self.jobs.set_progress("analyze", 1.0, "done", T.OK)
         self.jobs.finish("analyze")
         self._result = result
@@ -548,11 +683,20 @@ HELP_TEXT = """\
 Beat This finds beats and downbeats in a song using the CPJKU "Beat This!" \
 neural beat tracker, then turns them into markers for DaVinci Resolve.
 
-1. Browse to a song (wav/mp3/flac/etc. - anything torchaudio's backend \
-reads).
+Setup: the beat tracker needs PyTorch and a few other packages that aren't \
+part of the rest of the suite. The Setup panel shows what's present; \
+Install dependencies pip-installs whatever is missing into the same Python \
+that's running this app, and Download model fetches the model checkpoint \
+ahead of time so the first analysis isn't a long silent wait. Restart the \
+app after installing. If PyTorch itself won't install, get the right build \
+for your machine from https://pytorch.org/get-started/locally/ and press \
+Re-check.
+
+1. Browse to a song. Audio is read with ffmpeg (already required by the \
+rest of PAZ), so anything ffmpeg can open works - mp3, wav, flac, m4a, \
+ogg, even the audio track of a video file.
 2. Pick a model checkpoint (final0 is the default full-size model; small* \
-models are faster and smaller) and a device, then press Analyze (or F5). \
-The first run downloads the checkpoint and is slower while it does.
+models are faster and smaller) and a device, then press Analyze (or F5).
 3. Once analysis finishes, the table lists every beat with its time and \
 its position in the bar (1 = downbeat).
 

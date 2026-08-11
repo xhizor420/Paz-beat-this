@@ -20,6 +20,7 @@ from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
 from .widgets import PeekWindow
 from .player_engine import ClipPlayer, HAS_FFPLAY
+from . import uithread
 
 STATE_COLOURS = {
     "queued":    T.FAINT,
@@ -575,7 +576,7 @@ class ScrubPreview(ctk.CTkFrame):
 
         def work():
             info = probe(path)
-            self.after(0, lambda: self._on_info(info, token, position))
+            uithread.post(self._on_info, info, token, position)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -775,7 +776,7 @@ class ScrubPreview(ctk.CTkFrame):
             data = self.cache.frame(path, pos, width, fast=fast)
             if token != self._token:
                 return
-            self.after(0, lambda: self._draw_frame(data, token))
+            uithread.post(self._draw_frame, data, token)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -916,7 +917,7 @@ class ScrubPreview(ctk.CTkFrame):
             # A pre-built sprite sheet crop instead of an ffmpeg spawn per
             # hover - see ThumbCache.hover_frame() in media.py.
             data = self.cache.hover_frame(path, duration, frac)
-            self.after(0, lambda: self._ghost_done(data, moment, token, x_root, y_root))
+            uithread.post(self._ghost_done, data, moment, token, x_root, y_root)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -983,7 +984,7 @@ class ScrubPreview(ctk.CTkFrame):
                 data = self.cache.frame(path, mark, 200)
                 if token != self._strip_token:
                     return
-                self.after(0, lambda d=data, i=index: self._place_strip(d, i, token))
+                uithread.post(self._place_strip, data, index, token)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1102,11 +1103,8 @@ class ContactSheet(ctk.CTkToplevel):
     def _post(self, fn) -> bool:
         if not self.alive:
             return False
-        try:
-            self.after(0, fn)
-            return True
-        except (tk.TclError, RuntimeError):
-            return False
+        uithread.post(fn)
+        return True
 
     def _cell_xy(self, index: int) -> tuple:
         col, row = index % self.COLS, index // self.COLS
@@ -1293,11 +1291,11 @@ class DuplicateWindow(ctk.CTkToplevel):
                         seen.add(path)
                     groups.append(group)
 
-        self.after(0, lambda: self._show(groups))
+        uithread.post(self._show, groups)
 
     def _say(self, text):
         if self.alive:
-            self.after(0, lambda: self.status.configure(text=text))
+            uithread.post(self.status.configure, text=text)
 
     def _show(self, groups):
         if not self.alive:

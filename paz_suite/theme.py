@@ -158,8 +158,8 @@ BEAT_LABELS = {
     "done":        "Done",
     "no_file":     "Pick an audio file first.",
     "no_result":   "Analyze a song first.",
-    "missing_deps": ("The beat tracker isn't installed. Install PyTorch for your "
-                      "platform, then: pip install -r beat_this/requirements.txt"),
+    "missing_deps": ("The beat tracker's dependencies aren't installed yet - press "
+                      "Install dependencies in the Setup panel above."),
     "analyze_done": "{n} beats · {d} downbeats · {bpm:.1f} BPM",
     "saved_tsv":    "Saved .beats file to {path}",
     "saved_edl":    "Saved EDL to {path} — Resolve: Timeline > Import > Timeline Markers from EDL",

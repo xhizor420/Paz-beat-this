@@ -15,6 +15,7 @@ import customtkinter as ctk
 from .theme import T, font
 from .files import is_ignored_dir, open_in_explorer
 from .convert_engine import verify
+from . import uithread
 
 
 class HiddenTagsWindow(ctk.CTkToplevel):
@@ -394,10 +395,7 @@ class VerifyWindow(ctk.CTkToplevel):
     def ui(self, fn, *a, **k):
         if not self.alive:
             return
-        try:
-            self.after(0, lambda: fn(*a, **k))
-        except (tk.TclError, RuntimeError):
-            pass
+        uithread.post(fn, *a, **k)
 
     def _run(self):
         paths = [rec.path for rec in self.tab.records if os.path.exists(rec.path)]

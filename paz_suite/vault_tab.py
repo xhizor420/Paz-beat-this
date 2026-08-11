@@ -38,6 +38,7 @@ from .library_db import (
     vault_clear_project, vault_rename_project, vault_projects_list,
 )
 from .library_windows import HelpWindow
+from . import uithread
 
 _SPLIT_RE = re.compile(r"[,\n\r\t;]+|\s+")
 
@@ -634,7 +635,7 @@ class VaultTab(ctk.CTkFrame):
                     data = fh.read()
             except OSError:
                 pass
-            self.strip_canvas.after(0, lambda i=index, d=data, t=token: self._place_strip_thumb(i, d, t))
+            uithread.post(self._place_strip_thumb, index, data, token)
 
     def _place_strip_thumb(self, index: int, data, token: int) -> None:
         if token != self._strip_token or index >= len(self._strip_boxes):
