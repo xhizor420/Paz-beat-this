@@ -1,8 +1,8 @@
-"""PAZ Suite application shell: one window, a Convert/Library tabview, and
-the shared services (config, e621 cache, thumbnail cache, toasts, hover
-peek) that both tabs draw on. Also owns the keyboard-shortcut dispatch,
-since several shortcuts mean different things on each tab and must only
-fire for whichever one is currently visible.
+"""PAZ Suite application shell: one window, a Convert/Library/Vault/Beat
+This tabview, and the shared services (config, e621 cache, thumbnail
+cache, toasts, hover peek) the tabs draw on. Also owns the keyboard-
+shortcut dispatch, since several shortcuts mean different things on each
+tab and must only fire for whichever one is currently visible.
 """
 
 from __future__ import annotations
@@ -19,9 +19,10 @@ from .widgets import Toaster, PeekWindow
 from .convert_tab import ConvertTab
 from .library_tab import LibraryTab
 from .vault_tab import VaultTab
+from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
 
-TAB_NAMES = ("Convert", "Library", "Vault")
+TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
 
 
 class PazApp:
@@ -71,6 +72,7 @@ class PazApp:
         # Reads app.library.records to match a pasted list against the
         # index, so it must exist after Library has loaded its own.
         self.vault = VaultTab(self.tabview.tab("Vault"), self)
+        self.beat = BeatTab(self.tabview.tab("Beat This"), self)
 
         if self.cfg.last_tab in TAB_NAMES:
             self.tabview.set(self.cfg.last_tab)
@@ -114,13 +116,14 @@ class PazApp:
             pass
 
     # Each tab has its own identity colour (pink for Convert, violet for
-    # Library) used throughout its own widgets; recolouring the shared tab
-    # strip to match whichever one is active makes the switcher read as
-    # "you are here" instead of one flat, generic control that looks the
-    # same no matter which tab is showing.
-    _TAB_ACCENTS = {"Convert": (T.ACCENT_DEEP, T.ACCENT),
-                    "Library": (T.ACCENT2_DEEP, T.ACCENT2),
-                    "Vault":   (T.ACCENT3_DEEP, T.ACCENT3)}
+    # Library, teal for Vault, amber for Beat This) used throughout its own
+    # widgets; recolouring the shared tab strip to match whichever one is
+    # active makes the switcher read as "you are here" instead of one flat,
+    # generic control that looks the same no matter which tab is showing.
+    _TAB_ACCENTS = {"Convert":   (T.ACCENT_DEEP, T.ACCENT),
+                    "Library":   (T.ACCENT2_DEEP, T.ACCENT2),
+                    "Vault":     (T.ACCENT3_DEEP, T.ACCENT3),
+                    "Beat This": (T.ACCENT4_DEEP, T.ACCENT4)}
 
     def _style_tabs(self) -> None:
         active = self.tabview.get()
@@ -154,6 +157,7 @@ class PazApp:
         self.convert.after_settings_saved()
         self.library.after_settings_saved()
         self.vault.after_settings_saved()
+        self.beat.after_settings_saved()
 
     # ── keyboard dispatch ────────────────────────────────────────────────
     #
@@ -183,7 +187,8 @@ class PazApp:
         root.bind("<F5>", lambda e: (
             self.convert.key_scan() if self._active() == "Convert"
             else self.library.key_sync() if self._active() == "Library"
-            else self.vault.key_lookup()))
+            else self.vault.key_lookup() if self._active() == "Vault"
+            else self.beat.key_analyze()))
         root.bind("<Control-f>", lambda e: (
             self.convert.key_find_search() if self._active() == "Convert"
             else self.library.key_find_search(e) if self._active() == "Library"
