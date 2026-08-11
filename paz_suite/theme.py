@@ -27,6 +27,9 @@ class T:
     ACCENT3      = "#33D9A8"  # teal — Vault identity
     ACCENT3_HOV  = "#5CE6BC"
     ACCENT3_DEEP = "#123D33"
+    ACCENT4      = "#FFB84D"  # amber — Beat This identity
+    ACCENT4_HOV  = "#FFCC80"
+    ACCENT4_DEEP = "#3D2A0D"
 
     # Colours cycled to auto-assign each new Vault project its own mark,
     # distinct from the pink/violet/teal tab identities above so a marked
@@ -144,4 +147,22 @@ VAULT_LABELS = {
     "tagline":  "used-clip tracker",
     "idle":     "Ready",
     "empty":    "Paste a list of post IDs or filenames above, then press Look up.",
+}
+
+BEAT_LABELS = {
+    "tagline":     "beat markers for Resolve",
+    "idle":        "Pick a song, then press Analyze",
+    "loading":     "Loading model",
+    "analyzing":   "Analyzing audio",
+    "writing":     "Writing",
+    "done":        "Done",
+    "no_file":     "Pick an audio file first.",
+    "no_result":   "Analyze a song first.",
+    "missing_deps": ("The beat tracker isn't installed. Install PyTorch for your "
+                      "platform, then: pip install -r beat_this/requirements.txt"),
+    "analyze_done": "{n} beats · {d} downbeats · {bpm:.1f} BPM",
+    "saved_tsv":    "Saved .beats file to {path}",
+    "saved_edl":    "Saved EDL to {path} — Resolve: Timeline > Import > Timeline Markers from EDL",
+    "resolve_ok":   "{msg}",
+    "resolve_fail": "{msg}",
 }

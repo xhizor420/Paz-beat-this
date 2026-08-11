@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-PAZ Suite — Convert + Library
-==============================
+PAZ Suite — Convert + Library + Vault + Beat This
+===================================================
 
 Batch-converts a video library to MP4 (GPU with CPU fallback), sorts the
-output by resolution/frame rate, and browses/searches the converted result
-e621-style — all in one app with one config, one database and one e621 tag
-cache, instead of two separate tools.
+output by resolution/frame rate, browses/searches the converted result
+e621-style, tracks what's already used in a project, and runs the "Beat
+This!" beat tracker on a song to export DaVinci Resolve markers — all in
+one app with one config and one database.
 
 Requirements:
     pip install -r requirements.txt
     ffmpeg + ffprobe on PATH (ffplay too, for audio in the Library player)
+
+    The Beat This tab needs its own, heavier dependencies (PyTorch and
+    friends) and degrades gracefully without them - see the Beat This
+    section of README.md.
 
 Run:
     python main.py

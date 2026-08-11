@@ -131,6 +131,18 @@ class AppConfig:
     # gallery thumbnails - those have no cap and live one-per-clip).
     frame_cache_limit: int = 30000
 
+    # ── Beat This: song analysis + Resolve marker export ────────────────
+    beat_checkpoint: str = "final0"
+    beat_device: str = "Auto"           # Auto | CPU | GPU
+    beat_dbn: bool = False
+    beat_float16: bool = False
+    beat_fps: float = 30.0
+    beat_beat_color: str = "Blue"
+    beat_downbeat_color: str = "Red"
+    beat_downbeats_only: bool = False
+    beat_last_audio_dir: str = ""
+    beat_last_export_dir: str = ""
+
     # ── App-wide ──────────────────────────────────────────────────────────
     last_tab: str = "Convert"
 

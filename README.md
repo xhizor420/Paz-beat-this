@@ -1,7 +1,8 @@
 # PAZ Suite
 
 Personal video pipeline: batch-convert clips to 4K/60, browse and search
-the library, track what's already used in a project. Three tabs, one app.
+the library, track what's already used in a project, and pull beat
+markers out of a song for the edit. Four tabs, one app.
 
 - **Convert** — watches a source folder, encodes to MP4 (GPU with CPU
   fallback), sorts output by resolution/fps into a 4K 60+ pool vs. a
@@ -12,6 +13,9 @@ the library, track what's already used in a project. Three tabs, one app.
 - **Vault** — paste a list of post IDs or filenames, find them in the
   library, mark the ones used in a named project so they're visibly
   flagged later instead of getting mixed back into the unused pool.
+- **Beat This** — pick a song, run the [Beat This!](https://github.com/CPJKU/beat_this)
+  neural beat tracker on it, and export the beats/downbeats as markers
+  for DaVinci Resolve (or a plain `.beats` file). See below.
 
 ## Setup
 
@@ -26,6 +30,54 @@ First launch: **Settings → Convert Folders** to point Source / Converted /
 4K 60+ / Needs work at your real folders. Library indexes Convert's
 "Converted" folder by default — change that under **Settings → Library**
 if it lives elsewhere.
+
+Convert, Library and Vault only need the dependencies above. Beat This
+needs its own, heavier set — see the next section — and its tab just
+shows an "install these" message and stays disabled until they're
+present, so the rest of the suite runs fine without them.
+
+## Beat This: song → Resolve markers
+
+The **Beat This** tab wraps the vendored [`beat_this/`](beat_this/)
+checkout (the CPJKU beat tracker, ISMIR 2024) for one job: upload a song,
+get beat/downbeat markers you can bring into a DaVinci Resolve timeline.
+
+### Install
+
+```
+# Install PyTorch for your platform first: https://pytorch.org/get-started/locally/
+pip install -r beat_this/requirements.txt
+```
+
+`ffmpeg` (already required above) doubles as torchaudio's backend for
+reading non-`.wav` audio. DBN postprocessing is optional and needs
+`pip install git+https://github.com/CPJKU/madmom.git` on top.
+
+### Using it
+
+1. Browse to a song, pick a model checkpoint (`final0` is the default;
+   `small*` is faster/lighter) and a device, then **Analyze** (or F5).
+   The first run per checkpoint downloads it and is slower.
+2. The table lists every beat: its time and its position in the bar
+   (1 = downbeat).
+3. Export:
+   - **Save .beats** — the plain `time<TAB>beat number` format `beat_this`
+     and Sonic Visualiser already read.
+   - **Save EDL for Resolve** — a CMX3600 EDL with one marker per beat.
+     Import with **Timeline → Import → Timeline Markers from EDL**.
+     Markers land at record timecode = time into the song, counting from
+     `00:00:00:00` — put the song at the very start of a timeline (or a
+     fresh one) before importing, since EDL marker import always uses
+     absolute record position, not the clip's own position. Pick the
+     frame rate matching your timeline first; timecode is non-drop-frame.
+   - **Send to Resolve now** — skips the file and adds markers straight
+     to Resolve's current timeline via its scripting API. Only works run
+     on the same machine as Resolve, with Resolve open and
+     **Preferences → General → External scripting using** set to Local
+     (or Network), plus `RESOLVE_SCRIPT_API` / `RESOLVE_SCRIPT_LIB` /
+     `PYTHONPATH` set per Resolve's own Developer/Scripting README.
+     Unlike the EDL, this reads the timeline's own frame rate and start
+     frame, so the clip doesn't need to sit at timeline zero.
 
 ## Search syntax (Library)
 
@@ -55,8 +107,11 @@ paz_suite/
   library_windows.py        hidden tags, help, folders, integrity verifier
   library_tab.py            the Library tab
   vault_tab.py              the Vault tab
+  beat_engine.py            Beat This inference, BPM/TSV/EDL, Resolve scripting (no UI)
+  beat_tab.py               the Beat This tab
   settings_window.py        the settings dialog
   app.py                    window shell, tab switcher, keyboard dispatch
+beat_this/                  vendored CPJKU/beat_this checkout (the beat tracker itself)
 ```
 
 ## Note
