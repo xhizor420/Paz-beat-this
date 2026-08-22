@@ -18,7 +18,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, LIBRARY_LABELS
+from .theme import T, font, lens_photo, LIBRARY_LABELS
 from .format import fmt_len, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
@@ -92,6 +92,7 @@ class LibraryTab(ctk.CTkFrame):
         self._badge_font = tkfont.Font(family=T.MONO, size=8)
         self._spec_font = tkfont.Font(family=T.MONO, size=9)
         self._chip_font = tkfont.Font(family=T.UI, size=11)
+        self._quick_font = tkfont.Font(family=T.UI, size=10)
         self.folders_label.configure(text=self._folders_summary())
         self._restore_state()
         self._load_library()
@@ -124,14 +125,16 @@ class LibraryTab(ctk.CTkFrame):
         self._build_grid_area()
         self._build_details()
 
+    SEARCH_H = 38
+
     def _build_topbar(self):
         """
-        Two rows instead of one long one: browsing controls up top (brand,
-        search, rating/sort), a separate action toolbar underneath (sync +
-        maintenance on the left, configuration on the right). The standalone
-        Folders button is gone - Settings > Library > "Change folders..."
-        and Ctrl+O both still reach it, so it doesn't need its own slot in
-        an already busy row.
+        Two rows instead of one long one: browsing up top (the search field
+        leading, then rating/sort), a separate action toolbar underneath
+        (sync + maintenance on the left, configuration on the right). The
+        standalone Folders button is gone - Settings > Library > "Change
+        folders..." and Ctrl+O both still reach it, so it doesn't need its
+        own slot in an already busy row.
         """
         bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0)
         bar.grid(row=0, column=0, columnspan=3, sticky="ew")
@@ -139,68 +142,74 @@ class LibraryTab(ctk.CTkFrame):
         # ── row 1: browse ────────────────────────────────────────────────
         row1 = ctk.CTkFrame(bar, fg_color="transparent")
         row1.pack(fill="x")
-        row1.grid_columnconfigure(1, weight=1)
+        row1.grid_columnconfigure(0, weight=1)
 
-        left = ctk.CTkFrame(row1, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="w", padx=18, pady=(10, 6))
-        self.brand_name = ctk.CTkLabel(left, text="PAZ", font=font(16, "bold"),
-                                        text_color=T.ACCENT2)
-        self.brand_name.pack(side="left")
-        self.brand_kind = ctk.CTkLabel(left, text="Library", font=font(16), text_color=T.TEXT)
-        self.brand_kind.pack(side="left", padx=(4, 0))
-        self.brand_sub = ctk.CTkLabel(left, text="", font=font(10, mono=True),
-                                       text_color=T.FAINT)
-        self.brand_sub.pack(side="left", padx=(10, 0), pady=(3, 0))
+        # Search leads the row. The suite's identity is in the header strip
+        # and which tab you're on is in the tab strip right above this, so a
+        # third "PAZ Library" lockup here was only pushing the one control
+        # this tab is actually built around into the middle of the row.
+        box = ctk.CTkFrame(row1, fg_color=T.INPUT, corner_radius=10,
+                           border_width=1, border_color=T.ACCENT2_DEEP,
+                           height=self.SEARCH_H)
+        box.grid(row=0, column=0, sticky="ew", padx=(18, 12), pady=(11, 7))
+        box.pack_propagate(False)
 
-        mid = ctk.CTkFrame(row1, fg_color="transparent")
-        mid.grid(row=0, column=1, sticky="ew", padx=8, pady=(10, 6))
-        mid.grid_columnconfigure(0, weight=1)
+        self._lens = lens_photo(15, T.ACCENT2)
+        tk.Label(box, image=self._lens, bg=T.INPUT, bd=0
+                 ).pack(side="left", padx=(13, 0))
+
+        # The ↺/✕ pair rides inside the field rather than beside it, so the
+        # row reads as one control instead of three parked next to each other.
+        def boxbtn(text, cmd, size=13):
+            ctk.CTkButton(box, text=text, width=28, height=self.SEARCH_H - 12,
+                          corner_radius=7, font=font(size),
+                          fg_color="transparent", hover_color=T.BTN_HOV,
+                          text_color=T.DIM, command=cmd
+                          ).pack(side="right", padx=(0, 5))
+
+        boxbtn("✕", self._clear_search, 12)
+        boxbtn("↺", self._show_history)
 
         self.search = ctk.CTkEntry(
-            mid, placeholder_text="Search: wolf -mlp artist:name rating:e "
-                                  "folder:Furry  ( / to focus )",
-            height=34, font=font(12), corner_radius=8, fg_color=T.INPUT,
-            border_color=T.LINE, border_width=1, text_color=T.TEXT)
-        self.search.grid(row=0, column=0, sticky="ew")
+            box, placeholder_text="wolf -mlp  artist:name  rating:e  "
+                                  "folder:Furry      ( / to focus )",
+            height=self.SEARCH_H - 8, font=font(13), corner_radius=0,
+            fg_color="transparent", border_width=0, text_color=T.TEXT,
+            placeholder_text_color=T.FAINT)
+        self.search.pack(side="left", fill="both", expand=True, padx=(8, 4))
         self.search.bind("<KeyRelease>", self._on_search_key)
         self.search.bind("<Return>", self._commit_search)
         self.search.bind("<Up>", lambda e: self._history_step(-1))
         self.search.bind("<Down>", lambda e: self._history_step(1))
         self.search.bind("<Escape>", lambda e: self._clear_search())
         self._history_pos = -1
-        ctk.CTkButton(mid, text="↺", width=30, height=34, corner_radius=8,
-                      font=font(13), fg_color=T.INPUT, hover_color=T.BTN_HOV,
-                      text_color=T.DIM, command=self._show_history
-                      ).grid(row=0, column=1, padx=(6, 0))
-        ctk.CTkButton(mid, text="✕", width=30, height=34, corner_radius=8,
-                      font=font(12), fg_color=T.INPUT, hover_color=T.BTN_HOV,
-                      text_color=T.DIM, command=self._clear_search
-                      ).grid(row=0, column=2, padx=(4, 0))
 
         right1 = ctk.CTkFrame(row1, fg_color="transparent")
-        right1.grid(row=0, column=2, sticky="e", padx=16, pady=(10, 6))
+        right1.grid(row=0, column=1, sticky="e", padx=(0, 16), pady=(11, 7))
 
         self.rating_seg = ctk.CTkSegmentedButton(
             right1, values=["All", "S", "Q", "E"], command=lambda _v: self.run_search(),
-            font=font(10), height=30, corner_radius=7, fg_color=T.INPUT,
-            selected_color=T.ACCENT_DEEP, selected_hover_color=T.ACCENT_DEEP,
+            font=font(11), height=self.SEARCH_H, corner_radius=9, fg_color=T.INPUT,
+            selected_color=T.ACCENT2_DEEP, selected_hover_color=T.ACCENT2_DEEP,
             unselected_color=T.INPUT, unselected_hover_color=T.BTN_HOV,
-            text_color=T.DIM, border_width=1)
+            text_color=T.DIM, border_width=2)
         self.rating_seg.set("All")
         self.rating_seg.pack(side="left", padx=(0, 8))
 
         self.sort_menu = ctk.CTkOptionMenu(
-            right1, values=list(SORTS), width=110, height=30, font=font(11),
-            corner_radius=7, fg_color=T.INPUT, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT2_DEEP,
+            right1, values=list(SORTS), width=118, height=self.SEARCH_H,
+            font=font(12), corner_radius=9, fg_color=T.INPUT, button_color=T.LINE,
+            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
+            dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, command=lambda _v: self.run_search())
         self.sort_menu.set(self.cfg.sort if self.cfg.sort in SORTS else "Newest")
-        self.sort_menu.pack(side="left", padx=(0, 6))
+        self.sort_menu.pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(right1, text="▲ Top", width=54, height=30, corner_radius=7,
-                      font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                      text_color=T.ACCENT2, command=lambda: self.add_token("sort:score")
+        ctk.CTkButton(right1, text="▲ Top", width=62, height=self.SEARCH_H,
+                      corner_radius=9, font=font(11), fg_color=T.BTN,
+                      hover_color=T.BTN_HOV, text_color=T.ACCENT2,
+                      command=lambda: self.add_token("sort:score")
                       ).pack(side="left")
 
         # ── row 2: act ───────────────────────────────────────────────────
@@ -307,21 +316,34 @@ class LibraryTab(ctk.CTkFrame):
         center.grid_columnconfigure(0, weight=1)
         center.grid_rowconfigure(2, weight=1)
 
-        self.chips = ctk.CTkFrame(center, fg_color="transparent", height=30)
+        # Row 0 pairs the active search tokens (left, usually empty) with
+        # the running total (right). The total used to sit on the filter
+        # row below, where it was the widest thing competing for space and
+        # got cut to "6 clips · 22" the moment the window narrowed.
+        head = ctk.CTkFrame(center, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew")
+        head.grid_columnconfigure(0, weight=1)
+
+        self.chips = ctk.CTkFrame(head, fg_color="transparent", height=30)
         self.chips.grid(row=0, column=0, sticky="ew")
+
+        self.count_label = ctk.CTkLabel(head, text="", font=font(10, mono=True),
+                                        text_color=T.DIM, anchor="e")
+        self.count_label.grid(row=0, column=1, sticky="e", padx=(12, 2))
 
         info = ctk.CTkFrame(center, fg_color="transparent")
         info.grid(row=1, column=0, sticky="ew", pady=(2, 4))
-        info.grid_columnconfigure(0, weight=1)
+        # Only the empty spacer between the two groups carries a weight, so
+        # a shortfall comes out of the gap rather than off the end of the
+        # chip row - which is how the last chip used to vanish whenever the
+        # inspector panel grew.
+        info.grid_columnconfigure(1, weight=1)
 
         # Filter chips only, on the left - actions (Random, ratio) live on
         # the right with the pager instead, since they're things you DO,
         # not ways of narrowing what's shown.
         left = ctk.CTkFrame(info, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w")
-        self.count_label = ctk.CTkLabel(left, text="", font=font(10, mono=True),
-                                         text_color=T.DIM, anchor="w")
-        self.count_label.pack(side="left", padx=(2, 12))
         self.quick_chips = {}
         for key, text, token in (
                 ("untagged", "Untagged", "is:untagged"),
@@ -329,7 +351,7 @@ class LibraryTab(ctk.CTkFrame):
                 ("4k", "4K ✓", "is:4k"),
                 ("no4k", "Non-4K", "is:no4k")):
             chip = ctk.CTkButton(left, text=text, height=22, width=92,
-                                 corner_radius=11, font=font(9),
+                                 corner_radius=11, font=font(10),
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
                                  text_color=T.DIM,
                                  command=lambda t=token: self.add_token(t))
@@ -337,7 +359,7 @@ class LibraryTab(ctk.CTkFrame):
             self.quick_chips[key] = (chip, text)
 
         pager = ctk.CTkFrame(info, fg_color="transparent")
-        pager.grid(row=0, column=1, sticky="e")
+        pager.grid(row=0, column=2, sticky="e", padx=(14, 0))
 
         ctk.CTkButton(pager, text="🎲 Random", height=22, width=84,
                       corner_radius=11, font=font(9), fg_color=T.BTN,
@@ -458,7 +480,7 @@ class LibraryTab(ctk.CTkFrame):
             self._restyle_cards()
             self._render_details()
 
-    PANEL_MIN, PANEL_MAX = 452, 1500
+    PANEL_MIN, PANEL_MAX = 512, 1500
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -481,7 +503,7 @@ class LibraryTab(ctk.CTkFrame):
             total = 1680
         if total < 400:
             total = 1680
-        base = int(max(self.PANEL_MIN, min(total * 0.30, self.PANEL_MAX)))
+        base = int(max(self.PANEL_MIN, min(total * 0.345, self.PANEL_MAX)))
         if not self.cfg.theater:
             return base
         theater = max(base + self.THEATER_BONUS, int(total * 0.46))
@@ -517,34 +539,34 @@ class LibraryTab(ctk.CTkFrame):
         self.player.frame.grid(row=0, column=0, padx=8, pady=(8, 4))
         self.after(200, self._fit_panel)
 
-        self.detail_name = ctk.CTkLabel(card, text="Nothing selected", font=font(13, "bold"),
+        self.detail_name = ctk.CTkLabel(card, text="Nothing selected", font=font(15, "bold"),
                                          text_color=T.TEXT, anchor="w",
-                                         wraplength=410, justify="left")
-        self.detail_name.grid(row=1, column=0, sticky="ew", padx=12)
-        self.detail_meta = ctk.CTkLabel(card, text="", font=font(11, mono=True),
+                                         wraplength=470, justify="left")
+        self.detail_name.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 0))
+        self.detail_meta = ctk.CTkLabel(card, text="", font=font(12, mono=True),
                                          text_color=T.DIM, anchor="w",
-                                         wraplength=410, justify="left")
-        self.detail_meta.grid(row=2, column=0, sticky="ew", padx=12, pady=(2, 6))
+                                         wraplength=470, justify="left")
+        self.detail_meta.grid(row=2, column=0, sticky="ew", padx=14, pady=(4, 8))
 
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
 
-        def dbtn(text, cmd, color=T.DIM, width=70):
-            b = ctk.CTkButton(buttons, text=text, width=width, height=26,
-                              corner_radius=6, font=font(10), fg_color=T.BTN,
+        def dbtn(text, cmd, color=T.DIM, width=76):
+            b = ctk.CTkButton(buttons, text=text, width=width, height=29,
+                              corner_radius=7, font=font(11), fg_color=T.BTN,
                               hover_color=T.BTN_HOV, text_color=color, command=cmd)
             b.pack(side="left", padx=(0, 5))
             return b
 
         dbtn("Folder", self._reveal)
-        self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 52)
-        dbtn("Grid", self._grid, T.ACCENT, 56)
+        self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 58)
+        dbtn("Grid", self._grid, T.ACCENT, 62)
         dbtn("Copy name", lambda: self._copy(self.selected.name)
-             if self.selected else None, T.DIM, 88)
+             if self.selected else None, T.DIM, 96)
 
         ctk.CTkLabel(panel, text="TAGS · click to search · right-click for more",
                      font=font(11, "bold"), text_color=T.FAINT, anchor="w"
-                     ).grid(row=2, column=0, sticky="ew", padx=6, pady=(10, 4))
+                     ).grid(row=2, column=0, sticky="ew", padx=6, pady=(14, 5))
 
         self.detail_tags = ctk.CTkScrollableFrame(
             panel, fg_color=T.SURFACE, corner_radius=12, border_width=1,
@@ -556,7 +578,6 @@ class LibraryTab(ctk.CTkFrame):
     # ── brand ────────────────────────────────────────────────────────────
 
     def _apply_brand(self):
-        self.brand_sub.configure(text=f"{self.F('tagline')} · Library")
         self.sync_btn.configure(text=self.F("sync"))
         self.fetch_btn.configure(text=self.F("fetch"))
 
@@ -760,7 +781,12 @@ class LibraryTab(ctk.CTkFrame):
             count = counts.get(key)
             if count is None:
                 continue
-            chip.configure(text=f"{label} ({count})")
+            # Sized to the text, not to a fixed 92px: "Non-4K (4)" is
+            # wider than "4K ✓ (2)" and a shared width clipped the longest
+            # label's closing bracket.
+            text = f"{label}  {count}"
+            chip.configure(text=text,
+                           width=self._quick_font.measure(text) + 26)
             if key in ("untagged", "noid", "portrait", "widescreen", "square") and count == 0:
                 chip.configure(text_color=T.FAINT, state="disabled")
             else:
@@ -1578,7 +1604,7 @@ class LibraryTab(ctk.CTkFrame):
         inner = width - 26
         self.player.set_size(inner)
         for label in (self.detail_name, self.detail_meta):
-            label.configure(wraplength=inner - 10)
+            label.configure(wraplength=inner - 22)
 
     def on_root_resize(self):
         if getattr(self, "_panel_job", None):
@@ -1653,7 +1679,7 @@ class LibraryTab(ctk.CTkFrame):
         header = ctk.CTkButton(
             self.detail_tags,
             text=("▾  " if open_now else "▸  ") + f"{title.upper()}   {len(names)}",
-            height=26, corner_radius=6, font=font(10, "bold"), anchor="w",
+            height=29, corner_radius=7, font=font(11, "bold"), anchor="w",
             fg_color=T.ELEVATED, hover_color=T.BTN_HOV, text_color=T.FAINT,
             command=lambda k=key: self._toggle_group(k))
         header.grid(row=row, column=0, columnspan=2, sticky="ew", padx=6,
@@ -1680,11 +1706,11 @@ class LibraryTab(ctk.CTkFrame):
     def _tag_button(self, token: str, label: str, colour: str, row: int,
                     column: int = 0, span: int = 1):
         button = ctk.CTkButton(
-            self.detail_tags, text=label, height=25, corner_radius=5,
-            font=font(12), anchor="w", fg_color="transparent",
+            self.detail_tags, text=label, height=28, corner_radius=6,
+            font=font(13), anchor="w", fg_color="transparent",
             hover_color=T.BTN_HOV, text_color=colour,
             command=lambda t=token: self.add_token(t))
-        button.grid(row=row, column=column, columnspan=span, sticky="ew", padx=6, pady=1)
+        button.grid(row=row, column=column, columnspan=span, sticky="ew", padx=6, pady=2)
         button.bind("<Button-3>", lambda e, t=token: self._tag_menu(e, t, label))
 
     def _tag_menu(self, event, token: str, name: str):

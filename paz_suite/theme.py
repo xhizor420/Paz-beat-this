@@ -206,6 +206,24 @@ def mark_photo(size: int, color: str) -> "ImageTk.PhotoImage":
     return ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
 
 
+def lens_photo(size: int, color: str) -> "ImageTk.PhotoImage":
+    """A magnifier for the search field.
+
+    Drawn rather than typed: the U+2312 "arc" character most fonts map for
+    this is a hairline squiggle at UI sizes, and the emoji magnifier only
+    exists in colour-emoji fonts that are not installed everywhere. Same
+    8x-and-downsample trick as the paw mark, so the ring stays smooth.
+    """
+    big = size * 8
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    ring = big * 0.10
+    draw.ellipse((ring, ring, big * 0.72, big * 0.72), outline=color,
+                 width=int(ring))
+    draw.line((big * 0.63, big * 0.63, big - ring, big - ring), fill=color,
+              width=int(ring), joint="curve")
+    return ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
+
 BANNER_H = 76          # header strip height in px
 _BANNER_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
 
