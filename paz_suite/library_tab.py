@@ -344,6 +344,9 @@ class LibraryTab(ctk.CTkFrame):
         # not ways of narrowing what's shown.
         left = ctk.CTkFrame(info, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w")
+        self._info_row = info
+        self._info_chips = left
+        self._info_stacked = False
         self.quick_chips = {}
         for key, text, token in (
                 ("untagged", "Untagged", "is:untagged"),
@@ -360,6 +363,8 @@ class LibraryTab(ctk.CTkFrame):
 
         pager = ctk.CTkFrame(info, fg_color="transparent")
         pager.grid(row=0, column=2, sticky="e", padx=(14, 0))
+        self._info_pager = pager
+        info.bind("<Configure>", self._fit_info_row)
 
         ctk.CTkButton(pager, text="🎲 Random", height=22, width=84,
                       corner_radius=11, font=font(9), fg_color=T.BTN,
@@ -969,6 +974,23 @@ class LibraryTab(ctk.CTkFrame):
                 command=lambda t=token: self._remove_token(t))
             chip.pack(side="left", padx=(0, 5), pady=2)
 
+    def _fit_info_row(self, event) -> None:
+        """Chips and pager share one row until they can't both fit, then the
+        chips drop to a second row. Narrow windows used to push the pager -
+        page numbers and the next/previous buttons - clean off the edge."""
+        needed = (self._info_chips.winfo_reqwidth()
+                  + self._info_pager.winfo_reqwidth() + 30)
+        stack = needed > event.width
+        if stack == self._info_stacked:
+            return
+        self._info_stacked = stack
+        if stack:
+            self._info_chips.grid(row=1, column=0, columnspan=3, sticky="w",
+                                  pady=(6, 0))
+        else:
+            self._info_chips.grid(row=0, column=0, columnspan=1, sticky="w",
+                                  pady=0)
+
     def _remove_token(self, token: str):
         tokens = [t for t in self.search.get().split() if t != token]
         self.search.delete(0, tk.END)
@@ -1354,7 +1376,9 @@ class LibraryTab(ctk.CTkFrame):
     # to a tile you just left starts instantly instead of decoding again.
 
     PREVIEW_DWELL_MS = 320     # rest this long before a tile starts
-    REEL_CACHE       = 6       # clips worth of decoded frames to keep
+    # Clips worth of decoded frames to keep. Held down as the preview
+    # window grew, so the total frames in memory stays about where it was.
+    REEL_CACHE       = 4
     # Play at the clip's OWN frame rate rather than a number picked here,
     # so a preview runs at the speed the footage was shot at - that is what
     # makes it read as the video playing rather than an animation of it.
