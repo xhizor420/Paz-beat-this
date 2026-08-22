@@ -88,6 +88,7 @@ class AppConfig:
     page_size: int = 48
     thumb_width: int = 480
     thumb_fit: str = "contain"
+    thumb_pick_dir: str = ""   # last folder a custom thumbnail came from
     card_width: int = 224              # gallery tile width in px (Settings)
     sidebar_open: bool = True
     search_history: list = field(default_factory=list)

@@ -13,7 +13,7 @@ import time
 import tkinter as tk
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -24,7 +24,10 @@ from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
 )
 from .config import THUMB_DIR
-from .media import fit_frame, round_corners, thumb_key, make_thumb, probe
+from .media import (
+    fit_frame, round_corners, thumb_key, make_thumb, probe,
+    set_custom_thumb, clear_custom_thumb,
+)
 from .e621 import E621_POST
 from .library_db import (
     db_connect, Rec, parse_query, rec_matches, SORTS,
@@ -1703,6 +1706,56 @@ class LibraryTab(ctk.CTkFrame):
         finally:
             menu.grab_release()
 
+    # ── custom thumbnails ────────────────────────────────────────────────
+    #
+    # The gallery reads one JPEG per clip out of the thumb cache, so
+    # "use my own picture for this clip" is just writing that file from an
+    # image instead of an extracted frame. Worth having because an
+    # auto-picked frame is often a poor thumbnail - a fade, a title card,
+    # or simply not the moment worth showing.
+
+    IMAGE_TYPES = [("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
+                   ("All files", "*.*")]
+
+    def _set_custom_thumb(self, rec: Rec) -> None:
+        chosen = filedialog.askopenfilename(
+            title=f"Thumbnail for {rec.name}", parent=self.root,
+            initialdir=self.cfg.thumb_pick_dir or None,
+            filetypes=self.IMAGE_TYPES)
+        if not chosen:
+            return
+        error = set_custom_thumb(rec.path, chosen, self.cfg.thumb_width)
+        if error:
+            self.set_status(error, T.FAIL)
+            return
+        self.cfg.thumb_pick_dir = os.path.dirname(chosen)
+        self.cfg.save()
+        self._refresh_thumb(rec)
+        self.set_status(f"Thumbnail set from {os.path.basename(chosen)}.", T.OK)
+
+    def _reset_thumb(self, rec: Rec) -> None:
+        clear_custom_thumb(rec.path)
+        make_thumb(rec.path, rec.duration, self.cfg.thumb_width)
+        self._refresh_thumb(rec)
+        self.set_status("Thumbnail taken from the clip again.", T.OK)
+
+    def _refresh_thumb(self, rec: Rec) -> None:
+        """Repaint just this card, so a new tile shows without a full
+        re-render losing the scroll position."""
+        for index, slot in enumerate(self._layout):
+            if slot["rec"].path != rec.path:
+                continue
+            data = None
+            try:
+                with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                pass
+            self._static_thumb.pop(index, None)
+            self.gallery.delete(f"im{index}")
+            self._place_thumb(index, rec, data, self._page_token)
+            break
+
     def _card_menu(self, event, rec: Rec):
         self._select(rec)
         menu = tk.Menu(self.root, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
@@ -1714,6 +1767,11 @@ class LibraryTab(ctk.CTkFrame):
         if rec.pid:
             menu.add_command(label=f"Open e621 post #{rec.pid}",
                              command=lambda: self._open_url(rec))
+        menu.add_separator()
+        menu.add_command(label="Set thumbnail from image…",
+                         command=lambda: self._set_custom_thumb(rec))
+        menu.add_command(label="Use frame from the clip instead",
+                         command=lambda: self._reset_thumb(rec))
         menu.add_separator()
 
         used_menu = tk.Menu(menu, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
