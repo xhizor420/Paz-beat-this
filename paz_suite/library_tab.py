@@ -72,6 +72,10 @@ class LibraryTab(ctk.CTkFrame):
         self._pv_token = 0
         self._pv_photo = None            # keep-alive for the frame on screen
         self._static_thumb: dict = {}    # index -> the card's resting thumbnail
+        # path -> {"frames": [jpeg bytes], "photos": {i: PhotoImage}}. The
+        # converted frames ride along with the reel they came from, so
+        # evicting one clip drops its images with it.
+        self._reels: dict = {}
         self._search_after = None
         self._resize_after = None
         self._columns = 0
@@ -1310,21 +1314,24 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── hover preview ────────────────────────────────────────────────────
     #
-    # YouTube's model: rest on a tile and the tile itself starts cycling
-    # through the clip, with a progress line along the bottom edge showing
-    # how far in each frame is. Nothing floats, nothing follows the cursor.
+    # YouTube's model: rest on a tile and the tile plays. Nothing floats,
+    # nothing follows the cursor, and the motion is real motion.
     #
-    # The old floating bubble felt sluggish for a structural reason, not a
-    # tuning one: the first hover on a clip had no storyboard yet, so it
-    # spawned an ffmpeg seek and the preview arrived long after the mouse
-    # had moved on. Priming the sheet during the dwell fixes that - by the
-    # time the first frame is due, hover_frame() is an in-memory crop of an
-    # already-built sheet rather than a subprocess. Frames still load off
-    # the UI thread because that first sheet build has to happen somewhere.
+    # Getting there took two goes. The first version flipped storyboard
+    # cells, which cannot look smooth however fast you flip it - those
+    # cells are seconds apart in the clip, so consecutive frames have
+    # nothing to do with each other, and any frame the sheet had not built
+    # yet cost an ffmpeg seek of its own mid-playback. That is the jumping
+    # and stuttering. Now one ffmpeg pass decodes a run of CONSECUTIVE
+    # frames up front (see ThumbCache.preview_reel) and playback is pure
+    # memory: no subprocess between frames, so the cadence is even.
+    #
+    # Decoded reels are kept for the last few clips hovered, so going back
+    # to a tile you just left starts instantly instead of decoding again.
 
-    PREVIEW_DWELL_MS = 380     # rest this long before a tile starts playing
-    PREVIEW_TICK_MS  = 550     # then advance a frame this often
-    PREVIEW_STEPS    = 12      # evenly spaced positions across the clip
+    PREVIEW_DWELL_MS = 320     # rest this long before a tile starts
+    PREVIEW_FPS      = 15
+    REEL_CACHE       = 6       # clips worth of decoded frames to keep
 
     def _preview_arm(self, index) -> None:
         if index is None or index >= len(self._layout):
@@ -1332,58 +1339,87 @@ class LibraryTab(ctk.CTkFrame):
         rec = self._layout[index]["rec"]
         if rec.duration <= 0:
             return
-        # Build the storyboard *now*, while the pointer is still settling,
-        # so the first frame is instant instead of waiting on ffmpeg.
-        self.frames.prime_hover(rec.path, rec.duration)
         self._pv_index = index
         self._pv_step = 0
         self._pv_token += 1
-        self._pv_after = self.after(self.PREVIEW_DWELL_MS, self._preview_tick)
+        self._pv_after = self.after(self.PREVIEW_DWELL_MS, self._preview_begin)
 
-    def _preview_tick(self) -> None:
+    def _preview_begin(self) -> None:
         self._pv_after = None
         index = self._pv_index
         if index is None or index >= len(self._layout):
             return
         rec = self._layout[index]["rec"]
-        frac = (self._pv_step % self.PREVIEW_STEPS) / self.PREVIEW_STEPS
         token = self._pv_token
-        threading.Thread(target=self._preview_load,
-                         args=(rec, frac, index, token), daemon=True).start()
+        reel = self._reels.get(rec.path)
+        if reel is not None:
+            self._preview_play(index, reel, token)
+            return
+        threading.Thread(target=self._preview_decode,
+                         args=(rec, index, token), daemon=True).start()
+
+    def _preview_decode(self, rec: Rec, index: int, token: int) -> None:
+        reel = self.frames.preview_reel(rec.path, rec.duration, self.CARD_W,
+                                        fps=self.PREVIEW_FPS)
+        self.ui(self._preview_ready, rec.path, index, reel, token)
+
+    def _preview_ready(self, path: str, index: int, reel: list, token: int) -> None:
+        if reel:
+            self._reels[path] = {"frames": reel, "photos": {}}
+            while len(self._reels) > self.REEL_CACHE:
+                self._reels.pop(next(iter(self._reels)))
+        if token != self._pv_token or self._pv_index != index or not reel:
+            return
+        self._preview_play(index, self._reels[path], token)
+
+    def _preview_play(self, index: int, reel: dict, token: int) -> None:
+        if token != self._pv_token or self._pv_index != index:
+            return
+        if index >= len(self._layout) or not self.gallery.find_withtag(f"im{index}"):
+            return
+        count = len(reel["frames"])
+        if not count:
+            return
+        i = self._pv_step % count
+        frame = self._reel_photo(reel, i)
+        if frame is not None:
+            self.gallery.itemconfigure(f"im{index}", image=frame)
+            self._pv_photo = frame
+            self._draw_progress(index, i / count)
         self._pv_step += 1
-        self._pv_after = self.after(self.PREVIEW_TICK_MS, self._preview_tick)
+        self._pv_after = self.after(
+            int(1000 / self.PREVIEW_FPS),
+            lambda: self._preview_play(index, reel, token))
 
-    def _preview_load(self, rec: Rec, frac: float, index: int, token: int) -> None:
-        data = self.frames.hover_frame(rec.path, rec.duration, frac)
-        self.ui(self._preview_paint, index, data, frac, token)
-
-    def _preview_paint(self, index: int, data, frac: float, token: int) -> None:
-        if token != self._pv_token or self._pv_index != index or not data:
-            return
-        if index >= len(self._layout):
-            return
-        canvas = self.gallery
-        if not canvas.find_withtag(f"im{index}"):
-            return          # thumbnail hasn't landed yet; nothing to swap
-        slot = self._layout[index]
+    def _reel_photo(self, reel: dict, i: int):
+        """PhotoImages have to be built on the UI thread, so they are made
+        as each frame comes up and kept - one small conversion per frame is
+        invisible, where converting a whole reel up front is a visible
+        stall right when playback should be starting."""
+        cache = reel["photos"]
+        photo = cache.get(i)
+        if photo is not None:
+            return photo
         try:
-            image = Image.open(io.BytesIO(data))
+            image = Image.open(io.BytesIO(reel["frames"][i]))
             image = fit_frame(image, self.CARD_W, self.IMG_H, self.cfg.thumb_fit)
             image = round_corners(image, 9, T.SURFACE)
             photo = ImageTk.PhotoImage(image)
         except Exception:
-            return
-        self._pv_photo = photo      # one reference, replaced each tick
-        canvas.itemconfigure(f"im{index}", image=photo)
+            return None
+        cache[i] = photo
+        return photo
 
+    def _draw_progress(self, index: int, frac: float) -> None:
+        slot = self._layout[index]
+        canvas = self.gallery
         x, y = slot["x"], slot["y"]
         top = y + self.IMG_H - 3
         canvas.delete(f"pv{index}")
         canvas.create_rectangle(x, top, x + self.CARD_W, y + self.IMG_H,
                                 fill=T.LINE_SOFT, outline="",
                                 tags=(slot["tag"], f"pv{index}"))
-        played = int(self.CARD_W * min(frac + 1.0 / self.PREVIEW_STEPS, 1.0))
-        canvas.create_rectangle(x, top, x + played, y + self.IMG_H,
+        canvas.create_rectangle(x, top, x + int(self.CARD_W * frac), y + self.IMG_H,
                                 fill=T.ACCENT, outline="",
                                 tags=(slot["tag"], f"pv{index}"))
 
