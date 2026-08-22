@@ -16,8 +16,10 @@ a wall of thumbnails, not politely muted next to safe and questionable.
 
 from __future__ import annotations
 
+import os
+
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageFilter, ImageTk
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageTk
 
 
 class T:
@@ -203,6 +205,150 @@ def mark_photo(size: int, color: str) -> "ImageTk.PhotoImage":
 
     return ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
 
+
+def lens_photo(size: int, color: str) -> "ImageTk.PhotoImage":
+    """A magnifier for the search field.
+
+    Drawn rather than typed: the U+2312 "arc" character most fonts map for
+    this is a hairline squiggle at UI sizes, and the emoji magnifier only
+    exists in colour-emoji fonts that are not installed everywhere. Same
+    8x-and-downsample trick as the paw mark, so the ring stays smooth.
+    """
+    big = size * 8
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    ring = big * 0.10
+    draw.ellipse((ring, ring, big * 0.72, big * 0.72), outline=color,
+                 width=int(ring))
+    draw.line((big * 0.63, big * 0.63, big - ring, big - ring), fill=color,
+              width=int(ring), joint="curve")
+    return ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
+
+BANNER_H = 76          # header strip height in px
+_BANNER_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+
+
+def _rgb(color: str) -> tuple:
+    value = color.lstrip("#")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _scrim(width: int, height: int) -> "Image.Image":
+    """The wash that goes over a banner picture so the lockup and the
+    status line stay readable no matter what the picture is.
+
+    Heaviest at the two edges where text sits (the PAZ mark on the left,
+    the live status on the right) and lightest across the middle, so the
+    picture is genuinely visible rather than a dark rectangle with a hint
+    of something behind it. Built as an L-mode alpha ramp and used as the
+    mask for a flat ground colour - one paste, no per-pixel Python.
+    """
+    ramp = Image.new("L", (width, 1))
+    pixels = ramp.load()
+    for x in range(width):
+        pos = x / max(width - 1, 1)
+        if pos < 0.42:                      # left: under the lockup
+            alpha = 235 - (pos / 0.42) * 130
+        elif pos < 0.68:                    # middle: let the picture through
+            alpha = 105
+        else:                               # right: under the status line
+            alpha = 105 + ((pos - 0.68) / 0.32) * 95
+        pixels[x, 0] = int(alpha)
+    mask = ramp.resize((width, height), Image.BILINEAR)
+
+    # A second, vertical ramp darkens the bottom edge into the tab strip
+    # below, so the header doesn't end on a hard seam.
+    column = Image.new("L", (1, height))
+    col = column.load()
+    for y in range(height):
+        col[0, y] = int(60 * (y / max(height - 1, 1)) ** 3)
+    mask = ImageChops.lighter(mask, column.resize((width, height), Image.BILINEAR))
+    return mask
+
+
+def _default_banner(width: int, height: int) -> "Image.Image":
+    """What the header looks like before anyone has set a picture: the four
+    tab identities swept across the width in order - pink Convert, violet
+    Library, mint Vault, amber Beat This - each pulled most of the way down
+    to the ground colour so it reads as a lit edge, not a rainbow.
+
+    Deliberately not a flat bar. The strip should look designed on first
+    launch rather than like an empty slot waiting to be filled, and using
+    the tab colours means the default says something instead of being
+    decoration.
+    """
+    stops = [_rgb(mix(c, T.BG, 0.58))
+             for c in (T.ACCENT, T.ACCENT2, T.ACCENT3, T.ACCENT4)]
+    stops = [_rgb(T.BG)] + stops + [_rgb(T.BG)]
+    span = len(stops) - 1
+    ramp = Image.new("RGB", (width, 1))
+    pixels = ramp.load()
+    for x in range(width):
+        pos = (x / max(width - 1, 1)) * span
+        index = min(int(pos), span - 1)
+        t = pos - index
+        a, b = stops[index], stops[index + 1]
+        pixels[x, 0] = tuple(round(a[i] * (1 - t) + b[i] * t) for i in range(3))
+    base = ramp.resize((width, height), Image.BILINEAR)
+
+    # Sink the bottom half toward the ground so the colour reads as a glow
+    # coming off the top edge rather than a solid painted band.
+    column = Image.new("L", (1, height))
+    col = column.load()
+    for y in range(height):
+        col[0, y] = int(215 * (y / max(height - 1, 1)) ** 1.7)
+    base.paste(Image.new("RGB", (width, height), _rgb(T.BG)), (0, 0),
+               column.resize((width, height), Image.BILINEAR))
+    return base
+
+
+def banner_image(path: str, width: int, height: int = BANNER_H) -> "Image.Image":
+    """Render the header strip: the user's own picture (or the default
+    sweep) cropped to fill, scrimmed, and capped with an accent hairline.
+
+    The crop is anchored above centre rather than dead centre - in most
+    pictures the part worth seeing sits in the upper half, and a 76px-tall
+    slot through the middle of a portrait usually lands on nothing.
+    """
+    width = max(int(width), 200)
+    height = max(int(height), 24)
+    picture = None
+    if path and os.path.isfile(path):
+        try:
+            with Image.open(path) as source:
+                picture = source.convert("RGB")
+        except Exception:
+            picture = None
+
+    if picture is None:
+        base = _default_banner(width, height)
+    else:
+        scale = max(width / picture.width, height / picture.height)
+        size = (max(int(picture.width * scale), width),
+                max(int(picture.height * scale), height))
+        picture = picture.resize(size, Image.LANCZOS)
+        top = int((picture.height - height) * 0.34)
+        left = (picture.width - width) // 2
+        base = picture.crop((left, top, left + width, top + height))
+
+    if picture is not None:
+        ground = Image.new("RGB", (width, height), _rgb(T.BG))
+        base.paste(ground, (0, 0), _scrim(width, height))
+
+    # Hairline along the bottom, brightest under the lockup - the same
+    # lit-edge treatment the cards and the tab strip use.
+    edge = ImageDraw.Draw(base)
+    edge.line((0, height - 1, width, height - 1), fill=_rgb(T.LINE))
+    edge.line((0, height - 1, int(width * 0.34), height - 1), fill=_rgb(T.ACCENT_DEEP))
+    return base
+
+
+def banner_photo(path: str, width: int, height: int = BANNER_H) -> "ImageTk.PhotoImage":
+    return ImageTk.PhotoImage(banner_image(path, width, height))
+
+
+def is_image_path(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in _BANNER_EXT
 
 # Status/label copy, one plain string per key (no alternate wording, no
 # toggle - just what the button or status line says). Kept as small dicts

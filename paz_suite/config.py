@@ -144,6 +144,10 @@ class AppConfig:
     beat_last_export_dir: str = ""
 
     # ── App-wide ──────────────────────────────────────────────────────────
+    # Your own picture across the header strip. Empty means the built-in
+    # sweep in the four tab colours; see theme.banner_image.
+    banner_path: str = ""
+    banner_dir: str = ""      # last folder a header picture came from
     last_tab: str = "Convert"
 
     @classmethod

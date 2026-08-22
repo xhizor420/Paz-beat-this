@@ -16,6 +16,59 @@ from .theme import T, font
 from .format import fmt_size
 
 
+def popup_menu(parent, **kw) -> tk.Menu:
+    """A right-click menu styled like the rest of the suite.
+
+    Tk's default menu is a raised, bordered, system-grey affair with a
+    chunky 3D highlight around whichever entry is under the pointer. Every
+    one of those defaults fights the theme, so they are all turned off
+    here: flat surface, no window border, no active border, and a solid
+    accent bar behind the hovered entry instead of a bevel. Entries also
+    read one step larger than Tk's default, which is sized for 96 DPI
+    desktops from twenty years ago.
+
+    Every popup in the suite comes from here, so restyling them is a
+    one-line change rather than a hunt through six modules.
+    """
+    kw.setdefault("tearoff", 0)
+    kw.setdefault("bg", T.ELEVATED)
+    kw.setdefault("fg", T.TEXT)
+    kw.setdefault("activebackground", T.ACCENT_DEEP)
+    kw.setdefault("activeforeground", T.ACCENT)
+    kw.setdefault("disabledforeground", T.FAINT)
+    kw.setdefault("selectcolor", T.ACCENT)
+    kw.setdefault("font", (T.UI, 11))
+    # bd/relief kill the raised outer frame; activeborderwidth kills the
+    # bevel Tk draws around the hovered entry (the single ugliest default).
+    kw.setdefault("bd", 0)
+    kw.setdefault("relief", "flat")
+    kw.setdefault("activeborderwidth", 0)
+    kw.setdefault("borderwidth", 0)
+    return tk.Menu(parent, **kw)
+
+
+def menu_rule(menu: tk.Menu) -> None:
+    """A separator that matches the theme.
+
+    Tk derives a separator's 3D shading from the entry's own background,
+    and the default lands on a near-white hairline that is the loudest
+    thing in an otherwise dark menu. Shading it from the hairline colour
+    instead gives the same soft violet rule the panels use.
+    """
+    menu.add_separator()
+    try:
+        menu.entryconfigure(menu.index("end"), background=T.LINE)
+    except tk.TclError:
+        pass
+
+
+def menu_header(menu: tk.Menu, text: str) -> None:
+    """A dim, non-clickable caption above a group of entries. Long menus
+    (the gallery card menu runs to a dozen items) read as an undifferentiated
+    list without them."""
+    menu.add_command(label=text.upper(), state="disabled")
+
+
 class Card(ctk.CTkFrame):
     """A panel with a hairline border, optionally titled."""
 

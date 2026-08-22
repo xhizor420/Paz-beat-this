@@ -7,15 +7,18 @@ tab and must only fire for whichever one is currently visible.
 
 from __future__ import annotations
 
+import os
 import tkinter as tk
+from tkinter import filedialog
 
 import customtkinter as ctk
 
-from .theme import T, font, mark_photo, mix, resolve_fonts
+from .theme import (T, BANNER_H, banner_photo, font, is_image_path,
+                    mark_photo, mix, resolve_fonts)
 from .config import AppConfig
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
-from .widgets import Toaster, PeekWindow
+from .widgets import Toaster, PeekWindow, popup_menu, menu_rule
 from .convert_tab import ConvertTab
 from .library_tab import LibraryTab
 from .vault_tab import VaultTab
@@ -100,43 +103,126 @@ class PazApp:
     # suite's own name.
 
     def _build_header(self) -> None:
-        bar = ctk.CTkFrame(self.root, fg_color=T.SURFACE, corner_radius=0, height=44)
-        bar.pack(fill="x", side="top")
-        bar.pack_propagate(False)
+        self.header = tk.Canvas(self.root, height=BANNER_H, bg=T.BG,
+                                highlightthickness=0, bd=0)
+        self.header.pack(fill="x", side="top")
+        self._banner_photo = None
+        self._banner_job = None
+        self._banner_width = 0
+        self._header_icon = mark_photo(22, T.ACCENT)
+        self._header_text = ""
+        self._header_colour = T.OK
+        self.header.bind("<Configure>", self._banner_resized)
+        self.header.bind("<Button-3>", self._banner_menu)
+        self._draw_header(self.root.winfo_width() or 1760)
 
-        left = ctk.CTkFrame(bar, fg_color="transparent")
-        left.pack(side="left", padx=18, pady=8)
-        self._header_icon = mark_photo(19, T.ACCENT)
-        tk.Label(left, image=self._header_icon, bg=T.SURFACE, bd=0
-                 ).pack(side="left", padx=(0, 9))
-        # PAZ in the pink identity, SUITE as a spaced mono sub-mark - the
-        # same lockup the design canvas uses on every artboard.
-        ctk.CTkLabel(left, text="PAZ", font=font(15, "bold", display=True),
-                     text_color=T.ACCENT).pack(side="left")
-        ctk.CTkLabel(left, text="SUITE", font=font(9, mono=True),
-                     text_color=T.FAINT).pack(side="left", padx=(7, 0), pady=(3, 0))
+    def _banner_resized(self, event) -> None:
+        """Re-render on width changes only, and only after the drag stops.
+        Rescaling a full-width picture on every Configure during a window
+        drag is the one place in this app that can visibly lag."""
+        if event.width == self._banner_width:
+            return
+        self._banner_width = event.width
+        if self._banner_job is not None:
+            try:
+                self.root.after_cancel(self._banner_job)
+            except ValueError:
+                pass
+        self._banner_job = self.root.after(
+            120, lambda: self._draw_header(self._banner_width))
 
-        self.header_status = ctk.CTkLabel(bar, text="", font=font(10, mono=True),
-                                          text_color=T.FAINT)
-        self.header_status.pack(side="right", padx=(0, 18))
-        # Left unpacked: set_header_status() shows it once there is
-        # something to say. Packed here it would sit alone until the
-        # library finishes loading and read as a stray dot.
-        self.header_dot = ctk.CTkFrame(bar, width=7, height=7, corner_radius=4,
-                                       fg_color=T.OK)
+    def _draw_header(self, width: int) -> None:
+        """Repaint the whole strip: picture, lockup, status.
+
+        Everything is a canvas item over one composited background image
+        rather than a row of packed widgets, because Tk has no widget
+        transparency - a CTkLabel over a picture would sit on its own
+        opaque rectangle and the banner would look like a mistake.
+        """
+        width = max(int(width), 320)
+        self._banner_job = None
+        try:
+            self._banner_photo = banner_photo(self.cfg.banner_path, width, BANNER_H)
+            self.header.delete("all")
+            self.header.create_image(0, 0, image=self._banner_photo, anchor="nw")
+
+            mid = BANNER_H // 2
+            self.header.create_image(20, mid, image=self._header_icon, anchor="w")
+            name = self.header.create_text(52, mid + 1, text="PAZ", anchor="w",
+                                           fill=T.ACCENT,
+                                           font=(T.DISPLAY, 19, "bold"))
+            # Measured, not guessed: the display family is whatever
+            # resolve_fonts() found installed, so "PAZ" is a different
+            # width on every machine and a fixed offset collides with it.
+            self.header.create_text(self.header.bbox(name)[2] + 9, mid + 4,
+                                    text="S U I T E", anchor="w",
+                                    fill=T.DIM, font=(T.MONO, 9))
+            if self._header_text:
+                item = self.header.create_text(
+                    width - 20, mid, text=self._header_text, anchor="e",
+                    fill=T.DIM, font=(T.MONO, 10))
+                left = self.header.bbox(item)[0]
+                self.header.create_oval(left - 15, mid - 4, left - 8, mid + 3,
+                                        fill=self._header_colour, outline="")
+        except tk.TclError:
+            pass
 
     def set_header_status(self, text: str, colour: str = T.OK) -> None:
         """One live line in the identity bar - what the suite is doing
         right now, readable from whichever tab you happen to be on. An
         empty text hides the indicator entirely; a lone dot with nothing
         beside it just looks like a rendering fault."""
-        self.header_status.configure(text=text)
-        if text:
-            self.header_dot.configure(fg_color=colour)
-            if not self.header_dot.winfo_ismapped():
-                self.header_dot.pack(side="right", padx=(0, 8))
-        else:
-            self.header_dot.pack_forget()
+        if text == self._header_text and colour == self._header_colour:
+            return
+        self._header_text = text
+        self._header_colour = colour
+        self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
+
+    # ── banner picture ──────────────────────────────────────────────────
+    #
+    # The one place in the suite that shows a picture of your choosing.
+    # It lives here, in the chrome, rather than anywhere in the gallery:
+    # a clip's tile has a job (show that clip), and a picture standing in
+    # for it makes the library harder to read, not nicer to look at. A
+    # header strip has no such job, so it is free to be yours.
+
+    def _banner_menu(self, event) -> None:
+        menu = popup_menu(self.root)
+        menu.add_command(label="Set header picture…", command=self.pick_banner)
+        if self.cfg.banner_path:
+            menu.add_command(label="Clear header picture", command=self.clear_banner)
+        menu_rule(menu)
+        menu.add_command(label="Settings…", command=self.open_settings)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def pick_banner(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Pick a picture for the header",
+            initialdir=self.cfg.banner_dir or os.path.expanduser("~"),
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
+                       ("All files", "*.*")])
+        if not path:
+            return
+        self.set_banner(path)
+
+    def set_banner(self, path: str) -> None:
+        if not is_image_path(path):
+            self.toaster.show("That file isn't a picture the header can use.", "warn")
+            return
+        self.cfg.banner_path = path
+        self.cfg.banner_dir = os.path.dirname(path)
+        self.cfg.save()
+        self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
+        self.toaster.show(f"Header picture set from {os.path.basename(path)}")
+
+    def clear_banner(self) -> None:
+        self.cfg.banner_path = ""
+        self.cfg.save()
+        self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
+        self.toaster.show("Header picture cleared")
 
     # ── chrome (window title / taskbar icon) ────────────────────────────────
 

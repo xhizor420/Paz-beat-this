@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFilter
 
 from .config import THUMB_DIR
+from .theme import T
 from .files import NO_WINDOW
 
 
@@ -241,9 +242,13 @@ def fit_frame(image, box_w: int, box_h: int, mode: str = "contain",
     return canvas.filter(ImageFilter.GaussianBlur(9)) if blur else canvas
 
 
-def round_corners(image, radius: int, bg: str = "#161021"):
-    """Give a frame softly rounded corners against the gallery surface."""
-    rgb = tuple(int(bg.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+def round_corners(image, radius: int, bg: str = ""):
+    """Give a frame softly rounded corners against the gallery surface.
+
+    `bg` is what shows through the cut corners, so it has to be whatever
+    the frame is actually sitting on. Defaults to the theme's card
+    surface, which is where every current caller puts it."""
+    rgb = tuple(int((bg or T.SURFACE).lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
     mask = Image.new("L", image.size, 0)
     ImageDraw.Draw(mask).rounded_rectangle(
         (0, 0, image.width - 1, image.height - 1), radius=radius, fill=255)
@@ -341,7 +346,7 @@ class ThumbCache:
     # memory: that is what makes it look like video instead of a flipbook.
 
     REEL_FPS = 15
-    REEL_SECONDS = 6.0
+    REEL_SECONDS = 11.0    # how much of the clip a hover preview covers
 
     def preview_reel(self, path: str, duration: float, width: int,
                       fps: int = REEL_FPS, seconds: float = REEL_SECONDS) -> list:

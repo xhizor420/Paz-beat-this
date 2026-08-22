@@ -28,7 +28,8 @@ from .convert_engine import (
 from .convert_widgets import (
     QueueTable, STATE_LABELS, ScrubPreview, ContactSheet, DuplicateWindow,
 )
-from .widgets import Card, Bar, StatTile, JobPanel, LogView, LibraryBar
+from .widgets import (Card, Bar, StatTile, JobPanel, LogView, LibraryBar,
+                      menu_rule)
 from . import uithread
 
 
@@ -165,7 +166,8 @@ class ConvertTab(ctk.CTkFrame):
             picker, values=["All categories"] + self.cfg.subfolders, width=170,
             height=32, font=font(11), corner_radius=7, fg_color=T.INPUT,
             button_color=T.LINE, button_hover_color=T.BTN_HOV,
-            dropdown_fg_color=T.ELEVATED, text_color=T.TEXT,
+            dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT,
             command=lambda _v: self._scan())
         self.folder_menu.set("All categories")
         self.folder_menu.pack(anchor="w")
@@ -1504,7 +1506,7 @@ class ConvertTab(ctk.CTkFrame):
         menu.add_command(label="Show in folder",
                          command=lambda: open_in_explorer(task.target if has_output
                                                            else task.source))
-        menu.add_separator()
+        menu_rule(menu)
         menu.add_command(label="Copy source path", command=lambda: self._copy(task.source))
         if task.pid:
             menu.add_command(label=f"Open e621 post #{task.pid}",
@@ -1514,7 +1516,7 @@ class ConvertTab(ctk.CTkFrame):
                 menu.add_command(label="Copy tags", command=lambda: self._copy(record["tags"]))
         if task.error:
             menu.add_command(label="Copy error", command=lambda: self._copy(task.error))
-        menu.add_separator()
+        menu_rule(menu)
         menu.add_command(label="Queue again",
                          state="disabled" if self.processing else "normal",
                          command=lambda: self._requeue([task]))

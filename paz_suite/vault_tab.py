@@ -38,6 +38,7 @@ from .library_db import (
     vault_clear_project, vault_rename_project, vault_projects_list,
 )
 from .library_windows import HelpWindow
+from .widgets import popup_menu, menu_rule
 from . import uithread
 
 _SPLIT_RE = re.compile(r"[,\n\r\t;]+|\s+")
@@ -185,7 +186,8 @@ class VaultTab(ctk.CTkFrame):
         self.project_box = ctk.CTkComboBox(
             mark_row, width=220, height=32, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT3_DEEP, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
+            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT3_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=[])
         self.project_box.pack(side="left")
         self.project_box.set("")
@@ -452,12 +454,11 @@ class VaultTab(ctk.CTkFrame):
             label.bind("<Button-3>", lambda e, n=name: self._project_menu(e, n))
 
     def _project_menu(self, event, name: str) -> None:
-        menu = tk.Menu(self.root, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
-                       activebackground=T.ACCENT3_DEEP, activeforeground=T.TEXT,
-                       bd=0, font=(T.UI, 10))
+        menu = popup_menu(self.root, activebackground=T.ACCENT3_DEEP,
+                          activeforeground=T.ACCENT3)
         menu.add_command(label="Browse clips here", command=lambda: self._select_project(name))
         menu.add_command(label="Open in Library", command=lambda: self._open_in_library(name))
-        menu.add_separator()
+        menu_rule(menu)
         menu.add_command(label="Rename…", command=lambda: self._rename_project(name))
         menu.add_command(label="Clear", command=lambda: self._clear_project(name))
         try:
