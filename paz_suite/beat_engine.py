@@ -1,8 +1,8 @@
 """Beat This: no-UI logic for running the CPJKU "Beat This!" beat tracker
 on an audio file and turning the result into things a video editor can
 use - the .beats TSV the beat_this project already understands, a
-CMX3600 EDL of LOC markers DaVinci Resolve reads via Timeline > Import >
-Timeline Markers from EDL, and (best-effort, only when Resolve is running
+CMX3600 EDL of timeline markers DaVinci Resolve reads via Timeline >
+Import > Timeline Markers from EDL, and (best-effort, only when Resolve is running
 locally with scripting enabled) markers dropped straight into the open
 timeline via the Resolve scripting API.
 
@@ -339,26 +339,79 @@ def _timecode(seconds: float, fps: float) -> str:
     return f"{hours:02d}:{mins:02d}:{secs:02d}:{frames:02d}"
 
 
+# Resolve names marker colours "ResolveColorBlue" and so on inside an EDL,
+# and rejects anything it doesn't recognise.
+RESOLVE_COLOR = {name: "ResolveColor" + name for name in MARKER_COLORS}
+
+# Resolve's own timelines start at 01:00:00:00 out of the box, and EDL
+# marker import places markers at absolute record timecode - so an EDL
+# written from 00:00:00:00 puts every marker an hour before the start of
+# the timeline, where they simply don't land. This is the single most
+# common reason a beat EDL "imports" and produces nothing.
+DEFAULT_START_TC = "01:00:00:00"
+START_CHOICES = ("01:00:00:00", "00:00:00:00")
+
+
+def _tc_to_frames(timecode: str, fps: float) -> int:
+    nominal = max(int(round(fps)), 1)
+    parts = [int(p) for p in str(timecode).strip().replace(";", ":").split(":")]
+    while len(parts) < 4:
+        parts.insert(0, 0)
+    hours, mins, secs, frames = parts[-4:]
+    return ((hours * 60 + mins) * 60 + secs) * nominal + frames
+
+
+def _frames_to_tc(frames: int, fps: float) -> str:
+    nominal = max(int(round(fps)), 1)
+    frames = max(int(frames), 0)
+    rest, frame = divmod(frames, nominal)
+    rest, secs = divmod(rest, 60)
+    hours, mins = divmod(rest, 60)
+    return f"{hours % 24:02d}:{mins:02d}:{secs:02d}:{frame:02d}"
+
+
 def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
               beat_color: str = "Blue", downbeat_color: str = "Red",
-              downbeats_only: bool = False) -> str:
-    """A CMX3600 EDL with one dummy event spanning the song plus a `LOC`
-    locator per beat. Markers land at record timecode = time into the
-    song, counting from 00:00:00:00 - so line the audio clip up at the
-    start of a timeline (or a fresh one) before importing, since EDL
-    marker import always uses absolute record position."""
+              downbeats_only: bool = False,
+              start_tc: str = DEFAULT_START_TC) -> str:
+    """A CMX3600 EDL of timeline markers in the form Resolve's own marker
+    export writes, and the only form its marker import reads: one
+    one-frame event per beat, each followed by a comment line carrying the
+    colour, name and duration.
+
+    An earlier version wrote `* LOC:` locator comments hung off a single
+    long event. That is what Resolve emits when you export a *timeline*
+    that happens to contain markers, but Timeline > Import > Timeline
+    Markers from EDL does not read it, which is why importing produced an
+    error instead of markers.
+
+    Marker positions are record timecode counted from `start_tc`, which
+    defaults to 01:00:00:00 because that is where Resolve starts a new
+    timeline. Line the song up at the start of the timeline before
+    importing - EDL marker import is absolute, it has no idea where the
+    audio actually sits.
+    """
     name = title or os.path.splitext(os.path.basename(result.audio_path))[0]
-    end_tc = _timecode(result.duration, fps)
+    base = _tc_to_frames(start_tc or DEFAULT_START_TC, fps)
+    nominal = max(int(round(fps)), 1)
+    beat_name = RESOLVE_COLOR.get(beat_color, "ResolveColorBlue")
+    down_name = RESOLVE_COLOR.get(downbeat_color, "ResolveColorRed")
+
     lines = [f"TITLE: {name} - Beat This markers", "FCM: NON-DROP FRAME", ""]
-    lines.append("001  AX       A     C        "
-                  f"00:00:00:00 {end_tc} 00:00:00:00 {end_tc}")
-    lines.append(f"* FROM CLIP NAME: {name}")
+    event = 0
     for time, number, is_down in zip(result.beats, result.beat_numbers, result.is_downbeat):
         if downbeats_only and not is_down:
             continue
-        color = downbeat_color if is_down else beat_color
+        event += 1
+        frame = base + int(round(float(time) * nominal))
+        tc_in = _frames_to_tc(frame, fps)
+        tc_out = _frames_to_tc(frame + 1, fps)
+        colour = down_name if is_down else beat_name
         label = "Downbeat" if is_down else f"Beat {int(number)}"
-        lines.append(f"* LOC: {_timecode(float(time), fps)} {color.upper():<7} {label}")
+        lines.append(f"{event:03d}  001      V     C        "
+                     f"{tc_in} {tc_out} {tc_in} {tc_out}")
+        lines.append(f" |C:{colour} |M:{label} |D:1")
+        lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -369,8 +422,123 @@ def save_edl(result: BeatResult, outpath: str, **kw) -> None:
         fh.write(text)
 
 
+# ── the Resolve scripting API ───────────────────────────────────────────
+#
+# Resolve's own README tells you to set RESOLVE_SCRIPT_API,
+# RESOLVE_SCRIPT_LIB and PYTHONPATH by hand before any of this imports.
+# Almost nobody has, so relying on a bare `import DaVinciResolveScript`
+# meant the live handoff reported "can't reach Resolve" on machines where
+# Resolve was open on the next monitor. The installer puts everything in
+# fixed places, so look there instead.
+
+def _resolve_paths() -> tuple:
+    """(scripting API dirs, fusionscript library files) to try, in order,
+    for this platform. Environment variables win when they are set."""
+    api, lib = [], []
+    env_api = os.environ.get("RESOLVE_SCRIPT_API")
+    env_lib = os.environ.get("RESOLVE_SCRIPT_LIB")
+    if env_api:
+        api.append(env_api)
+    if env_lib:
+        lib.append(env_lib)
+
+    if sys.platform.startswith("win"):
+        data = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
+        api.append(os.path.join(data, "Blackmagic Design", "DaVinci Resolve",
+                                 "Support", "Developer", "Scripting"))
+        for root in (os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+                     r"C:\Program Files"):
+            lib.append(os.path.join(root, "Blackmagic Design", "DaVinci Resolve",
+                                     "fusionscript.dll"))
+    elif sys.platform == "darwin":
+        api.append("/Library/Application Support/Blackmagic Design/"
+                   "DaVinci Resolve/Developer/Scripting")
+        lib.append("/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/"
+                   "Libraries/Fusion/fusionscript.so")
+        lib.append("/Applications/DaVinci Resolve.app/Contents/Libraries/"
+                   "Fusion/fusionscript.so")
+    else:
+        api.append("/opt/resolve/Developer/Scripting")
+        api.append("/home/resolve/Developer/Scripting")
+        lib.append("/opt/resolve/libs/Fusion/fusionscript.so")
+        lib.append("/home/resolve/libs/Fusion/fusionscript.so")
+
+    seen = set()
+    api = [p for p in api if not (p in seen or seen.add(p))]
+    seen = set()
+    lib = [p for p in lib if not (p in seen or seen.add(p))]
+    return api, lib
+
+
+def resolve_module() -> tuple:
+    """(module, None) once the Resolve scripting API is importable, else
+    (None, a diagnostic saying exactly what was looked for and what to
+    check). Three attempts, cheapest first: an already-configured
+    PYTHONPATH, the installer's own Modules folder, and finally loading
+    fusionscript straight off disk as an extension module."""
+    import importlib
+    notes = []
+
+    try:
+        return importlib.import_module("DaVinciResolveScript"), None
+    except Exception:
+        pass
+
+    api_dirs, lib_files = _resolve_paths()
+    lib = next((p for p in lib_files if os.path.exists(p)), "")
+    if lib:
+        # DaVinciResolveScript.py reads this to find the native library.
+        os.environ.setdefault("RESOLVE_SCRIPT_LIB", lib)
+
+    for api in api_dirs:
+        modules = os.path.join(api, "Modules")
+        if not os.path.isdir(modules):
+            notes.append(f"not found: {modules}")
+            continue
+        if modules not in sys.path:
+            sys.path.append(modules)
+        try:
+            return importlib.import_module("DaVinciResolveScript"), None
+        except Exception as exc:
+            notes.append(f"{modules}: {exc}")
+
+    # Last resort: DaVinciResolveScript.py is only a thin wrapper that
+    # loads this same library, so load it directly and skip the wrapper.
+    if lib:
+        try:
+            import importlib.util
+            from importlib.machinery import ExtensionFileLoader
+            spec = importlib.util.spec_from_file_location(
+                "fusionscript", lib, loader=ExtensionFileLoader("fusionscript", lib))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            if hasattr(module, "scriptapp"):
+                return module, None
+            notes.append(f"{lib}: loaded but has no scriptapp()")
+        except Exception as exc:
+            notes.append(f"{lib}: {exc}")
+    else:
+        notes.append("no fusionscript library found at: "
+                     + ", ".join(lib_files))
+
+    detail = "\n".join("  - " + n for n in notes)
+    return None, (
+        "Couldn't load the DaVinci Resolve scripting API.\n\n"
+        "Check, in this order:\n"
+        "  1. Resolve > Preferences > System > General > 'External scripting "
+        "using' is set to Local (it is Disabled by default, and this is the "
+        "usual cause even with Resolve open).\n"
+        "  2. Resolve and this app are both 64-bit and on the same machine.\n"
+        "  3. fusionscript is built for a specific Python version - if the "
+        "detail below mentions a DLL or module load failure, run this app on "
+        "the Python version Resolve supports.\n\n"
+        "What was tried:\n" + detail + "\n\n"
+        "The EDL export needs none of this and always works.")
+
+
 def send_to_resolve(result: BeatResult, beat_color: str = "Blue",
-                     downbeat_color: str = "Red") -> tuple[bool, str]:
+                     downbeat_color: str = "Red",
+                     downbeats_only: bool = False) -> tuple[bool, str]:
     """Best-effort live handoff: only works run on the same machine as a
     running copy of Resolve with Preferences > General > External
     scripting using set to Local/Network, and RESOLVE_SCRIPT_API /
@@ -378,16 +546,15 @@ def send_to_resolve(result: BeatResult, beat_color: str = "Blue",
     README. Drops one marker per beat onto the currently open timeline, at
     its own frame rate, from its own start frame - so unlike the EDL, the
     audio clip doesn't need to sit at timeline zero first."""
-    try:
-        import DaVinciResolveScript as dvr  # type: ignore
-    except Exception:
-        return False, ("Can't reach the DaVinci Resolve scripting API from here. "
-                        "This only works run on the same machine as Resolve, with "
-                        "Resolve open and scripting enabled - see the Beat This "
-                        "help for setup. Use the EDL export instead.")
+    dvr, problem = resolve_module()
+    if dvr is None:
+        return False, problem
     resolve = dvr.scriptapp("Resolve")
     if resolve is None:
-        return False, "Resolve isn't running (or scripting isn't enabled)."
+        return False, ("Loaded Resolve's scripting API, but it can't attach to a "
+                        "running Resolve. Open Resolve, then set Preferences > "
+                        "System > General > 'External scripting using' to Local "
+                        "and try again.")
     project = resolve.GetProjectManager().GetCurrentProject()
     if project is None:
         return False, "No project open in Resolve."
@@ -398,21 +565,39 @@ def send_to_resolve(result: BeatResult, beat_color: str = "Blue",
         fps = float(timeline.GetSetting("timelineFrameRate"))
     except (TypeError, ValueError):
         fps = 30.0
-    start_frame = int(timeline.GetStartFrame())
+    try:
+        start_frame = int(timeline.GetStartFrame())
+    except (TypeError, ValueError):
+        start_frame = 0
 
-    placed = skipped = 0
-    for time, number, is_down in zip(result.beats, result.beat_numbers, result.is_downbeat):
-        frame_id = start_frame + int(round(float(time) * fps))
-        color = downbeat_color if is_down else beat_color
-        name = "Downbeat" if is_down else f"Beat {int(number)}"
-        if timeline.AddMarker(frame_id, color, name, "", 1):
-            placed += 1
-        else:
-            skipped += 1
+    def place(base: int) -> tuple:
+        """Add every beat, offsetting frame numbers by `base`."""
+        added = missed = 0
+        for time, number, is_down in zip(result.beats, result.beat_numbers,
+                                          result.is_downbeat):
+            if downbeats_only and not is_down:
+                continue
+            frame_id = base + int(round(float(time) * fps))
+            color = downbeat_color if is_down else beat_color
+            name = "Downbeat" if is_down else f"Beat {int(number)}"
+            if timeline.AddMarker(frame_id, color, name, "", 1):
+                added += 1
+            else:
+                missed += 1
+        return added, missed
+
+    # AddMarker counts from the start of the timeline in some Resolve
+    # builds and from absolute record frame in others, and the wrong one
+    # silently places nothing. Try relative first, fall back to absolute -
+    # whichever is wrong adds no markers, so there is nothing to undo.
+    placed, skipped = place(0)
+    if placed == 0 and start_frame:
+        placed, skipped = place(start_frame)
 
     if placed == 0:
-        return False, ("Resolve rejected every marker - check for markers already "
-                        "at those frames, or that the timeline covers the song's length.")
+        return False, ("Resolve accepted the connection but rejected every marker. "
+                        "Usually that means the timeline is shorter than the song, "
+                        "or it already has markers on those frames.")
     msg = f"Added {placed} marker{'s' if placed != 1 else ''} to '{timeline.GetName()}'."
     if skipped:
         msg += f" ({skipped} skipped, likely duplicates.)"

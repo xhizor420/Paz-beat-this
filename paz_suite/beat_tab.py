@@ -402,12 +402,25 @@ class BeatTab(ctk.CTkFrame):
                                 else "Red")
         self.down_color_box.grid(row=0, column=5, sticky="w", pady=4)
 
+        ctk.CTkLabel(body, text="Timeline starts at", font=font(11), text_color=T.DIM
+                     ).grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(10, 4))
+        self.start_tc_box = ctk.CTkComboBox(
+            body, width=120, height=30, corner_radius=7, font=font(11, mono=True),
+            fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
+            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
+            dropdown_hover_color=T.ACCENT4_DEEP, dropdown_text_color=T.TEXT,
+            dropdown_font=font(11), text_color=T.TEXT,
+            values=list(be.START_CHOICES))
+        self.start_tc_box.set(self.cfg.beat_start_tc or be.DEFAULT_START_TC)
+        self.start_tc_box.grid(row=1, column=1, sticky="w", pady=(10, 4))
+
         self.downbeats_only_switch = ctk.CTkSwitch(
             body, text="Downbeats only", font=font(11), text_color=T.DIM,
             progress_color=T.ACCENT4, button_color=T.TEXT)
         (self.downbeats_only_switch.select() if self.cfg.beat_downbeats_only
          else self.downbeats_only_switch.deselect())
-        self.downbeats_only_switch.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.downbeats_only_switch.grid(row=1, column=2, columnspan=2, sticky="w",
+                                        padx=(16, 0), pady=(10, 4))
 
         btn_row = ctk.CTkFrame(export, fg_color="transparent")
         btn_row.grid(row=2, column=0, sticky="ew", padx=14, pady=(6, 12))
@@ -428,11 +441,14 @@ class BeatTab(ctk.CTkFrame):
         self.send_resolve_btn.pack(side="left", padx=(8, 0))
 
         ctk.CTkLabel(export, text=(
-            "EDL markers land at record timecode = time into the song, from "
-            "00:00:00:00 - place the song at the start of a timeline (or a "
-            "fresh one) before importing via Timeline > Import > Timeline "
-            "Markers from EDL. 'Send to Resolve now' skips that: it needs "
-            "Resolve open on this machine with scripting enabled."),
+            "EDL markers land at absolute record timecode, so 'Timeline starts "
+            "at' has to match your timeline's own start - Resolve uses "
+            "01:00:00:00 for a new one, which is why an EDL written from "
+            "00:00:00:00 imports and leaves you with nothing. Put the song at "
+            "the very start of the timeline, then Timeline > Import > Timeline "
+            "Markers from EDL. 'Send to Resolve now' needs none of that, but "
+            "does need Resolve open here with Preferences > System > General > "
+            "'External scripting using' set to Local."),
             font=font(10), text_color=T.FAINT, wraplength=560, justify="left"
             ).grid(row=3, column=0, sticky="w", padx=14, pady=(0, 12))
 
@@ -624,7 +640,7 @@ class BeatTab(ctk.CTkFrame):
         if not self._result:
             self.set_status(self.F("no_result"), T.WARN)
             return
-        fps, beat_color, down_color, downbeats_only = self._export_settings()
+        fps, beat_color, down_color, downbeats_only, start_tc = self._export_settings()
         stem = os.path.splitext(os.path.basename(self._result.audio_path))[0]
         path = filedialog.asksaveasfilename(
             title="Save EDL for Resolve", parent=self.root, defaultextension=".edl",
@@ -634,7 +650,8 @@ class BeatTab(ctk.CTkFrame):
             return
         try:
             be.save_edl(self._result, path, fps=fps, beat_color=beat_color,
-                       downbeat_color=down_color, downbeats_only=downbeats_only)
+                       downbeat_color=down_color, downbeats_only=downbeats_only,
+                       start_tc=start_tc)
         except OSError as exc:
             self.set_status(f"Couldn't save: {exc}", T.FAIL)
             return
@@ -647,33 +664,39 @@ class BeatTab(ctk.CTkFrame):
         if not self._result:
             self.set_status(self.F("no_result"), T.WARN)
             return
-        _fps, beat_color, down_color, _only = self._export_settings()
+        _fps, beat_color, down_color, only, _start = self._export_settings()
         self.send_resolve_btn.configure(state="disabled")
         self.set_status("Sending to Resolve…", T.DIM)
-        threading.Thread(target=self._run_send_resolve, args=(beat_color, down_color),
-                         daemon=True).start()
+        threading.Thread(target=self._run_send_resolve,
+                         args=(beat_color, down_color, only), daemon=True).start()
 
-    def _run_send_resolve(self, beat_color: str, down_color: str) -> None:
+    def _run_send_resolve(self, beat_color: str, down_color: str, only: bool) -> None:
         ok, msg = be.send_to_resolve(self._result, beat_color=beat_color,
-                                     downbeat_color=down_color)
+                                     downbeat_color=down_color,
+                                     downbeats_only=only)
         self.ui(self._send_resolve_done, ok, msg)
 
     def _send_resolve_done(self, ok: bool, msg: str) -> None:
         self.send_resolve_btn.configure(state="normal")
         self.logview.write(msg, "ok" if ok else "fail")
-        self.set_status(msg, T.OK if ok else T.FAIL)
+        # The failure text is a multi-line checklist naming the paths that
+        # were tried; the status line is one line tall, so it gets the
+        # headline and the log keeps the detail.
+        self.set_status(msg.split("\n")[0], T.OK if ok else T.FAIL)
 
     def _export_settings(self):
         fps = float(self.fps_box.get())
         beat_color = self.beat_color_box.get()
         down_color = self.down_color_box.get()
         downbeats_only = bool(self.downbeats_only_switch.get())
+        start_tc = (self.start_tc_box.get() or "").strip() or be.DEFAULT_START_TC
         self.cfg.beat_fps = fps
         self.cfg.beat_beat_color = beat_color
         self.cfg.beat_downbeat_color = down_color
         self.cfg.beat_downbeats_only = downbeats_only
+        self.cfg.beat_start_tc = start_tc
         self.cfg.save()
-        return fps, beat_color, down_color, downbeats_only
+        return fps, beat_color, down_color, downbeats_only, start_tc
 
     # ── keyboard / lifecycle (dispatched centrally by the app) ─────────
 
@@ -708,19 +731,33 @@ its position in the bar (1 = downbeat).
 Export:
 - Save .beats writes the plain-text format beat_this and Sonic Visualiser \
 already use: one "time<TAB>beat number" line per beat.
-- Save EDL for Resolve writes a CMX3600 EDL with one marker (LOC line) per \
-beat. Import it with Timeline > Import > Timeline Markers from EDL. \
-Markers land at record timecode = time into the song counting from \
-00:00:00:00, so put the song at the very start of a timeline (or a fresh \
-one) before importing - EDL marker import always uses absolute position, \
-not the clip's own position. Pick the frame rate that matches your \
-timeline first; markers are placed as non-drop-frame timecode.
+- Save EDL for Resolve writes a CMX3600 EDL of timeline markers, in the \
+same form Resolve itself exports them: one one-frame event per beat, each \
+carrying a |C: colour, |M: name and |D: duration. Import it with Timeline \
+> Import > Timeline Markers from EDL.
+
+Three things have to match or the import quietly produces nothing:
+  · Frame rate - set it to your timeline's rate before exporting. Markers \
+are written as non-drop-frame timecode.
+  · Timeline starts at - EDL marker import is absolute, so this has to be \
+your timeline's own start timecode. Resolve uses 01:00:00:00 for a new \
+timeline, which is the default here; pick 00:00:00:00 only if you have \
+changed yours. An EDL written from the wrong base puts every marker \
+outside the timeline, where they don't land at all.
+  · Song position - put the song at the very start of the timeline. EDL \
+markers go by absolute timecode, not by where the clip happens to sit.
+
 - Send to Resolve now skips the file entirely and adds markers straight to \
-the timeline currently open in Resolve, via Resolve's scripting API - only \
-works run on the same machine as Resolve, with Resolve open and \
-Preferences > General > External scripting using set to Local (or \
-Network), and the RESOLVE_SCRIPT_API / RESOLVE_SCRIPT_LIB / PYTHONPATH \
-environment variables set as described in Resolve's own \
-Developer/Scripting README. Unlike the EDL, it doesn't need the clip at \
-timeline zero - it reads the timeline's own frame rate and start frame.
+the timeline currently open in Resolve, via Resolve's scripting API. It \
+needs Resolve open on this machine with Preferences > System > General > \
+"External scripting using" set to Local (or Network) - that setting is \
+Disabled out of the box and is the usual reason this fails while Resolve \
+is plainly running. The scripting library is found automatically in the \
+place the installer puts it, so the RESOLVE_SCRIPT_API / \
+RESOLVE_SCRIPT_LIB / PYTHONPATH environment variables from Resolve's own \
+Developer/Scripting README are honoured if you have set them but are not \
+required. If it still can't connect, the log lists every path it tried.
+
+Unlike the EDL, the live handoff doesn't need the clip at timeline zero or \
+a matching frame rate - it reads the timeline's own rate and start frame.
 """
