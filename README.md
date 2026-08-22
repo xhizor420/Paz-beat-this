@@ -44,13 +44,28 @@ get beat/downbeat markers you can bring into a DaVinci Resolve timeline.
 
 ### Install
 
+The tab's **Setup** panel lists what's present and installs what isn't —
+press **Install dependencies**, then restart the app. **Download model**
+fetches the checkpoint ahead of time so the first analysis isn't a long
+silent wait. Equivalent by hand:
+
 ```
-# Install PyTorch for your platform first: https://pytorch.org/get-started/locally/
-pip install -r beat_this/requirements.txt
+pip install torch torchaudio einops rotary-embedding-torch soxr numpy
 ```
 
-`ffmpeg` (already required above) doubles as torchaudio's backend for
-reading non-`.wav` audio. DBN postprocessing is optional and needs
+Note this deliberately doesn't use `beat_this/requirements.txt` — those
+pins (`torch==2.3.1` and friends) have no wheels for current Python
+versions and fail outright on a new interpreter. If PyTorch won't install,
+get the right build for your machine from
+[pytorch.org](https://pytorch.org/get-started/locally/).
+
+Audio is decoded with `ffmpeg` (already required above) rather than
+torchaudio, so anything ffmpeg opens works — mp3, wav, flac, m4a, ogg,
+or the audio track of a video file. This matters: recent torchaudio
+delegates `load()` to TorchCodec and raises `Could not load audio from
+"…"` on an ordinary MP3 when it isn't installed.
+
+DBN postprocessing is optional and needs
 `pip install git+https://github.com/CPJKU/madmom.git` on top.
 
 ### Using it
@@ -94,6 +109,7 @@ main.py                     entry point
 paz_suite/
   config.py                 AppConfig (+ legacy migration)
   theme.py, format.py       palette/fonts, human-readable formatting
+  uithread.py               safe hand-off from worker threads to the UI
   files.py                  proxy-folder filtering, post-ID parsing, open/reveal
   e621.py                   e621 tag lookup + cache
   media.py                  ffprobe, thumbnailing, frame/storyboard cache, dhash

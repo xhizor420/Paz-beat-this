@@ -1,0 +1,366 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; background: #07040C; }
+    * { box-sizing: border-box; }
+    a { color: #FFB03D; text-decoration: none; }
+    a:hover { color: #FFCC80; }
+    .grain {
+      position: absolute; inset: 0; pointer-events: none; z-index: 50; opacity: .22; mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+  </style>
+</helmet>
+
+<div style="position: relative; width: 1440px; height: 900px; overflow: hidden;
+            background:
+              radial-gradient(120% 70% at 6% -10%, #33240A 0%, rgba(51,36,10,0) 55%),
+              radial-gradient(90% 60% at 100% 0%, #2A1140 0%, rgba(42,17,64,0) 60%),
+              #07040C;
+            font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+            color: #F7EFFA; display: flex; flex-direction: column;">
+
+  <div class="grain"></div>
+
+  <!-- identity bar -->
+  <div style="display: flex; align-items: center; gap: 14px; height: 46px; padding: 0 20px;
+              background: rgba(20,12,31,.72); border-bottom: 1px solid #1A1230; flex-shrink: 0;">
+    <div style="display: flex; align-items: center; gap: 9px;">
+      <div style="width: 17px; height: 17px; border-radius: 5px;
+                  background: linear-gradient(140deg, #FFB03D, #FF6B4D); box-shadow: 0 0 20px -6px #FFB03D;"></div>
+      <span style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 15px; font-weight: 800;
+                   letter-spacing: -.02em;">PAZ</span>
+      <span style="font-family: 'JetBrains Mono', monospace; font-size: 9px; color: #6E5C8C;
+                   letter-spacing: .14em; margin-top: 2px;">SUITE</span>
+    </div>
+    <div style="flex-grow: 1;"></div>
+    <div style="display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace;
+                font-size: 10px; color: #6E5C8C;">
+      <span style="width: 6px; height: 6px; border-radius: 50%; background: #2EE6B0; box-shadow: 0 0 8px #2EE6B0;"></span>
+      <span>model final0 · cpu</span>
+    </div>
+  </div>
+
+  <!-- tab strip -->
+  <div style="display: flex; align-items: flex-end; gap: 4px; height: 48px; padding: 0 16px;
+              background: rgba(12,7,19,.6); border-bottom: 1px solid #1A1230; flex-shrink: 0;">
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #FF2E9A; opacity: .4;"></span>Convert
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #A46BFF; opacity: .4;"></span>Library
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #2EE6B0; opacity: .4;"></span>Vault
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 18px;
+                border-radius: 9px 9px 0 0; font-size: 13px; font-weight: 700; color: #FFCC80;
+                background: linear-gradient(180deg, rgba(255,176,61,.20), rgba(255,176,61,.06));
+                border: 1px solid #5A3F14; border-bottom: none;
+                box-shadow: 0 -8px 26px -12px #FFB03D, inset 0 1px 0 rgba(255,204,128,.22);">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #FFB03D; box-shadow: 0 0 9px #FFB03D;"></span>Beat This
+    </div>
+  </div>
+
+  <div style="display: flex; flex-grow: 1; min-height: 0; gap: 16px; padding: 16px 20px;">
+
+    <!-- left column -->
+    <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px;">
+
+      <!-- setup strip -->
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839; padding: 12px 14px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">SETUP</span>
+          <div style="flex-grow: 1;"></div>
+          <span style="font-size: 10.5px; font-weight: 600; padding: 4px 10px; border-radius: 6px;
+                       background: rgba(46,230,176,.12); border: 1px solid rgba(46,230,176,.35); color: #2EE6B0;">All installed</span>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
+                    font-family: 'JetBrains Mono', monospace; font-size: 10px;">
+          <span style="padding: 3px 8px; border-radius: 5px; background: rgba(46,230,176,.08); color: #2EE6B0;">✓ torch 2.13</span>
+          <span style="padding: 3px 8px; border-radius: 5px; background: rgba(46,230,176,.08); color: #2EE6B0;">✓ torchaudio</span>
+          <span style="padding: 3px 8px; border-radius: 5px; background: rgba(46,230,176,.08); color: #2EE6B0;">✓ einops</span>
+          <span style="padding: 3px 8px; border-radius: 5px; background: rgba(46,230,176,.08); color: #2EE6B0;">✓ soxr</span>
+          <span style="padding: 3px 8px; border-radius: 5px; background: rgba(46,230,176,.08); color: #2EE6B0;">✓ ffmpeg</span>
+          <span style="padding: 3px 8px; border-radius: 5px; background: rgba(46,230,176,.08); color: #2EE6B0;">✓ model final0</span>
+        </div>
+      </div>
+
+      <!-- song -->
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839; padding: 12px 14px;">
+        <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">SONG</div>
+        <div style="display: flex; gap: 8px; margin-top: 9px;">
+          <div style="flex-grow: 1; display: flex; align-items: center; gap: 9px; height: 38px; padding: 0 12px;
+                      border-radius: 9px; background: #080510; border: 1px solid #5A3F14;
+                      box-shadow: inset 0 0 22px -14px #FFB03D;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFB03D" stroke-width="2.2">
+              <path d="M9 18V5l10-2v13"></path><circle cx="6.5" cy="18" r="2.8"></circle><circle cx="16.5" cy="16" r="2.8"></circle>
+            </svg>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #F7EFFA;">MIDNIGHT DRIVE.mp3</span>
+            <div style="flex-grow: 1;"></div>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6E5C8C;">3:42 · 22.05 kHz</span>
+          </div>
+          <div style="display: flex; align-items: center; padding: 0 16px; border-radius: 9px;
+                      background: #1C1230; border: 1px solid #2B1E45; color: #C3B2DB; font-size: 11.5px;">Browse…</div>
+        </div>
+      </div>
+
+      <!-- beat ruler -->
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839;
+                  padding: 12px 14px; flex-grow: 1; display: flex; flex-direction: column; min-height: 0;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">BEAT GRID</span>
+          <div style="flex-grow: 1;"></div>
+          <span style="display: flex; align-items: center; gap: 5px; font-size: 10px; color: #8E7CAB;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #FF6B4D;"></span>downbeat</span>
+          <span style="display: flex; align-items: center; gap: 5px; font-size: 10px; color: #8E7CAB;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #4DA3FF;"></span>beat</span>
+        </div>
+
+        <div style="margin-top: 14px; position: relative; height: 96px; border-radius: 10px;
+                    background: linear-gradient(180deg, #0A0614, #080510);
+                    border: 1px solid #1F1730; overflow: hidden;">
+          <div style="position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 2px; padding: 10px 12px;">
+            <div style="width:3px;height:22%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:56%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 10px #FF6B4D;"></div>
+            <div style="width:3px;height:28%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:34%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:26%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:72%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 10px #FF6B4D;"></div>
+            <div style="width:3px;height:31%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:40%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:24%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:64%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 10px #FF6B4D;"></div>
+            <div style="width:3px;height:37%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:29%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:44%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:80%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 12px #FF6B4D;"></div>
+            <div style="width:3px;height:33%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:27%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:48%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:58%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 10px #FF6B4D;"></div>
+            <div style="width:3px;height:30%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:39%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:25%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:69%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 10px #FF6B4D;"></div>
+            <div style="width:3px;height:35%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:42%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:23%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:75%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 12px #FF6B4D;"></div>
+            <div style="width:3px;height:32%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:46%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:28%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:61%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 10px #FF6B4D;"></div>
+            <div style="width:3px;height:36%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:41%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:26%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:78%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 12px #FF6B4D;"></div>
+            <div style="width:3px;height:34%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:45%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:22%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:66%;background:#FF6B4D;border-radius:2px;box-shadow:0 0 10px #FF6B4D;"></div>
+            <div style="width:3px;height:38%;background:#4DA3FF;border-radius:2px;"></div>
+            <div style="width:3px;height:30%;background:#4DA3FF;border-radius:2px;"></div>
+          </div>
+          <div style="position: absolute; left: 34%; top: 0; bottom: 0; width: 1.5px; background: #FFB03D;
+                      box-shadow: 0 0 14px #FFB03D;"></div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; margin-top: 7px;
+                    font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #55446F;">
+          <span>0:00</span><span>0:55</span><span>1:51</span><span>2:46</span><span>3:42</span>
+        </div>
+
+        <div style="flex-grow: 1;"></div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
+                    background: #0A0614; border: 1px solid #1F1730; margin-top: 12px;">
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #2EE6B0;">12:41:08</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8E7CAB;">
+            486 beats · 122 downbeats · 128.4 BPM</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- right column -->
+    <div style="width: 430px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px;">
+
+      <!-- stat tiles -->
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px;">
+        <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #5A3F14;
+                    padding: 13px 8px; text-align: center; box-shadow: 0 0 30px -18px #FFB03D;">
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 21px; font-weight: 700; color: #FFB03D;
+                      text-shadow: 0 0 18px rgba(255,176,61,.55);">128</div>
+          <div style="font-size: 8px; font-weight: 700; letter-spacing: .14em; color: #55446F; margin-top: 4px;">BPM</div>
+        </div>
+        <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839;
+                    padding: 13px 8px; text-align: center;">
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 21px; font-weight: 700; color: #F7EFFA;">486</div>
+          <div style="font-size: 8px; font-weight: 700; letter-spacing: .14em; color: #55446F; margin-top: 4px;">BEATS</div>
+        </div>
+        <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839;
+                    padding: 13px 8px; text-align: center;">
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 21px; font-weight: 700; color: #F7EFFA;">122</div>
+          <div style="font-size: 8px; font-weight: 700; letter-spacing: .14em; color: #55446F; margin-top: 4px;">DOWNBEATS</div>
+        </div>
+        <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839;
+                    padding: 13px 8px; text-align: center;">
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 21px; font-weight: 700; color: #F7EFFA;">3:42</div>
+          <div style="font-size: 8px; font-weight: 700; letter-spacing: .14em; color: #55446F; margin-top: 4px;">LENGTH</div>
+        </div>
+      </div>
+
+      <!-- beat table -->
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839;
+                  flex-grow: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;">
+        <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 10px 14px;
+                    background: #1C1230; border-bottom: 1px solid #241839;
+                    font-size: 8.5px; font-weight: 700; letter-spacing: .14em; color: #55446F;">
+          <span>TIME</span><span style="text-align: center;">BEAT</span><span></span>
+        </div>
+        <div style="padding: 4px 6px;">
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      border-radius: 7px; background: rgba(255,107,77,.10);
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #F7EFFA;">0:00.4</span><span style="text-align: center; color: #FF6B4D; font-weight: 700;">1</span>
+            <span style="color: #FF6B4D; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Downbeat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:00.9</span><span style="text-align: center; color: #8E7CAB;">2</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:01.4</span><span style="text-align: center; color: #8E7CAB;">3</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:01.9</span><span style="text-align: center; color: #8E7CAB;">4</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      border-radius: 7px; background: rgba(255,107,77,.10);
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #F7EFFA;">0:02.3</span><span style="text-align: center; color: #FF6B4D; font-weight: 700;">1</span>
+            <span style="color: #FF6B4D; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Downbeat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:02.8</span><span style="text-align: center; color: #8E7CAB;">2</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:03.3</span><span style="text-align: center; color: #8E7CAB;">3</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:03.7</span><span style="text-align: center; color: #8E7CAB;">4</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:04.2</span><span style="text-align: center; color: #8E7CAB;">2</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:04.7</span><span style="text-align: center; color: #8E7CAB;">3</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:05.1</span><span style="text-align: center; color: #8E7CAB;">4</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      border-radius: 7px; background: rgba(255,107,77,.10);
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #F7EFFA;">0:05.6</span><span style="text-align: center; color: #FF6B4D; font-weight: 700;">1</span>
+            <span style="color: #FF6B4D; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Downbeat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:06.1</span><span style="text-align: center; color: #8E7CAB;">2</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:06.5</span><span style="text-align: center; color: #8E7CAB;">3</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">0:07.0</span><span style="text-align: center; color: #8E7CAB;">4</span>
+            <span style="color: #6E5C8C; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Beat</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 52px 96px; gap: 8px; padding: 7px 8px;
+                      border-radius: 7px; background: rgba(255,107,77,.10);
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #F7EFFA;">0:07.5</span><span style="text-align: center; color: #FF6B4D; font-weight: 700;">1</span>
+            <span style="color: #FF6B4D; font-family: 'Space Grotesk', sans-serif; font-size: 10.5px;">Downbeat</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- export -->
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839; padding: 13px 14px;">
+        <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">EXPORT MARKERS</div>
+
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          <div style="flex-grow: 1;">
+            <div style="font-size: 9.5px; color: #6E5C8C; margin-bottom: 5px;">Frame rate</div>
+            <div style="height: 32px; border-radius: 8px; background: #080510; border: 1px solid #2B1E45;
+                        display: flex; align-items: center; padding: 0 10px;
+                        font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #F7EFFA;">59.94</div>
+          </div>
+          <div style="flex-grow: 1;">
+            <div style="font-size: 9.5px; color: #6E5C8C; margin-bottom: 5px;">Beat</div>
+            <div style="height: 32px; border-radius: 8px; background: #080510; border: 1px solid #2B1E45;
+                        display: flex; align-items: center; gap: 7px; padding: 0 10px; font-size: 11px; color: #F7EFFA;">
+              <span style="width: 10px; height: 10px; border-radius: 3px; background: #4DA3FF;"></span>Blue</div>
+          </div>
+          <div style="flex-grow: 1;">
+            <div style="font-size: 9.5px; color: #6E5C8C; margin-bottom: 5px;">Downbeat</div>
+            <div style="height: 32px; border-radius: 8px; background: #080510; border: 1px solid #2B1E45;
+                        display: flex; align-items: center; gap: 7px; padding: 0 10px; font-size: 11px; color: #F7EFFA;">
+              <span style="width: 10px; height: 10px; border-radius: 3px; background: #FF6B4D;"></span>Red</div>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-top: 12px;">
+          <div style="text-align: center; font-size: 11px; font-weight: 600; padding: 10px 14px; border-radius: 9px;
+                      background: #1C1230; border: 1px solid #2B1E45; color: #C3B2DB;">.beats</div>
+          <div style="flex-grow: 1; text-align: center; font-size: 11.5px; font-weight: 700; padding: 10px 0;
+                      border-radius: 9px; color: #0C0713;
+                      background: linear-gradient(135deg, #FFB03D, #FF6B4D);
+                      box-shadow: 0 0 28px -8px #FFB03D;">Save EDL for Resolve</div>
+        </div>
+        <div style="text-align: center; font-size: 11px; font-weight: 600; padding: 9px 0; border-radius: 9px;
+                    margin-top: 8px; background: rgba(255,176,61,.07); border: 1px dashed #5A3F14; color: #FFCC80;">
+          Send to Resolve now</div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview": {"width": 1440, "height": 900}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>

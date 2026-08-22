@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# Seeded design canvas (2.3MB generated payload; re-seed from design/*.dc.html)
+design/*.html
+!design/*.dc.html

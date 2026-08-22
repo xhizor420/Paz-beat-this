@@ -1,0 +1,19 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html",     "x": 0,    "y": 0,    "w": 1440, "h": 900, "title": "Library" },
+    { "file": "Convert.dc.html",  "x": 1520, "y": 0,    "w": 1440, "h": 900, "title": "Convert" },
+    { "file": "BeatThis.dc.html", "x": 3040, "y": 0,    "w": 1440, "h": 900, "title": "Beat This" },
+    { "file": "Vault.dc.html",    "x": 0,    "y": 1020, "w": 1440, "h": 900, "title": "Vault" },
+    { "file": "System.dc.html",   "x": 1520, "y": 1020, "w": 1200, "h": 900, "title": "Design system" }
+  ],
+  "annotations": [
+    {
+      "id": "brief",
+      "x": 2810,
+      "y": 1020,
+      "w": 300,
+      "text": "PAZ — Neon Den face lift\n\nEvolves the existing theme.py palette rather than replacing it: the four tab identities keep their roles (pink Convert, violet Library, mint Vault, amber Beat This), the ground gets deeper, accents gain chroma and glow, and Segoe UI is replaced with Bricolage Grotesque + Space Grotesk + JetBrains Mono.\n\nThumbnails are abstract gradient placeholders, not artwork.\n\nTweak the accent and glow on the Library artboard to retune the whole scheme."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}

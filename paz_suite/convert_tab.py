@@ -29,6 +29,7 @@ from .convert_widgets import (
     QueueTable, STATE_LABELS, ScrubPreview, ContactSheet, DuplicateWindow,
 )
 from .widgets import Card, Bar, StatTile, JobPanel, LogView, LibraryBar
+from . import uithread
 
 
 class ConvertTab(ctk.CTkFrame):
@@ -88,7 +89,7 @@ class ConvertTab(ctk.CTkFrame):
     # ── thread-safe UI ──────────────────────────────────────────────────────
 
     def ui(self, fn, *args, **kwargs):
-        self.after(0, lambda: fn(*args, **kwargs))
+        uithread.post(fn, *args, **kwargs)
 
     def log(self, message: str, level: str = "info"):
         self.ui(self.logview.write, message, level)

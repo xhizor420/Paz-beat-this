@@ -1,0 +1,216 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; background: #07040C; }
+    * { box-sizing: border-box; }
+    a { color: #FF6BB5; text-decoration: none; }
+    a:hover { color: #FF9ACE; }
+    .lbl { font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F; }
+    .sw { border-radius: 9px; height: 54px; display: flex; align-items: flex-end; padding: 7px 8px;
+          font-family: 'JetBrains Mono', monospace; font-size: 8.5px; }
+  </style>
+</helmet>
+
+<div style="position: relative; width: 1200px; height: 900px; overflow: hidden;
+            background: radial-gradient(110% 60% at 50% -10%, #1E1235 0%, rgba(30,18,53,0) 60%), #07040C;
+            font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; color: #F7EFFA;
+            padding: 26px 30px; display: flex; flex-direction: column; gap: 20px;">
+
+  <div>
+    <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 30px; font-weight: 800;
+                letter-spacing: -.03em; line-height: 1;">
+      PAZ <span style="background: linear-gradient(100deg, #FF2E9A, #A46BFF, #2EE6B0, #FFB03D);
+                       -webkit-background-clip: text; background-clip: text; color: transparent;">Neon Den</span>
+    </div>
+    <div style="font-size: 12px; color: #8E7CAB; margin-top: 6px;">
+      Face lift of the existing palette — same four tab identities, deeper ground, more chroma, real type.
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; flex-grow: 1; min-height: 0;">
+
+    <!-- left column -->
+    <div style="display: flex; flex-direction: column; gap: 18px;">
+
+      <div>
+        <div class="lbl">GROUND · deeper than today's #0B0711</div>
+        <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin-top: 9px;">
+          <div class="sw" style="background: #07040C; border: 1px solid #1F1730; color: #6E5C8C;">07040C</div>
+          <div class="sw" style="background: #0C0713; border: 1px solid #1F1730; color: #6E5C8C;">0C0713</div>
+          <div class="sw" style="background: #140C1F; border: 1px solid #241839; color: #8E7CAB;">140C1F</div>
+          <div class="sw" style="background: #1C1230; border: 1px solid #2B1E45; color: #A594BF;">1C1230</div>
+          <div class="sw" style="background: #2B1E45; color: #C3B2DB;">2B1E45</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl">TAB IDENTITIES · unchanged roles, pushed chroma</div>
+        <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 9px;">
+          <div class="sw" style="background: linear-gradient(150deg, #FF2E9A, #FF6BB5); color: #2A0418;
+                                 box-shadow: 0 0 26px -8px #FF2E9A;">FF2E9A</div>
+          <div class="sw" style="background: linear-gradient(150deg, #A46BFF, #C8A9FF); color: #1A0A33;
+                                 box-shadow: 0 0 26px -8px #A46BFF;">A46BFF</div>
+          <div class="sw" style="background: linear-gradient(150deg, #2EE6B0, #4DD9E6); color: #06120E;
+                                 box-shadow: 0 0 26px -8px #2EE6B0;">2EE6B0</div>
+          <div class="sw" style="background: linear-gradient(150deg, #FFB03D, #FF6B4D); color: #2A1503;
+                                 box-shadow: 0 0 26px -8px #FFB03D;">FFB03D</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 6px;
+                    font-size: 9.5px; color: #6E5C8C; text-align: center;">
+          <span>Convert</span><span>Library</span><span>Vault</span><span>Beat This</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl">RATING &amp; STATE · kept from today</div>
+        <div style="display: flex; gap: 7px; margin-top: 9px;">
+          <span style="font-size: 11px; font-weight: 700; padding: 6px 14px; border-radius: 7px;
+                       background: rgba(255,92,110,.14); border: 1px solid #5A2030; color: #FF5C6E;">E</span>
+          <span style="font-size: 11px; font-weight: 700; padding: 6px 14px; border-radius: 7px;
+                       background: rgba(255,194,77,.12); border: 1px solid #5A4414; color: #FFC24D;">Q</span>
+          <span style="font-size: 11px; font-weight: 700; padding: 6px 14px; border-radius: 7px;
+                       background: rgba(83,224,174,.12); border: 1px solid #1B5A48; color: #53E0AE;">S</span>
+          <div style="flex-grow: 1;"></div>
+          <span style="font-size: 11px; padding: 6px 12px; border-radius: 7px; background: rgba(46,230,176,.12);
+                       border: 1px solid #1B5A48; color: #2EE6B0;">Done</span>
+          <span style="font-size: 11px; padding: 6px 12px; border-radius: 7px; background: rgba(255,176,61,.12);
+                       border: 1px solid #5A3F14; color: #FFB03D;">Warn</span>
+          <span style="font-size: 11px; padding: 6px 12px; border-radius: 7px; background: rgba(255,92,110,.12);
+                       border: 1px solid #5A2030; color: #FF5C6E;">Failed</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl">PROJECT MARKS · one per Vault project</div>
+        <div style="display: flex; gap: 6px; margin-top: 9px;">
+          <span style="width: 34px; height: 20px; border-radius: 5px; background: #4DA3FF;"></span>
+          <span style="width: 34px; height: 20px; border-radius: 5px; background: #FFB84D;"></span>
+          <span style="width: 34px; height: 20px; border-radius: 5px; background: #FF6B4D;"></span>
+          <span style="width: 34px; height: 20px; border-radius: 5px; background: #B8E64D;"></span>
+          <span style="width: 34px; height: 20px; border-radius: 5px; background: #4DD9E6;"></span>
+          <span style="width: 34px; height: 20px; border-radius: 5px; background: #FFD24D;"></span>
+          <span style="width: 34px; height: 20px; border-radius: 5px; background: #FF6B8A;"></span>
+          <span style="width: 34px; height: 20px; border-radius: 5px; background: #8FD9A8;"></span>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl">BUTTONS</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px;">
+          <span style="font-size: 11.5px; font-weight: 700; padding: 9px 18px; border-radius: 9px; color: #2A0418;
+                       background: linear-gradient(135deg, #FF2E9A, #FF6BB5); box-shadow: 0 0 26px -8px #FF2E9A;">Primary</span>
+          <span style="font-size: 11.5px; font-weight: 600; padding: 9px 18px; border-radius: 9px;
+                       background: #1C1230; border: 1px solid #2B1E45; color: #C3B2DB;">Secondary</span>
+          <span style="font-size: 11.5px; font-weight: 600; padding: 9px 18px; border-radius: 9px;
+                       background: rgba(255,46,154,.07); border: 1px dashed #5A1A45; color: #FF9ACE;">Ghost</span>
+          <span style="font-size: 11.5px; font-weight: 600; padding: 9px 18px; border-radius: 9px;
+                       background: rgba(255,92,110,.12); border: 1px solid #5A2030; color: #FF8A96;">Danger</span>
+          <span style="font-size: 11.5px; font-weight: 600; padding: 9px 18px; border-radius: 9px;
+                       background: #120C1C; border: 1px solid #1F1730; color: #453860;">Disabled</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- right column -->
+    <div style="display: flex; flex-direction: column; gap: 18px;">
+
+      <div>
+        <div class="lbl">TYPE · Bricolage Grotesque · Space Grotesk · JetBrains Mono</div>
+        <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 7px;">
+          <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 27px; font-weight: 800;
+                      letter-spacing: -.03em; line-height: 1.05;">Display 27 / 800</div>
+          <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 19px; font-weight: 700;
+                      letter-spacing: -.02em;">Section heading 19 / 700</div>
+          <div style="font-size: 13px; font-weight: 600;">UI label 13 / 600 — Space Grotesk</div>
+          <div style="font-size: 11.5px; color: #C3B2DB;">Body 11.5 / 400 — the readable default for panels and rows.</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8E7CAB;">
+            Mono 11 — 4482910.mp4 · 3840×2160 · 128.4 BPM</div>
+          <div class="lbl" style="margin-top: 2px;">OVERLINE 9 / 700 / .16EM</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl">TAG CHIPS</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px;">
+          <span style="font-size: 11px; padding: 4px 10px; border-radius: 6px; color: #1A0A33; font-weight: 600;
+                       background: linear-gradient(135deg, #A46BFF, #C8A9FF);
+                       box-shadow: 0 0 16px -5px #A46BFF;">wolf <b style="opacity:.6;">1.4k</b></span>
+          <span style="font-size: 11px; padding: 4px 10px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">dragon <b style="color:#55446F; font-weight:500;">980</b></span>
+          <span style="font-size: 11px; padding: 4px 10px; border-radius: 6px; background: #140C1F;
+                       border: 1px dashed #5A2030; color: #FF8A96;">−excluded</span>
+          <span style="font-size: 11px; padding: 4px 10px; border-radius: 6px; background: #120C1C;
+                       border: 1px solid #1F1730; color: #453860;">hidden</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl">CLIP CARD · resting / selected / spent</div>
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 9px;">
+          <div style="border-radius: 11px; overflow: hidden; background: #140C1F; border: 1px solid #241839;">
+            <div style="height: 74px; background: radial-gradient(110% 90% at 78% 16%, #4DD9E699, transparent 56%),
+                        radial-gradient(95% 80% at 20% 40%, #A46BFF77, transparent 55%), #120B1D;"></div>
+            <div style="padding: 7px 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #C3B2DB;">4391077</div>
+          </div>
+          <div style="border-radius: 11px; overflow: hidden; background: #140C1F; border: 1.5px solid #A46BFF;
+                      box-shadow: 0 0 30px -10px #A46BFF;">
+            <div style="height: 74px; background: radial-gradient(110% 90% at 22% 12%, #FF2E9A88, transparent 58%),
+                        radial-gradient(95% 80% at 82% 34%, #A46BFF99, transparent 55%), #150D22;"></div>
+            <div style="padding: 7px 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #F7EFFA;">4482910</div>
+          </div>
+          <div style="border-radius: 11px; overflow: hidden; background: #140C1F; border: 1.5px solid #4DA3FF;">
+            <div style="height: 74px; position: relative;
+                        background: radial-gradient(105% 85% at 30% 20%, #FFB03D88, transparent 55%),
+                        radial-gradient(95% 80% at 80% 60%, #FF6B4D88, transparent 55%), #170E20;">
+              <span style="position: absolute; top: 5px; left: 5px; font-family: 'JetBrains Mono', monospace;
+                           font-size: 7.5px; font-weight: 700; padding: 2px 5px; border-radius: 3px;
+                           background: rgba(7,4,12,.78); color: #4DA3FF;">USED</span>
+            </div>
+            <div style="padding: 7px 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #C3B2DB;">4512338</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl">FIELDS &amp; PROGRESS</div>
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 9px;">
+          <div style="height: 34px; border-radius: 9px; background: #080510; border: 1px solid #2B1E45;
+                      display: flex; align-items: center; padding: 0 11px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #55446F;">rest state</div>
+          <div style="height: 34px; border-radius: 9px; background: #080510; border: 1px solid #A46BFF;
+                      box-shadow: 0 0 22px -10px #A46BFF, inset 0 0 20px -14px #A46BFF;
+                      display: flex; align-items: center; padding: 0 11px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C8A9FF;">focused · species:wolf</div>
+          <div style="height: 6px; border-radius: 3px; background: #1A1230; overflow: hidden;">
+            <div style="width: 68%; height: 100%; border-radius: 3px;
+                        background: linear-gradient(90deg, #A46BFF, #FF2E9A); box-shadow: 0 0 12px #FF2E9A;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl">TEXTURE</div>
+        <div style="margin-top: 9px; font-size: 11px; color: #8E7CAB; line-height: 1.7;">
+          Every surface carries a 22% overlay grain and a single top inner-highlight
+          (<span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #C3B2DB;">inset 0 1px 0 rgba(200,169,255,.14)</span>).
+          Accents glow rather than fill — outer shadow at the accent hue, never a flat block.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview": {"width": 1200, "height": 900}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>

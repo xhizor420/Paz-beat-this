@@ -31,6 +31,7 @@ from .library_db import (
     vault_marks_by_path, vault_unmark, vault_projects_list, vault_ensure_project, vault_mark,
 )
 from .library_player import InlinePlayer
+from . import uithread
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
 
@@ -105,7 +106,7 @@ class LibraryTab(ctk.CTkFrame):
         return text.format(**fmt) if fmt else text
 
     def ui(self, fn, *args, **kwargs):
-        self.after(0, lambda: fn(*args, **kwargs))
+        uithread.post(fn, *args, **kwargs)
 
     # ── layout ──────────────────────────────────────────────────────────────
 

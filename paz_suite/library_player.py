@@ -22,6 +22,7 @@ from .format import fmt_clock, fmt_len
 from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
 from .player_engine import ClipPlayer, HAS_FFPLAY
+from . import uithread
 
 
 class InlinePlayer:
@@ -432,7 +433,7 @@ class InlinePlayer:
             # hover_frame() crops a pre-built sprite sheet instead of
             # spawning ffmpeg per hover - see media.py for why.
             data = self.tab.frames.hover_frame(path, duration, frac)
-            self.bar.after(0, lambda: self._peek_done(data, moment, token, x_root, y_root))
+            uithread.post(self._peek_done, data, moment, token, x_root, y_root)
 
         threading.Thread(target=work, daemon=True).start()
 

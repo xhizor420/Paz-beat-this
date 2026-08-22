@@ -21,6 +21,7 @@ from .library_tab import LibraryTab
 from .vault_tab import VaultTab
 from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
+from . import uithread
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
 
@@ -29,6 +30,10 @@ class PazApp:
 
     def __init__(self, root: ctk.CTk):
         self.root = root
+        # Before any tab exists, so the worker threads the tabs start in
+        # their constructors have somewhere safe to post results - those
+        # run before root.mainloop() does. See uithread's module docstring.
+        uithread.install(root)
         self.cfg = AppConfig.load()
         self.emeta = E621Meta()
         set_probe_cache_limit(self.cfg.probe_cache_limit)
