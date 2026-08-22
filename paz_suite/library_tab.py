@@ -814,6 +814,11 @@ class LibraryTab(ctk.CTkFrame):
             self.by_path[rec.path] = rec
         if hasattr(self, "fix_btn"):
             self._refresh_missing_badge()
+        # The identity bar carries one live number for the whole suite, so
+        # the size of the library is visible from any tab, not just this one.
+        setter = getattr(self.app, "set_header_status", None)
+        if setter:
+            setter(f"{len(self.records):,} clips indexed", T.OK)
 
     # ── search & render ─────────────────────────────────────────────────────
 

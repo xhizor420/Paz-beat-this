@@ -11,7 +11,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from .theme import T, font, mark_photo
+from .theme import T, font, mark_photo, mix, resolve_fonts
 from .config import AppConfig
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
@@ -53,24 +53,27 @@ class PazApp:
         root.configure(fg_color=T.BG)
 
         self._build_header()
+        self._build_tabstrip()
 
         self.tabview = ctk.CTkTabview(
-            root, fg_color=T.BG, corner_radius=10, anchor="w",
-            segmented_button_fg_color=T.SURFACE,
-            segmented_button_selected_color=T.ACCENT_DEEP,
-            segmented_button_selected_hover_color=T.ACCENT_DEEP,
-            segmented_button_unselected_color=T.SURFACE,
-            segmented_button_unselected_hover_color=T.BTN_HOV,
-            segmented_button_font=font(13, "bold"),
+            root, fg_color=T.BG, corner_radius=0,
             text_color=T.TEXT, command=self._on_tab_changed)
-        self.tabview.pack(fill="both", expand=True, padx=0, pady=(6, 0))
+        self.tabview.pack(fill="both", expand=True, padx=0, pady=0)
         for name in TAB_NAMES:
             self.tabview.add(name)
-        # CTkTabview hardcodes a 26px-tall segmented button with no public
-        # way to change it - going through the private attribute is the
-        # only way to get a strip that reads as a real navigation control
-        # instead of a small default widget dropped at the top of the page.
-        self.tabview._segmented_button.configure(height=36)
+        # CTkTabview's own segmented button can't express the design's tab
+        # strip - each tab carries its identity colour as a dot that stays
+        # visible (just muted) while inactive, and one button can only have
+        # a single text colour. So the real strip is _build_tabstrip()
+        # above and CTkTabview is kept purely as the page container, with
+        # its built-in switcher hidden rather than restyled.
+        self.tabview._segmented_button.grid_forget()
+        # Forgetting the button doesn't reclaim its space: CTkTabview holds
+        # rows 0-2 open with minsize (outer spacing, overhang, button
+        # height) whether or not anything occupies them, which leaves a
+        # dead band under our own strip. Collapse them.
+        for _row in (0, 1, 2):
+            self.tabview.grid_rowconfigure(_row, weight=0, minsize=0)
 
         self.convert = ConvertTab(self.tabview.tab("Convert"), self)
         self.library = LibraryTab(self.tabview.tab("Library"), self)
@@ -97,17 +100,43 @@ class PazApp:
     # suite's own name.
 
     def _build_header(self) -> None:
-        bar = ctk.CTkFrame(self.root, fg_color=T.SURFACE, corner_radius=0, height=40)
+        bar = ctk.CTkFrame(self.root, fg_color=T.SURFACE, corner_radius=0, height=44)
         bar.pack(fill="x", side="top")
-        bar.grid_propagate(False)
+        bar.pack_propagate(False)
 
         left = ctk.CTkFrame(bar, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="w", padx=16, pady=6)
-        self._header_icon = mark_photo(18, T.ACCENT)
+        left.pack(side="left", padx=18, pady=8)
+        self._header_icon = mark_photo(19, T.ACCENT)
         tk.Label(left, image=self._header_icon, bg=T.SURFACE, bd=0
-                 ).pack(side="left", padx=(0, 8))
-        ctk.CTkLabel(left, text=APP_NAME, font=font(12, "bold"),
-                     text_color=T.DIM).pack(side="left")
+                 ).pack(side="left", padx=(0, 9))
+        # PAZ in the pink identity, SUITE as a spaced mono sub-mark - the
+        # same lockup the design canvas uses on every artboard.
+        ctk.CTkLabel(left, text="PAZ", font=font(15, "bold", display=True),
+                     text_color=T.ACCENT).pack(side="left")
+        ctk.CTkLabel(left, text="SUITE", font=font(9, mono=True),
+                     text_color=T.FAINT).pack(side="left", padx=(7, 0), pady=(3, 0))
+
+        self.header_status = ctk.CTkLabel(bar, text="", font=font(10, mono=True),
+                                          text_color=T.FAINT)
+        self.header_status.pack(side="right", padx=(0, 18))
+        # Left unpacked: set_header_status() shows it once there is
+        # something to say. Packed here it would sit alone until the
+        # library finishes loading and read as a stray dot.
+        self.header_dot = ctk.CTkFrame(bar, width=7, height=7, corner_radius=4,
+                                       fg_color=T.OK)
+
+    def set_header_status(self, text: str, colour: str = T.OK) -> None:
+        """One live line in the identity bar - what the suite is doing
+        right now, readable from whichever tab you happen to be on. An
+        empty text hides the indicator entirely; a lone dot with nothing
+        beside it just looks like a rendering fault."""
+        self.header_status.configure(text=text)
+        if text:
+            self.header_dot.configure(fg_color=colour)
+            if not self.header_dot.winfo_ismapped():
+                self.header_dot.pack(side="right", padx=(0, 8))
+        else:
+            self.header_dot.pack_forget()
 
     # ── chrome (window title / taskbar icon) ────────────────────────────────
 
@@ -122,23 +151,53 @@ class PazApp:
 
     # Each tab has its own identity colour (pink for Convert, violet for
     # Library, teal for Vault, amber for Beat This) used throughout its own
-    # widgets; recolouring the shared tab strip to match whichever one is
-    # active makes the switcher read as "you are here" instead of one flat,
-    # generic control that looks the same no matter which tab is showing.
+    # widgets; the strip carries that colour as a dot per tab so every tab
+    # is identifiable at rest, and lights the active one so the switcher
+    # reads as "you are here" instead of one flat, generic control.
     _TAB_ACCENTS = {"Convert":   (T.ACCENT_DEEP, T.ACCENT),
                     "Library":   (T.ACCENT2_DEEP, T.ACCENT2),
                     "Vault":     (T.ACCENT3_DEEP, T.ACCENT3),
                     "Beat This": (T.ACCENT4_DEEP, T.ACCENT4)}
 
+    def _build_tabstrip(self) -> None:
+        strip = ctk.CTkFrame(self.root, fg_color=T.BG, corner_radius=0, height=44)
+        strip.pack(fill="x", side="top")
+        strip.pack_propagate(False)
+
+        inner = ctk.CTkFrame(strip, fg_color="transparent")
+        inner.pack(side="left", padx=(14, 0), pady=(6, 0))
+
+        self._tab_widgets: dict = {}
+        for name in TAB_NAMES:
+            deep, bright = self._TAB_ACCENTS[name]
+            holder = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=9,
+                                  height=32)
+            holder.pack(side="left", padx=(0, 4))
+            dot = ctk.CTkFrame(holder, width=8, height=8, corner_radius=2,
+                               fg_color=mix(bright, T.BG, 0.55))
+            dot.pack(side="left", padx=(13, 8), pady=12)
+            label = ctk.CTkLabel(holder, text=name, font=font(13, "bold"),
+                                 text_color=T.DIM)
+            label.pack(side="left", padx=(0, 14))
+            # Every piece of the tab is clickable, not just the text - a
+            # 32px target that only responds on the glyphs feels broken.
+            for widget in (holder, dot, label):
+                widget.bind("<Button-1>", lambda e, n=name: self._select_tab(n))
+                widget.configure(cursor="hand2")
+            self._tab_widgets[name] = (holder, dot, label)
+
+    def _select_tab(self, name: str) -> None:
+        self.tabview.set(name)
+        self._on_tab_changed()
+
     def _style_tabs(self) -> None:
         active = self.tabview.get()
-        deep, bright = self._TAB_ACCENTS.get(active, (T.ACCENT_DEEP, T.ACCENT))
-        self.tabview._segmented_button.configure(
-            selected_color=deep, selected_hover_color=deep)
-        buttons = self.tabview._segmented_button._buttons_dict
-        for name in TAB_NAMES:
-            if name in buttons:
-                buttons[name].configure(text_color=bright if name == active else T.DIM)
+        for name, (holder, dot, label) in self._tab_widgets.items():
+            deep, bright = self._TAB_ACCENTS[name]
+            selected = name == active
+            holder.configure(fg_color=deep if selected else "transparent")
+            dot.configure(fg_color=bright if selected else mix(bright, T.BG, 0.55))
+            label.configure(text_color=bright if selected else T.DIM)
 
     def _on_tab_changed(self) -> None:
         self.cfg.last_tab = self.tabview.get()
@@ -266,6 +325,9 @@ def main() -> None:
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
     root = ctk.CTk()
+    # Needs the root to exist (it asks Tk what's installed) but must run
+    # before any widget is built, since T.UI/T.MONO are read at construction.
+    resolve_fonts()
     root.configure(fg_color=T.BG)
     PazApp(root)
     root.mainloop()
