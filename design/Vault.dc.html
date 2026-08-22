@@ -1,0 +1,321 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; background: #07040C; }
+    * { box-sizing: border-box; }
+    a { color: #2EE6B0; text-decoration: none; }
+    a:hover { color: #7BF0CC; }
+    .grain {
+      position: absolute; inset: 0; pointer-events: none; z-index: 50; opacity: .22; mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+  </style>
+</helmet>
+
+<div style="position: relative; width: 1440px; height: 900px; overflow: hidden;
+            background:
+              radial-gradient(120% 70% at 6% -10%, #0B3A31 0%, rgba(11,58,49,0) 55%),
+              radial-gradient(90% 60% at 100% 0%, #1B1140 0%, rgba(27,17,64,0) 60%),
+              #07040C;
+            font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+            color: #F7EFFA; display: flex; flex-direction: column;">
+
+  <div class="grain"></div>
+
+  <div style="display: flex; align-items: center; gap: 14px; height: 46px; padding: 0 20px;
+              background: rgba(20,12,31,.72); border-bottom: 1px solid #1A1230; flex-shrink: 0;">
+    <div style="display: flex; align-items: center; gap: 9px;">
+      <div style="width: 17px; height: 17px; border-radius: 5px;
+                  background: linear-gradient(140deg, #2EE6B0, #4DD9E6); box-shadow: 0 0 20px -6px #2EE6B0;"></div>
+      <span style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 15px; font-weight: 800;
+                   letter-spacing: -.02em;">PAZ</span>
+      <span style="font-family: 'JetBrains Mono', monospace; font-size: 9px; color: #6E5C8C;
+                   letter-spacing: .14em; margin-top: 2px;">SUITE</span>
+    </div>
+    <div style="flex-grow: 1;"></div>
+    <div style="display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace;
+                font-size: 10px; color: #6E5C8C;">
+      <span style="width: 6px; height: 6px; border-radius: 50%; background: #2EE6B0; box-shadow: 0 0 8px #2EE6B0;"></span>
+      <span>3 projects · 123 clips spent</span>
+    </div>
+  </div>
+
+  <div style="display: flex; align-items: flex-end; gap: 4px; height: 48px; padding: 0 16px;
+              background: rgba(12,7,19,.6); border-bottom: 1px solid #1A1230; flex-shrink: 0;">
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #FF2E9A; opacity: .4;"></span>Convert
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #A46BFF; opacity: .4;"></span>Library
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 18px;
+                border-radius: 9px 9px 0 0; font-size: 13px; font-weight: 700; color: #7BF0CC;
+                background: linear-gradient(180deg, rgba(46,230,176,.18), rgba(46,230,176,.05));
+                border: 1px solid #1B5A48; border-bottom: none;
+                box-shadow: 0 -8px 26px -12px #2EE6B0, inset 0 1px 0 rgba(123,240,204,.22);">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #2EE6B0; box-shadow: 0 0 9px #2EE6B0;"></span>Vault
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #FFB03D; opacity: .4;"></span>Beat This
+    </div>
+  </div>
+
+  <div style="display: flex; flex-grow: 1; min-height: 0; gap: 16px; padding: 16px 20px;">
+
+    <!-- lookup -->
+    <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px;">
+
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839; padding: 13px 14px;">
+        <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">PASTE POST IDS OR FILENAMES</div>
+        <div style="margin-top: 9px; height: 96px; border-radius: 10px; background: #080510;
+                    border: 1px solid #1B5A48; padding: 11px 13px;
+                    box-shadow: inset 0 0 26px -16px #2EE6B0;
+                    font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.75; color: #C3B2DB;">
+          4482910<br>4391077<br>4512338.mp4  4467215<br>4501882 4519024<br>4288455.mp4  4390118<br><span style="color: #55446F;">4288401</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 10px;">
+          <div style="font-size: 11.5px; font-weight: 700; padding: 9px 18px; border-radius: 9px; color: #06120E;
+                      background: linear-gradient(135deg, #2EE6B0, #4DD9E6); box-shadow: 0 0 26px -8px #2EE6B0;">Look up</div>
+          <div style="font-size: 11.5px; padding: 9px 15px; border-radius: 9px; background: #1C1230;
+                      border: 1px solid #2B1E45; color: #C3B2DB;">Select all</div>
+          <div style="font-size: 11.5px; padding: 9px 15px; border-radius: 9px; background: #1C1230;
+                      border: 1px solid #2B1E45; color: #C3B2DB;">Clear</div>
+          <div style="flex-grow: 1;"></div>
+          <span style="font-size: 10.5px; color: #2EE6B0;">8 found · 1 not in library</span>
+        </div>
+      </div>
+
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839;
+                  flex-grow: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;">
+        <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px;
+                    padding: 10px 14px; background: #1C1230;
+                    font-size: 8.5px; font-weight: 700; letter-spacing: .14em; color: #55446F;">
+          <span></span><span>FILE</span><span>ARTIST</span><span>LENGTH</span><span>ALREADY USED IN</span>
+        </div>
+        <div style="padding: 5px 8px; display: flex; flex-direction: column; gap: 1px;">
+          <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px; align-items: center;
+                      padding: 8px 6px; border-radius: 7px; background: rgba(46,230,176,.10);
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="width: 13px; height: 13px; border-radius: 4px; background: #2EE6B0;
+                         display: flex; align-items: center; justify-content: center;">
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#06120E" stroke-width="4"><path d="M4 12l5 6L20 5"></path></svg>
+            </span>
+            <span style="color: #F7EFFA;">4482910.mp4</span>
+            <span style="color: #C3B2DB; font-family: 'Space Grotesk', sans-serif;">vex_marrow</span>
+            <span style="color: #8E7CAB;">0:14</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 10.5px; color: #4DA3FF;">Neon Nights v2</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px; align-items: center;
+                      padding: 8px 6px; border-radius: 7px; background: rgba(46,230,176,.10);
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="width: 13px; height: 13px; border-radius: 4px; background: #2EE6B0;
+                         display: flex; align-items: center; justify-content: center;">
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#06120E" stroke-width="4"><path d="M4 12l5 6L20 5"></path></svg>
+            </span>
+            <span style="color: #F7EFFA;">4391077.mp4</span>
+            <span style="color: #C3B2DB; font-family: 'Space Grotesk', sans-serif;">nocturne.fox</span>
+            <span style="color: #8E7CAB;">0:22</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 10.5px; color: #55446F;">—</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px; align-items: center;
+                      padding: 8px 6px; border-radius: 7px; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="width: 13px; height: 13px; border-radius: 4px; border: 1.5px solid #2B1E45;"></span>
+            <span style="color: #C3B2DB;">4512338.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">ArcticHowl</span>
+            <span style="color: #8E7CAB;">0:08</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 10.5px; color: #4DA3FF;">Neon Nights v2</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px; align-items: center;
+                      padding: 8px 6px; border-radius: 7px; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="width: 13px; height: 13px; border-radius: 4px; border: 1.5px solid #2B1E45;"></span>
+            <span style="color: #C3B2DB;">4467215.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">vex_marrow</span>
+            <span style="color: #8E7CAB;">0:31</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 10.5px; color: #FF6B8A;">Bassline Cut</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px; align-items: center;
+                      padding: 8px 6px; border-radius: 7px; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="width: 13px; height: 13px; border-radius: 4px; border: 1.5px solid #2B1E45;"></span>
+            <span style="color: #C3B2DB;">4501882.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">nocturne.fox</span>
+            <span style="color: #8E7CAB;">0:26</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 10.5px; color: #55446F;">—</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px; align-items: center;
+                      padding: 8px 6px; border-radius: 7px; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="width: 13px; height: 13px; border-radius: 4px; border: 1.5px solid #2B1E45;"></span>
+            <span style="color: #C3B2DB;">4519024.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">ArcticHowl</span>
+            <span style="color: #8E7CAB;">0:44</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 10.5px; color: #B8E64D;">Summer Reel</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px; align-items: center;
+                      padding: 8px 6px; border-radius: 7px; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="width: 13px; height: 13px; border-radius: 4px; border: 1.5px solid #2B1E45;"></span>
+            <span style="color: #C3B2DB;">4288455.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">sable_wilde</span>
+            <span style="color: #8E7CAB;">0:11</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 10.5px; color: #FF6B8A;">Bassline Cut</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 20px 1fr 110px 92px 150px; gap: 10px; align-items: center;
+                      padding: 8px 6px; border-radius: 7px; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="width: 13px; height: 13px; border-radius: 4px; border: 1.5px solid #2B1E45;"></span>
+            <span style="color: #C3B2DB;">4390118.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">kitsune_vt</span>
+            <span style="color: #8E7CAB;">0:17</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 10.5px; color: #55446F;">—</span>
+          </div>
+        </div>
+        <div style="flex-grow: 1;"></div>
+        <div style="display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-top: 1px solid #241839;">
+          <span style="font-size: 11px; color: #8E7CAB;">Project</span>
+          <div style="width: 210px; height: 34px; border-radius: 9px; background: #080510; border: 1px solid #1B5A48;
+                      display: flex; align-items: center; gap: 8px; padding: 0 11px;">
+            <span style="width: 3px; height: 15px; border-radius: 2px; background: #4DA3FF; box-shadow: 0 0 8px #4DA3FF;"></span>
+            <span style="font-size: 11.5px; color: #F7EFFA;">Neon Nights v2</span>
+          </div>
+          <div style="flex-grow: 1;"></div>
+          <div style="font-size: 11.5px; font-weight: 700; padding: 9px 18px; border-radius: 9px; color: #06120E;
+                      background: linear-gradient(135deg, #2EE6B0, #4DD9E6); box-shadow: 0 0 26px -8px #2EE6B0;">
+            Mark selected as used</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- projects -->
+    <div style="width: 430px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px;">
+
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839; padding: 13px 14px;">
+        <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">PROJECTS</div>
+        <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 10px;">
+          <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 9px;
+                      background: rgba(77,163,255,.10); border: 1px solid rgba(77,163,255,.35);">
+            <span style="width: 3px; height: 18px; border-radius: 2px; background: #4DA3FF; box-shadow: 0 0 10px #4DA3FF;"></span>
+            <span style="font-size: 12.5px; color: #F7EFFA; flex-grow: 1;">Neon Nights v2</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #9FCBFF;">64</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 9px;">
+            <span style="width: 3px; height: 18px; border-radius: 2px; background: #FF6B8A;"></span>
+            <span style="font-size: 12.5px; color: #8E7CAB; flex-grow: 1;">Bassline Cut</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #55446F;">38</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 9px;">
+            <span style="width: 3px; height: 18px; border-radius: 2px; background: #B8E64D;"></span>
+            <span style="font-size: 12.5px; color: #8E7CAB; flex-grow: 1;">Summer Reel</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #55446F;">21</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839; padding: 13px 14px;">
+        <div style="display: flex; align-items: center;">
+          <span style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 15px; font-weight: 700;
+                       letter-spacing: -.01em; color: #F7EFFA;">Neon Nights v2</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F; margin-left: 9px;">64 clips</span>
+          <div style="flex-grow: 1;"></div>
+          <span style="font-size: 10px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #A46BFF;">Open in Library →</span>
+        </div>
+
+        <div style="display: flex; gap: 6px; margin-top: 12px; overflow: hidden;">
+          <div style="width: 112px; height: 63px; border-radius: 7px; flex-shrink: 0; border: 1.5px solid #2EE6B0;
+                      background: radial-gradient(110% 90% at 22% 12%, #FF2E9A88, transparent 58%),
+                                  radial-gradient(95% 80% at 82% 34%, #A46BFF99, transparent 55%), #150D22;
+                      box-shadow: 0 0 18px -6px #2EE6B0;"></div>
+          <div style="width: 112px; height: 63px; border-radius: 7px; flex-shrink: 0; border: 1px solid #2B1E45;
+                      background: radial-gradient(110% 90% at 78% 16%, #4DD9E699, transparent 56%),
+                                  radial-gradient(95% 80% at 20% 40%, #A46BFF77, transparent 55%), #120B1D;"></div>
+          <div style="width: 112px; height: 63px; border-radius: 7px; flex-shrink: 0; border: 1px solid #2B1E45;
+                      background: radial-gradient(105% 85% at 30% 20%, #FFB03D88, transparent 55%),
+                                  radial-gradient(95% 80% at 80% 60%, #FF6B4D88, transparent 55%), #170E20;"></div>
+          <div style="width: 112px; height: 63px; border-radius: 7px; flex-shrink: 0; border: 1px solid #2B1E45;
+                      background: radial-gradient(110% 90% at 18% 80%, #2EE6B099, transparent 56%),
+                                  radial-gradient(90% 75% at 75% 25%, #4DD9E677, transparent 55%), #0F0C1C;"></div>
+        </div>
+
+        <div style="margin-top: 11px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8E7CAB;
+                    line-height: 1.7;">
+          4482910.mp4 · 3840×2160 · 0:14.2 · 78.4 MB<br>
+          <span style="color: #55446F;">vex_marrow · also used: Bassline Cut</span>
+        </div>
+      </div>
+
+      <div style="border-radius: 12px; background: rgba(20,12,31,.7); border: 1px solid #241839;
+                  flex-grow: 1; min-height: 0; overflow: hidden;">
+        <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 10px 14px;
+                    background: #1C1230; font-size: 8.5px; font-weight: 700; letter-spacing: .14em; color: #55446F;">
+          <span>FILE</span><span>ARTIST</span><span style="text-align: right;">LENGTH</span>
+        </div>
+        <div style="padding: 5px 8px;">
+          <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 7px 6px;
+                      border-radius: 7px; background: rgba(46,230,176,.09);
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #F7EFFA;">4482910.mp4</span>
+            <span style="color: #C3B2DB; font-family: 'Space Grotesk', sans-serif;">vex_marrow</span>
+            <span style="text-align: right; color: #8E7CAB;">0:14</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 7px 6px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">4512338.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">ArcticHowl</span>
+            <span style="text-align: right; color: #8E7CAB;">0:08</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 7px 6px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">4390562.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">kitsune_vt</span>
+            <span style="text-align: right; color: #8E7CAB;">0:19</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 7px 6px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">4288455.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">sable_wilde</span>
+            <span style="text-align: right; color: #8E7CAB;">0:27</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 7px 6px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">4501882.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">nocturne.fox</span>
+            <span style="text-align: right; color: #8E7CAB;">0:26</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 7px 6px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">4519024.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">ArcticHowl</span>
+            <span style="text-align: right; color: #8E7CAB;">0:44</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 7px 6px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">4467990.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">vex_marrow</span>
+            <span style="text-align: right; color: #8E7CAB;">0:35</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 108px 62px; gap: 10px; padding: 7px 6px;
+                      font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: #C3B2DB;">4390118.mp4</span>
+            <span style="color: #8E7CAB; font-family: 'Space Grotesk', sans-serif;">kitsune_vt</span>
+            <span style="text-align: right; color: #8E7CAB;">0:17</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview": {"width": 1440, "height": 900}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>

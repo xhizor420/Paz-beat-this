@@ -1,0 +1,512 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; background: #07040C; }
+    * { box-sizing: border-box; }
+    a { color: #FF6BB5; text-decoration: none; }
+    a:hover { color: #FF9ACE; }
+    .grain {
+      position: absolute; inset: 0; pointer-events: none; z-index: 50; opacity: .22;
+      mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    .rule { height: 1px; background: linear-gradient(90deg, #2B1E45, rgba(43,30,69,0)); border: 0; margin: 0; }
+  </style>
+</helmet>
+
+<div style="--accent: {{accent}}; --ring: {{glowRing}}; --soft: {{glowSoft}};
+            position: relative; width: 1440px; height: 900px; overflow: hidden;
+            background:
+              radial-gradient(120% 70% at 8% -10%, #2A0F35 0%, rgba(42,15,53,0) 55%),
+              radial-gradient(90% 60% at 100% 0%, #1B1140 0%, rgba(27,17,64,0) 60%),
+              #07040C;
+            font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+            color: #F7EFFA; display: flex; flex-direction: column;">
+
+  <div class="grain"></div>
+
+  <!-- ── identity bar ─────────────────────────────────────────────── -->
+  <div style="display: flex; align-items: center; gap: 14px; height: 46px;
+              padding: 0 20px; background: rgba(20,12,31,.72);
+              border-bottom: 1px solid #1A1230; flex-shrink: 0;">
+    <div style="display: flex; align-items: center; gap: 9px;">
+      <div style="width: 17px; height: 17px; border-radius: 5px;
+                  background: linear-gradient(140deg, var(--accent, #FF2E9A), #A46BFF);
+                  box-shadow: var(--ring, 0 0 20px -6px #FF2E9A);"></div>
+      <span style="font-family: 'Bricolage Grotesque', 'Space Grotesk', sans-serif;
+                   font-size: 15px; font-weight: 800; letter-spacing: -.02em; color: #F7EFFA;">PAZ</span>
+      <span style="font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+                   font-size: 9px; color: #6E5C8C; letter-spacing: .14em; margin-top: 2px;">SUITE</span>
+    </div>
+    <div style="flex-grow: 1;"></div>
+    <div style="display: flex; align-items: center; gap: 8px;
+                font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6E5C8C;">
+      <span style="width: 6px; height: 6px; border-radius: 50%; background: #2EE6B0;
+                   box-shadow: 0 0 8px #2EE6B0;"></span>
+      <span>14,208 clips indexed</span>
+    </div>
+  </div>
+
+  <!-- ── tab strip ────────────────────────────────────────────────── -->
+  <div style="display: flex; align-items: flex-end; gap: 4px; height: 48px;
+              padding: 0 16px; background: rgba(12,7,19,.6);
+              border-bottom: 1px solid #1A1230; flex-shrink: 0;">
+
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #FF2E9A; opacity: .4;"></span>Convert
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 18px;
+                border-radius: 9px 9px 0 0; font-size: 13px; font-weight: 700; color: #C8A9FF;
+                background: linear-gradient(180deg, rgba(164,107,255,.20), rgba(164,107,255,.06));
+                border: 1px solid #3A2566; border-bottom: none;
+                box-shadow: 0 -8px 26px -12px #A46BFF, inset 0 1px 0 rgba(200,169,255,.22);">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #A46BFF;
+                   box-shadow: 0 0 9px #A46BFF;"></span>Library
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #2EE6B0; opacity: .4;"></span>Vault
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+                border-radius: 9px 9px 0 0; color: #7E6B9C; font-size: 13px; font-weight: 600;">
+      <span style="width: 7px; height: 7px; border-radius: 2px; background: #FFB03D; opacity: .4;"></span>Beat This
+    </div>
+  </div>
+
+  <!-- ── body ─────────────────────────────────────────────────────── -->
+  <div style="display: flex; flex-grow: 1; min-height: 0;">
+
+    <!-- sidebar -->
+    <div style="width: 258px; flex-shrink: 0; border-right: 1px solid #1A1230;
+                background: rgba(12,7,19,.5); padding: 16px 14px;
+                display: flex; flex-direction: column; gap: 16px; overflow: hidden;">
+
+      <div style="display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 11px;
+                  border-radius: 9px; background: #080510; border: 1px solid #2B1E45;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6E5C8C" stroke-width="2.4">
+          <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>
+        </svg>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C8A9FF;">species:wolf</span>
+        <span style="width: 1.5px; height: 13px; background: #A46BFF; margin-left: 1px;"></span>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 7px;">
+        <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">ARTISTS</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">vex_marrow <b style="color:#55446F; font-weight:500;">412</b></span>
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">nocturne.fox <b style="color:#55446F; font-weight:500;">288</b></span>
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">ArcticHowl <b style="color:#55446F; font-weight:500;">173</b></span>
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">sable_wilde <b style="color:#55446F; font-weight:500;">96</b></span>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 7px;">
+        <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">SPECIES</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; color: #0C0713; font-weight: 600;
+                       background: linear-gradient(135deg, #A46BFF, #C8A9FF);
+                       box-shadow: 0 0 16px -5px #A46BFF;">wolf <b style="opacity:.6; font-weight:600;">1.4k</b></span>
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">dragon <b style="color:#55446F; font-weight:500;">980</b></span>
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">feline <b style="color:#55446F; font-weight:500;">742</b></span>
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">protogen <b style="color:#55446F; font-weight:500;">331</b></span>
+          <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230;
+                       border: 1px solid #2B1E45; color: #C3B2DB;">sergal <b style="color:#55446F; font-weight:500;">204</b></span>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 7px;">
+        <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">RATING</div>
+        <div style="display: flex; gap: 6px;">
+          <span style="flex-grow: 1; text-align: center; font-size: 11px; font-weight: 700; padding: 6px 0;
+                       border-radius: 7px; background: rgba(255,92,110,.14); border: 1px solid #5A2030; color: #FF5C6E;">E</span>
+          <span style="flex-grow: 1; text-align: center; font-size: 11px; font-weight: 700; padding: 6px 0;
+                       border-radius: 7px; background: #140C1F; border: 1px solid #2B1E45; color: #FFC24D;">Q</span>
+          <span style="flex-grow: 1; text-align: center; font-size: 11px; font-weight: 700; padding: 6px 0;
+                       border-radius: 7px; background: #140C1F; border: 1px solid #2B1E45; color: #53E0AE;">S</span>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 7px;">
+        <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F;">PROJECTS</div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 7px; background: #140C1F;">
+            <span style="width: 3px; height: 15px; border-radius: 2px; background: #4DA3FF; box-shadow: 0 0 8px #4DA3FF;"></span>
+            <span style="font-size: 11.5px; color: #C3B2DB; flex-grow: 1;">Neon Nights v2</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">64</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 7px;">
+            <span style="width: 3px; height: 15px; border-radius: 2px; background: #FF6B8A;"></span>
+            <span style="font-size: 11.5px; color: #8E7CAB; flex-grow: 1;">Bassline Cut</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">38</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 7px;">
+            <span style="width: 3px; height: 15px; border-radius: 2px; background: #B8E64D;"></span>
+            <span style="font-size: 11.5px; color: #8E7CAB; flex-grow: 1;">Summer Reel</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">21</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- gallery -->
+    <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 14px 20px 0;">
+
+      <div style="display: flex; align-items: center; gap: 8px; height: 40px; flex-shrink: 0;">
+        <span style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 19px; font-weight: 700;
+                     letter-spacing: -.02em;">Library</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #6E5C8C; margin-top: 3px;">1,418 results</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 11px; padding: 5px 11px; border-radius: 7px; background: #1C1230;
+                     border: 1px solid #2B1E45; color: #C3B2DB;">Newest</span>
+        <span style="font-size: 11px; padding: 5px 11px; border-radius: 7px; background: #1C1230;
+                     border: 1px solid #2B1E45; color: #C3B2DB;">Random</span>
+        <span style="font-size: 11px; font-weight: 600; padding: 5px 11px; border-radius: 7px; color: #0C0713;
+                     background: linear-gradient(135deg, var(--accent, #FF2E9A), #FF6BB5);
+                     box-shadow: var(--soft, 0 0 30px -12px #FF2E9A);">4K only</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding-top: 4px;">
+
+        <!-- selected card -->
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F;
+                    border: 1.5px solid #A46BFF; box-shadow: 0 0 34px -10px #A46BFF;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(110% 90% at 22% 12%, #FF2E9A88, transparent 58%),
+                                  radial-gradient(95% 80% at 82% 34%, #A46BFF99, transparent 55%),
+                                  radial-gradient(90% 75% at 48% 96%, #2EE6B055, transparent 58%), #150D22;">
+            <span style="position: absolute; top: 7px; left: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #53E0AE;">4K·60</span>
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #FF5C6E; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">E</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">0:14</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #F7EFFA;">4482910.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #A46BFF;">vex_marrow</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#2EE6B0"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #2EE6B0;">2.4k</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F; border: 1px solid #241839;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(110% 90% at 78% 16%, #4DD9E699, transparent 56%),
+                                  radial-gradient(95% 80% at 20% 40%, #A46BFF77, transparent 55%),
+                                  radial-gradient(85% 70% at 55% 95%, #FF2E9A44, transparent 58%), #120B1D;">
+            <span style="position: absolute; top: 7px; left: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #53E0AE;">4K·60</span>
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #FFC24D; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">Q</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">0:22</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #E4D9EE;">4391077.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #8E7CAB;">nocturne.fox</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#55446F"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">1.1k</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- carries a project mark -->
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F; border: 1.5px solid #4DA3FF;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(105% 85% at 30% 20%, #FFB03D88, transparent 55%),
+                                  radial-gradient(95% 80% at 80% 60%, #FF6B4D88, transparent 55%),
+                                  radial-gradient(90% 70% at 50% 95%, #A46BFF44, transparent 60%), #170E20;">
+            <span style="position: absolute; top: 7px; left: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.78); color: #4DA3FF;">USED · Neon Nights v2</span>
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #FF5C6E; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">E</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">0:08</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #E4D9EE;">4512338.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #8E7CAB;">ArcticHowl</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#55446F"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">874</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F; border: 1px solid #241839;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(110% 90% at 18% 80%, #2EE6B099, transparent 56%),
+                                  radial-gradient(90% 75% at 75% 25%, #4DD9E677, transparent 55%),
+                                  radial-gradient(85% 70% at 50% 50%, #A46BFF33, transparent 60%), #0F0C1C;">
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #53E0AE; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">S</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">1:02</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #E4D9EE;">4288401.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #8E7CAB;">sable_wilde</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#55446F"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">642</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F; border: 1px solid #241839;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(115% 95% at 60% 10%, #FF2E9A99, transparent 55%),
+                                  radial-gradient(90% 80% at 15% 70%, #FF6B8A77, transparent 55%),
+                                  radial-gradient(80% 70% at 90% 90%, #FFB03D44, transparent 58%), #1A0C1B;">
+            <span style="position: absolute; top: 7px; left: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #53E0AE;">4K·60</span>
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #FF5C6E; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">E</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">0:31</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #E4D9EE;">4467215.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #8E7CAB;">vex_marrow</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#55446F"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">1.9k</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F; border: 1px solid #241839;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(105% 90% at 45% 25%, #B8E64D77, transparent 55%),
+                                  radial-gradient(95% 80% at 85% 75%, #2EE6B088, transparent 55%),
+                                  radial-gradient(80% 70% at 10% 90%, #4DD9E644, transparent 60%), #0C1018;">
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #FFC24D; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">Q</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">0:19</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #E4D9EE;">4390562.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #8E7CAB;">kitsune_vt</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#55446F"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">508</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F; border: 1px solid #241839;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(110% 90% at 35% 18%, #A46BFF99, transparent 56%),
+                                  radial-gradient(90% 78% at 85% 55%, #FF2E9A66, transparent 55%),
+                                  radial-gradient(80% 70% at 15% 92%, #4DD9E644, transparent 60%), #130B21;">
+            <span style="position: absolute; top: 7px; left: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #53E0AE;">4K·60</span>
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #FF5C6E; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">E</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">0:26</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #E4D9EE;">4501882.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #8E7CAB;">nocturne.fox</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#55446F"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">1.3k</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F; border: 1.5px solid #FF6B8A;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(112% 90% at 70% 22%, #FF6B8A99, transparent 56%),
+                                  radial-gradient(92% 78% at 22% 62%, #FFB03D77, transparent 55%),
+                                  radial-gradient(80% 70% at 55% 95%, #FF2E9A44, transparent 60%), #1B0D19;">
+            <span style="position: absolute; top: 7px; left: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.78); color: #FF6B8A;">USED · Bassline Cut</span>
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #FFC24D; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">Q</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">0:11</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #E4D9EE;">4288455.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #8E7CAB;">sable_wilde</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#55446F"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">2.1k</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-radius: 13px; overflow: hidden; background: #140C1F; border: 1px solid #241839;">
+          <div style="height: 132px; position: relative;
+                      background: radial-gradient(108% 88% at 25% 30%, #4DD9E688, transparent 56%),
+                                  radial-gradient(95% 80% at 78% 20%, #A46BFF66, transparent 55%),
+                                  radial-gradient(85% 72% at 60% 92%, #B8E64D44, transparent 60%), #0D0E1B;">
+            <span style="position: absolute; top: 7px; left: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #53E0AE;">4K·60</span>
+            <span style="position: absolute; top: 7px; right: 7px; width: 15px; height: 15px; border-radius: 50%;
+                         background: rgba(7,4,12,.72); color: #53E0AE; font-size: 9px; font-weight: 700;
+                         display: flex; align-items: center; justify-content: center;">S</span>
+            <span style="position: absolute; bottom: 7px; right: 7px; font-family: 'JetBrains Mono', monospace;
+                         font-size: 8.5px; padding: 2px 6px; border-radius: 4px;
+                         background: rgba(7,4,12,.72); color: #C3B2DB;">0:44</span>
+          </div>
+          <div style="padding: 9px 10px 10px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #E4D9EE;">4519024.mp4</div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 5px;">
+              <span style="font-size: 10.5px; color: #8E7CAB;">ArcticHowl</span>
+              <div style="flex-grow: 1;"></div>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="#55446F"><path d="M12 4l9 15H3z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #55446F;">396</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- inspector -->
+    <div style="width: 380px; flex-shrink: 0; border-left: 1px solid #1A1230;
+                background: rgba(8,5,16,.66); padding: 14px; display: flex; flex-direction: column; gap: 12px;">
+
+      <div style="border-radius: 12px; overflow: hidden; border: 1px solid #2B1E45; position: relative;
+                  height: 200px;
+                  background: radial-gradient(110% 90% at 22% 12%, #FF2E9A88, transparent 58%),
+                              radial-gradient(95% 80% at 82% 34%, #A46BFF99, transparent 55%),
+                              radial-gradient(90% 75% at 48% 96%, #2EE6B055, transparent 58%), #150D22;
+                  box-shadow: inset 0 1px 0 rgba(200,169,255,.14);">
+        <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+                    width: 48px; height: 48px; border-radius: 50%; background: rgba(7,4,12,.55);
+                    border: 1.5px solid rgba(247,239,250,.85);
+                    display: flex; align-items: center; justify-content: center;
+                    box-shadow: var(--soft, 0 0 40px -14px #FF2E9A);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#F7EFFA"><path d="M8 5l12 7-12 7z"></path></svg>
+        </div>
+        <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: #1A1230;">
+          <div style="width: 38%; height: 100%; background: linear-gradient(90deg, #A46BFF, var(--accent, #FF2E9A));
+                      box-shadow: 0 0 10px var(--accent, #FF2E9A);"></div>
+        </div>
+      </div>
+
+      <div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #F7EFFA;">4482910.mp4</div>
+        <div style="display: flex; gap: 10px; margin-top: 6px; font-family: 'JetBrains Mono', monospace;
+                    font-size: 10px; color: #6E5C8C;">
+          <span>3840×2160</span><span style="color:#2EE6B0;">60 fps</span><span>0:14</span><span>78.4 MB</span>
+        </div>
+      </div>
+
+      <hr class="rule">
+
+      <div style="display: flex; flex-direction: column; gap: 9px;">
+        <div>
+          <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F; margin-bottom: 6px;">ARTIST</div>
+          <span style="font-size: 11px; padding: 4px 10px; border-radius: 6px; color: #0C0713; font-weight: 600;
+                       background: linear-gradient(135deg, var(--accent, #FF2E9A), #FF6BB5);">vex_marrow</span>
+        </div>
+        <div>
+          <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F; margin-bottom: 6px;">SPECIES</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+            <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230; border: 1px solid #2B1E45; color: #C3B2DB;">wolf</span>
+            <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230; border: 1px solid #2B1E45; color: #C3B2DB;">canine</span>
+            <span style="font-size: 11px; padding: 4px 9px; border-radius: 6px; background: #1C1230; border: 1px solid #2B1E45; color: #C3B2DB;">anthro</span>
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 9px; font-weight: 700; letter-spacing: .16em; color: #55446F; margin-bottom: 6px;">USED IN</div>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px;
+                      background: rgba(77,163,255,.10); border: 1px solid rgba(77,163,255,.35);">
+            <span style="width: 3px; height: 14px; border-radius: 2px; background: #4DA3FF; box-shadow: 0 0 8px #4DA3FF;"></span>
+            <span style="font-size: 11.5px; color: #9FCBFF;">Neon Nights v2</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex-grow: 1;"></div>
+
+      <div style="display: flex; gap: 8px;">
+        <div style="flex-grow: 1; text-align: center; font-size: 11.5px; font-weight: 700; padding: 9px 0;
+                    border-radius: 9px; color: #0C0713;
+                    background: linear-gradient(135deg, var(--accent, #FF2E9A), #FF6BB5);
+                    box-shadow: var(--ring, 0 0 24px -8px #FF2E9A);">Play 4K</div>
+        <div style="flex-grow: 1; text-align: center; font-size: 11.5px; font-weight: 600; padding: 9px 0;
+                    border-radius: 9px; background: #1C1230; border: 1px solid #2B1E45; color: #C3B2DB;">Reveal</div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{
+  "accent": {"editor": "color", "default": "#FF2E9A", "options": ["#FF2E9A", "#A46BFF", "#2EE6B0", "#FFB03D"], "section": "Theme"},
+  "glow":   {"editor": "range", "default": 100, "min": 0, "max": 160, "step": 10, "unit": "%", "section": "Theme"},
+  "$preview": {"width": 1440, "height": 900}
+}'>
+class Component extends DCLogic {
+  renderVals() {
+    const accent = this.props.accent ?? '#FF2E9A';
+    const g = (this.props.glow ?? 100) / 100;
+    return {
+      accent,
+      glowRing: `0 0 ${Math.round(30 * g)}px -7px ${accent}`,
+      glowSoft: `0 0 ${Math.round(60 * g)}px -16px ${accent}`,
+    };
+  }
+}
+</script>
+</body>
+</html>
