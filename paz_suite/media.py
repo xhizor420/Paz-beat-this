@@ -22,6 +22,21 @@ from .config import THUMB_DIR
 from .files import NO_WINDOW
 
 
+def _split_mjpeg(blob: bytes) -> list:
+    """Cut an MJPEG pipe into individual JPEGs on the SOI/EOI markers.
+    ffmpeg writes them back to back with no container, so the markers are
+    the only frame boundary there is."""
+    frames = []
+    start = blob.find(b"\xff\xd8")
+    while start != -1:
+        end = blob.find(b"\xff\xd9", start + 2)
+        if end == -1:
+            break
+        frames.append(blob[start:end + 2])
+        start = blob.find(b"\xff\xd8", end + 2)
+    return frames
+
+
 # ─────────────────────────────────────────────────────────────────────────
 #  Probing
 # ─────────────────────────────────────────────────────────────────────────
@@ -314,6 +329,45 @@ class ThumbCache:
             stamp = "0"
         raw = f"{os.path.normcase(path)}|{stamp}|{pos:.2f}|{width}"
         return hashlib.md5(raw.encode("utf-8")).hexdigest() + ".jpg"
+
+    # ── hover reel ───────────────────────────────────────────────────────
+    #
+    # A run of CONSECUTIVE frames, decoded in one pass, for playing a clip
+    # inside a gallery tile. The storyboard above is the wrong tool for
+    # that: its cells are seconds apart, so flipping them is a slideshow no
+    # matter how fast you flip, and asking it for a frame it hasn't built
+    # yet costs an ffmpeg seek *per frame* - which is what made the tile
+    # preview stutter. One decode, real consecutive frames, play from
+    # memory: that is what makes it look like video instead of a flipbook.
+
+    REEL_FPS = 15
+    REEL_SECONDS = 6.0
+
+    def preview_reel(self, path: str, duration: float, width: int,
+                      fps: int = REEL_FPS, seconds: float = REEL_SECONDS) -> list:
+        """JPEG bytes for a contiguous run of frames, ready to flip at
+        `fps`. Starts a little way in - the first moments of a clip are
+        often a fade or a title card, which is a poor thing to preview."""
+        if not path or duration <= 0 or not os.path.exists(path):
+            return []
+        start = duration * 0.08 if duration > 6 else 0.0
+        span = min(seconds, max(duration - start, 0.5))
+        cmd = [
+            "ffmpeg", "-nostdin", "-v", "error",
+            "-ss", f"{start:.3f}", "-i", path, "-t", f"{span:.3f}",
+            "-an", "-sn",
+            "-vf", f"fps={fps},scale={int(width)}:-2:flags=fast_bilinear",
+            "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "6", "-",
+        ]
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, timeout=25,
+                                    creationflags=NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if result.returncode != 0 or not result.stdout:
+            return []
+        return _split_mjpeg(result.stdout)
 
     def frame(self, path: str, pos: float, width: int = 640,
               fast: bool = False) -> bytes | None:
