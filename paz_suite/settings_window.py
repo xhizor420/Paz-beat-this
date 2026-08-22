@@ -25,7 +25,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.app = app
         self.cfg: AppConfig = app.cfg
         self.title("Settings")
-        self.geometry("680x620")
+        self.geometry("820x720")
         self.configure(fg_color=T.BG)
         self.transient(parent)
         self.after(120, self.lift)
@@ -64,25 +64,47 @@ class SettingsWindow(ctk.CTkToplevel):
         return inner
 
     # ── shared field builders ────────────────────────────────────────────
+    #
+    # Every row in every tab goes through one of these, so the label column,
+    # the control column and the explanatory text all line up down the whole
+    # dialog instead of each section drifting a few pixels.
+
+    LABEL_W = 178          # widest label is "Gallery tile width (target)"
+    HINT_W = 460           # wraps inside the panel rather than off its edge
+
+    def _label(self, parent, text: str, row: int):
+        return ctk.CTkLabel(parent, text=text, font=font(11), text_color=T.DIM,
+                            anchor="w", width=self.LABEL_W, justify="left"
+                            ).grid(row=row, column=0, sticky="w", padx=(4, 10),
+                                   pady=4)
 
     def _section(self, parent, text: str, row: int) -> None:
-        ctk.CTkLabel(parent, text=text.upper(), font=font(9, "bold"),
-                     text_color=T.FAINT).grid(row=row, column=0, columnspan=3,
-                                              sticky="w", padx=4, pady=(12, 4))
+        """A caption with a hairline under it. Bare captions left the tabs
+        reading as one long undifferentiated column of fields."""
+        head = ctk.CTkFrame(parent, fg_color="transparent")
+        head.grid(row=row, column=0, columnspan=3, sticky="ew",
+                  padx=4, pady=(18 if row else 4, 8))
+        head.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(head, text=text.upper(), font=font(10, "bold"),
+                     text_color=T.ACCENT2).grid(row=0, column=0, sticky="w")
+        # Plain tk.Frame, not CTkFrame: CTk draws a frame as a rounded
+        # rectangle on its own canvas and a 1px-tall one comes out empty.
+        rule = tk.Frame(head, height=1, bg=T.LINE, bd=0, highlightthickness=0)
+        rule.grid(row=0, column=1, sticky="ew", padx=(12, 0), pady=(3, 0))
 
     def _hint(self, parent, row: int, text: str, column: int = 1, span: int = 2) -> None:
         ctk.CTkLabel(parent, text=text, font=font(10), text_color=T.FAINT,
-                     wraplength=440, justify="left"
-                     ).grid(row=row, column=column, columnspan=span, sticky="w", pady=(0, 4))
+                     wraplength=self.HINT_W, justify="left", anchor="w"
+                     ).grid(row=row, column=column, columnspan=span, sticky="w",
+                            pady=(0, 8))
 
     def _path_row(self, parent, row: int, key: str, label: str) -> None:
-        ctk.CTkLabel(parent, text=label, font=font(11), text_color=T.DIM,
-                     anchor="w", width=110).grid(row=row, column=0, sticky="w", padx=4, pady=3)
-        entry = ctk.CTkEntry(parent, height=30, font=font(11, mono=True),
+        self._label(parent, label, row)
+        entry = ctk.CTkEntry(parent, height=32, font=font(11, mono=True),
                              fg_color=T.INPUT, border_color=T.LINE, border_width=1,
                              text_color=T.TEXT)
         entry.insert(0, getattr(self.cfg, key))
-        entry.grid(row=row, column=1, sticky="ew", pady=3)
+        entry.grid(row=row, column=1, sticky="ew", pady=4)
         ctk.CTkButton(parent, text="Browse", width=70, height=30, corner_radius=6,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=lambda e=entry: self._browse(e)
@@ -97,43 +119,41 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def _entry(self, parent, row: int, key: str, label: str, secret: bool = False,
                width: int | None = None) -> None:
-        ctk.CTkLabel(parent, text=label, font=font(11), text_color=T.DIM,
-                     anchor="w", width=110).grid(row=row, column=0, sticky="w", padx=4, pady=3)
+        self._label(parent, label, row)
         kw = {"width": width} if width else {}
-        entry = ctk.CTkEntry(parent, height=30, font=font(11, mono=True),
+        entry = ctk.CTkEntry(parent, height=32, font=font(11, mono=True),
                              fg_color=T.INPUT, border_color=T.LINE, border_width=1,
                              text_color=T.TEXT, show="•" if secret else "", **kw)
         entry.insert(0, str(getattr(self.cfg, key)))
-        entry.grid(row=row, column=1, sticky="ew" if not width else "w", padx=(0, 4), pady=3)
+        entry.grid(row=row, column=1, sticky="ew" if not width else "w",
+                   padx=(0, 4), pady=4)
         self.fields[key] = entry
 
     def _switch(self, parent, row: int, key: str, label: str) -> None:
         widget = ctk.CTkSwitch(parent, text=label, font=font(11), text_color=T.DIM,
                                progress_color=T.ACCENT, button_color=T.TEXT)
         widget.select() if getattr(self.cfg, key) else widget.deselect()
-        widget.grid(row=row, column=1, sticky="w", pady=4)
+        widget.grid(row=row, column=0, columnspan=3, sticky="w", padx=4, pady=6)
         self.fields[key] = widget
 
     def _number(self, parent, row: int, key: str, label: str, low: float, high: float) -> None:
-        ctk.CTkLabel(parent, text=label, font=font(11), text_color=T.DIM,
-                     anchor="w", width=110).grid(row=row, column=0, sticky="w", padx=4, pady=3)
-        entry = ctk.CTkEntry(parent, width=90, height=30, font=font(11, mono=True),
+        self._label(parent, label, row)
+        entry = ctk.CTkEntry(parent, width=100, height=32, font=font(11, mono=True),
                              fg_color=T.INPUT, border_color=T.LINE, border_width=1,
                              text_color=T.TEXT)
         entry.insert(0, str(getattr(self.cfg, key)))
-        entry.grid(row=row, column=1, sticky="w", pady=3)
+        entry.grid(row=row, column=1, sticky="w", pady=4)
         self.fields[key] = (entry, low, high)
 
     def _choice(self, parent, row: int, key: str, label: str, values: list) -> None:
-        ctk.CTkLabel(parent, text=label, font=font(11), text_color=T.DIM,
-                     anchor="w", width=110).grid(row=row, column=0, sticky="w", padx=4, pady=3)
+        self._label(parent, label, row)
         menu = ctk.CTkOptionMenu(
-            parent, values=values, width=140, height=30, font=font(11),
+            parent, values=values, width=150, height=32, font=font(11),
             fg_color=T.INPUT, button_color=T.LINE, button_hover_color=T.BTN_HOV,
             dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT)
         menu.set(str(getattr(self.cfg, key)))
-        menu.grid(row=row, column=1, sticky="w", pady=3)
+        menu.grid(row=row, column=1, sticky="w", pady=4)
         self.fields[key] = menu
 
     def _build_footer(self):
@@ -268,19 +288,20 @@ class SettingsWindow(ctk.CTkToplevel):
         tab.grid_columnconfigure(1, weight=1)
         self._section(tab, "Indexing scope", 0)
         summary = self.app.library._folders_summary() if self.app.library else ""
-        ctk.CTkLabel(tab, text=summary, font=font(11), text_color=T.ACCENT2,
-                     anchor="w", wraplength=440, justify="left"
-                     ).grid(row=1, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 4))
-        ctk.CTkButton(tab, text="Change folders…", width=150, height=30, corner_radius=7,
+        self._label(tab, "Indexed folders", 1)
+        ctk.CTkLabel(tab, text=summary or "None selected", font=font(11),
+                     text_color=T.ACCENT2 if summary else T.FAINT, anchor="w",
+                     wraplength=self.HINT_W, justify="left"
+                     ).grid(row=1, column=1, columnspan=2, sticky="w", pady=4)
+        ctk.CTkButton(tab, text="Change folders…", width=150, height=32, corner_radius=7,
                       font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=self._change_library_folders
-                      ).grid(row=2, column=1, sticky="w", pady=(0, 8))
+                      ).grid(row=2, column=1, sticky="w", pady=(2, 4))
 
         self._section(tab, "Display", 3)
-        ctk.CTkLabel(tab, text="Thumbnail fit", font=font(11), text_color=T.DIM,
-                     anchor="w", width=150).grid(row=4, column=0, sticky="w", padx=10, pady=4)
+        self._label(tab, "Thumbnail fit", 4)
         fit = ctk.CTkSegmentedButton(
-            tab, values=["contain", "cover"], font=font(10), height=28, corner_radius=7,
+            tab, values=["contain", "cover"], font=font(11), height=32, corner_radius=7,
             fg_color=T.INPUT, selected_color=T.ACCENT_DEEP,
             selected_hover_color=T.ACCENT_DEEP, unselected_color=T.INPUT,
             unselected_hover_color=T.BTN_HOV, text_color=T.DIM, border_width=1)
@@ -359,6 +380,46 @@ class SettingsWindow(ctk.CTkToplevel):
         self._section(tab, "Interface", 10)
         self._switch(tab, 11, "hover_peek", "Hover peek on the Convert queue")
         self._number(tab, 12, "filmstrip_frames", "Filmstrip frames", 4, 16)
+
+        # Also reachable by right-clicking the strip itself, but that is not
+        # a thing anyone discovers on their own.
+        self._label(tab, "Header picture", 13)
+        self.banner_label = ctk.CTkLabel(
+            tab, text=self._banner_summary(), font=font(11, mono=True),
+            text_color=T.ACCENT2 if self.cfg.banner_path else T.FAINT,
+            anchor="w", wraplength=self.HINT_W, justify="left")
+        self.banner_label.grid(row=13, column=1, columnspan=2, sticky="w", pady=4)
+        banner_row = ctk.CTkFrame(tab, fg_color="transparent")
+        banner_row.grid(row=14, column=1, columnspan=2, sticky="w", pady=(2, 4))
+        ctk.CTkButton(banner_row, text="Choose picture…", width=140, height=32,
+                      corner_radius=7, font=font(11), fg_color=T.BTN,
+                      hover_color=T.BTN_HOV, text_color=T.DIM,
+                      command=self._pick_banner).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(banner_row, text="Clear", width=70, height=32,
+                      corner_radius=7, font=font(11), fg_color=T.BTN,
+                      hover_color=T.BTN_HOV, text_color=T.DIM,
+                      command=self._clear_banner).pack(side="left")
+        self._hint(tab, 15, "Your own picture across the top strip, behind the "
+                            "PAZ mark. Wide pictures suit it best - it is a "
+                            "76px band, cropped to fill from just above centre.")
+
+    def _banner_summary(self) -> str:
+        path = self.cfg.banner_path
+        return os.path.basename(path) if path else "None - using the default sweep"
+
+    def _pick_banner(self) -> None:
+        self.app.pick_banner()
+        self._refresh_banner()
+
+    def _clear_banner(self) -> None:
+        self.app.clear_banner()
+        self._refresh_banner()
+
+    def _refresh_banner(self) -> None:
+        self.banner_label.configure(
+            text=self._banner_summary(),
+            text_color=T.ACCENT2 if self.cfg.banner_path else T.FAINT)
+        self.lift()
 
     # ── save ──────────────────────────────────────────────────────────────
 
