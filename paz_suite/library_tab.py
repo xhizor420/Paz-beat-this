@@ -1330,8 +1330,20 @@ class LibraryTab(ctk.CTkFrame):
     # to a tile you just left starts instantly instead of decoding again.
 
     PREVIEW_DWELL_MS = 320     # rest this long before a tile starts
-    PREVIEW_FPS      = 15
     REEL_CACHE       = 6       # clips worth of decoded frames to keep
+    # Play at the clip's OWN frame rate rather than a number picked here,
+    # so a preview runs at the speed the footage was shot at - that is what
+    # makes it read as the video playing rather than an animation of it.
+    # Clamped at both ends: below ~12 nothing looks like motion, and above
+    # 30 the decode cost doubles for smoothness nobody can see in a 224px
+    # tile (a 60fps 4K clip would otherwise mean 240 frames per preview).
+    PREVIEW_FPS_MIN  = 12
+    PREVIEW_FPS_MAX  = 30
+    PREVIEW_FPS_FALLBACK = 24  # when the clip never reported a frame rate
+
+    def _preview_fps(self, rec: Rec) -> int:
+        rate = rec.fps or self.PREVIEW_FPS_FALLBACK
+        return int(max(self.PREVIEW_FPS_MIN, min(round(rate), self.PREVIEW_FPS_MAX)))
 
     def _preview_arm(self, index) -> None:
         if index is None or index >= len(self._layout):
@@ -1359,13 +1371,14 @@ class LibraryTab(ctk.CTkFrame):
                          args=(rec, index, token), daemon=True).start()
 
     def _preview_decode(self, rec: Rec, index: int, token: int) -> None:
-        reel = self.frames.preview_reel(rec.path, rec.duration, self.CARD_W,
-                                        fps=self.PREVIEW_FPS)
-        self.ui(self._preview_ready, rec.path, index, reel, token)
+        fps = self._preview_fps(rec)
+        reel = self.frames.preview_reel(rec.path, rec.duration, self.CARD_W, fps=fps)
+        self.ui(self._preview_ready, rec.path, index, reel, fps, token)
 
-    def _preview_ready(self, path: str, index: int, reel: list, token: int) -> None:
+    def _preview_ready(self, path: str, index: int, reel: list, fps: int,
+                        token: int) -> None:
         if reel:
-            self._reels[path] = {"frames": reel, "photos": {}}
+            self._reels[path] = {"frames": reel, "photos": {}, "fps": fps}
             while len(self._reels) > self.REEL_CACHE:
                 self._reels.pop(next(iter(self._reels)))
         if token != self._pv_token or self._pv_index != index or not reel:
@@ -1388,7 +1401,7 @@ class LibraryTab(ctk.CTkFrame):
             self._draw_progress(index, i / count)
         self._pv_step += 1
         self._pv_after = self.after(
-            int(1000 / self.PREVIEW_FPS),
+            max(int(1000 / reel.get("fps", self.PREVIEW_FPS_FALLBACK)), 16),
             lambda: self._preview_play(index, reel, token))
 
     def _reel_photo(self, reel: dict, i: int):

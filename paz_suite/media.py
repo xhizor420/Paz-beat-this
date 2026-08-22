@@ -341,7 +341,7 @@ class ThumbCache:
     # memory: that is what makes it look like video instead of a flipbook.
 
     REEL_FPS = 15
-    REEL_SECONDS = 4.0
+    REEL_SECONDS = 6.0
 
     def preview_reel(self, path: str, duration: float, width: int,
                       fps: int = REEL_FPS, seconds: float = REEL_SECONDS) -> list:
