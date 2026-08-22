@@ -132,7 +132,14 @@ class AppConfig:
     frame_cache_limit: int = 30000
 
     # ── Beat This: song analysis + Resolve marker export ────────────────
-    beat_checkpoint: str = "final0"
+    # The 3-model ensemble - see beat_engine.CHECKPOINTS. Slower than any
+    # single model and more accurate than all of them.
+    beat_checkpoint: str = "best (3 models)"
+    # One-time upgrade marker: installs made before the ensemble existed
+    # hold the old default of "final0", which nobody chose deliberately -
+    # it was simply what beat_this defaults to. Moved across once, then
+    # never touched again, so a later deliberate choice of final0 sticks.
+    beat_default_upgraded: bool = False
     beat_device: str = "Auto"           # Auto | CPU | GPU
     beat_dbn: bool = False
     beat_float16: bool = False
@@ -158,6 +165,8 @@ class AppConfig:
         cfg = cls()
         if os.path.exists(CONFIG_PATH):
             cfg._read(CONFIG_PATH)
+            if cfg._upgrade_beat_default():
+                cfg.save()
             return cfg
         # First run of the merged suite: fold in whatever the two
         # standalone apps had, so upgrading loses nothing.
@@ -165,6 +174,16 @@ class AppConfig:
         if migrated:
             cfg.save()
         return cfg
+
+    def _upgrade_beat_default(self) -> bool:
+        """Move pre-ensemble installs onto the new default exactly once.
+        Returns True when something changed and the file needs writing."""
+        if self.beat_default_upgraded:
+            return False
+        self.beat_default_upgraded = True
+        if self.beat_checkpoint == "final0":
+            self.beat_checkpoint = AppConfig.beat_checkpoint
+        return True
 
     def _read(self, path: str) -> None:
         try:

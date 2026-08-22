@@ -48,6 +48,7 @@ class BeatTab(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         self._build()
+        self._refresh_model_note()
         self._check_deps()
         self.set_status(self.F("idle"), T.FAINT)
 
@@ -126,15 +127,21 @@ class BeatTab(ctk.CTkFrame):
         ctk.CTkLabel(body, text="Checkpoint", font=font(11), text_color=T.DIM
                      ).grid(row=0, column=0, sticky="w", padx=(0, 6), pady=4)
         self.model_box = ctk.CTkComboBox(
-            body, width=110, height=30, corner_radius=7, font=font(11),
+            body, width=140, height=30, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=list(be.CHECKPOINTS), state="readonly",
-            command=lambda _choice: self._refresh_setup())
+            command=lambda _choice: self._model_changed())
         self.model_box.set(self.cfg.beat_checkpoint if self.cfg.beat_checkpoint
-                           in be.CHECKPOINTS else be.CHECKPOINTS[0])
+                           in be.CHECKPOINTS else be.DEFAULT_CHECKPOINT)
         self.model_box.grid(row=0, column=1, sticky="w", pady=4)
+
+        self.model_note = ctk.CTkLabel(
+            body, text="", font=font(10), text_color=T.FAINT, anchor="w",
+            justify="left", wraplength=470)
+        self.model_note.grid(row=1, column=0, columnspan=4, sticky="w",
+                             pady=(0, 2))
 
         ctk.CTkLabel(body, text="Device", font=font(11), text_color=T.DIM
                      ).grid(row=0, column=2, sticky="w", padx=(16, 6), pady=4)
@@ -152,13 +159,13 @@ class BeatTab(ctk.CTkFrame):
             body, text="DBN postprocessing (needs madmom)", font=font(11),
             text_color=T.DIM, progress_color=T.ACCENT4, button_color=T.TEXT)
         (self.dbn_switch.select() if self.cfg.beat_dbn else self.dbn_switch.deselect())
-        self.dbn_switch.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.dbn_switch.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         self.f16_switch = ctk.CTkSwitch(
             body, text="float16 (faster on recent GPUs)", font=font(11),
             text_color=T.DIM, progress_color=T.ACCENT4, button_color=T.TEXT)
         (self.f16_switch.select() if self.cfg.beat_float16 else self.f16_switch.deselect())
-        self.f16_switch.grid(row=1, column=2, columnspan=2, sticky="w", pady=(8, 0))
+        self.f16_switch.grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
 
         run_row = ctk.CTkFrame(panel, fg_color="transparent")
         run_row.grid(row=3, column=0, sticky="ew", pady=(0, 10))
@@ -227,10 +234,11 @@ class BeatTab(ctk.CTkFrame):
     def _probe_setup(self, checkpoint: str) -> None:
         rows = be.dependency_status()
         self.ui(self._apply_setup, rows, be.has_ffmpeg(),
-                be.checkpoint_present(checkpoint), checkpoint)
+                be.missing_checkpoints(checkpoint), checkpoint)
 
-    def _apply_setup(self, rows: list, ffmpeg_ok: bool, cached: bool,
+    def _apply_setup(self, rows: list, ffmpeg_ok: bool, missing_ckpt: list,
                       checkpoint: str) -> None:
+        cached = not missing_ckpt
         missing = [pkg for pkg, _p, ok, _d in rows if not ok]
         self._missing = missing
         bits = []
@@ -239,8 +247,17 @@ class BeatTab(ctk.CTkFrame):
             version = f" {detail}" if ok and detail else ""
             bits.append(f"{mark} {package}{version}")
         bits.append("✓ ffmpeg" if ffmpeg_ok else "✗ ffmpeg (needed to read audio)")
-        bits.append(f"{'✓' if cached else '·'} model {checkpoint}"
-                    f"{'' if cached else ' (downloads on first run)'}")
+        # For the ensemble, "not cached" can mean one of three files is
+        # missing - worth saying, since that's a much shorter download.
+        total = len(be.checkpoint_parts(checkpoint))
+        if cached:
+            have = f"✓ model {checkpoint}"
+        elif total > 1:
+            have = (f"· model {checkpoint} ({total - len(missing_ckpt)} of "
+                    f"{total} downloaded)")
+        else:
+            have = f"· model {checkpoint} (downloads on first run)"
+        bits.append(have)
 
         self.setup_label.configure(text="   ".join(bits),
                                    text_color=T.OK if (not missing and ffmpeg_ok) else T.WARN)
@@ -288,6 +305,14 @@ class BeatTab(ctk.CTkFrame):
         self.logview.write(msg, "ok" if ok else "fail")
         self.set_status(msg, T.OK if ok else T.FAIL)
         self._refresh_setup()
+
+    def _model_changed(self) -> None:
+        self._refresh_model_note()
+        self._refresh_setup()
+
+    def _refresh_model_note(self) -> None:
+        choice = self.model_box.get()
+        self.model_note.configure(text=be.CHECKPOINT_NOTES.get(choice, ""))
 
     def _download_checkpoint(self) -> None:
         if self._busy:
@@ -723,8 +748,29 @@ Re-check.
 1. Browse to a song. Audio is read with ffmpeg (already required by the \
 rest of PAZ), so anything ffmpeg can open works - mp3, wav, flac, m4a, \
 ogg, even the audio track of a video file.
-2. Pick a model checkpoint (final0 is the default full-size model; small* \
-models are faster and smaller) and a device, then press Analyze (or F5).
+2. Pick a model and a device, then press Analyze (or F5).
+
+Models. beat_this publishes about forty checkpoints, but most exist to \
+reproduce tables in its paper rather than to track beats well - single_*, \
+fold*, and the single_no* ablations are all trained on reduced data or \
+deliberately missing a feature, so they are not offered here. What is:
+
+  · best (3 models) - the default. Runs final0, final1 and final2 over the \
+same audio and averages their frame-by-frame probabilities before picking \
+peaks. The three are the same model trained with different random seeds, \
+so averaging them cancels the noise particular to any one of them. Three \
+times the work of a single model and 234 MB of checkpoints, for the most \
+accurate result this tracker can give.
+  · final0 / final1 / final2 - the paper's main model, trained on all data \
+except GTZAN. final0 is what beat_this itself defaults to. The seeds are \
+equivalent in expected quality; there is no best one. 78 MB each.
+  · small0 / small1 / small2 - the same recipe at a tenth the size, much \
+faster and a little less accurate. 8.1 MB each. Worth it on a slow \
+machine or a long file.
+
+DBN postprocessing is off by default and should usually stay off - the \
+paper this tracker comes from is called "Accurate Beat Tracking Without \
+DBN Postprocessing", and the DBN is offered only for comparison.
 3. Once analysis finishes, the table lists every beat with its time and \
 its position in the bar (1 = downbeat).
 
