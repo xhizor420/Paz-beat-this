@@ -24,6 +24,7 @@ from .format import fmt_clock, fmt_len
 from . import beat_engine as be
 from . import uithread
 from .widgets import Card, StatTile, JobPanel, LogView
+from .media import probe
 
 
 class BeatTab(ctk.CTkFrame):
@@ -313,8 +314,22 @@ class BeatTab(ctk.CTkFrame):
         self.tile_duration = StatTile(stats, "Length", T.TEXT)
         self.tile_duration.grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
-        ctk.CTkLabel(panel, text="BEATS", font=font(9, "bold"), text_color=T.FAINT,
-                     anchor="w").grid(row=1, column=0, sticky="w", pady=(0, 4))
+        head = ctk.CTkFrame(panel, fg_color="transparent")
+        head.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        head.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(head, text="BEATS", font=font(9, "bold"), text_color=T.FAINT,
+                     anchor="w").grid(row=0, column=0, sticky="w")
+
+        ctk.CTkLabel(head, text="markers", font=font(10), text_color=T.FAINT,
+                     anchor="e").grid(row=0, column=2, sticky="e", padx=(0, 8))
+        self.density_seg = ctk.CTkSegmentedButton(
+            head, values=list(be.DENSITIES), height=26, corner_radius=7,
+            font=font(11), fg_color=T.INPUT, selected_color=T.ACCENT4_DEEP,
+            selected_hover_color=T.ACCENT4_DEEP, unselected_color=T.INPUT,
+            unselected_hover_color=T.BTN_HOV, text_color=T.DIM, border_width=1,
+            command=lambda _v: self._density_changed())
+        self.density_seg.set(be.DEFAULT_DENSITY)
+        self.density_seg.grid(row=0, column=3, sticky="e")
 
         self._build_style()
         tree_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=12,
@@ -356,6 +371,14 @@ class BeatTab(ctk.CTkFrame):
         self.fps_box.set(str(self.cfg.beat_fps) if self.cfg.beat_fps in be.FRAME_RATES
                          else "30.0")
         self.fps_box.grid(row=0, column=1, sticky="w", pady=4)
+        # Getting this wrong is the one setting that silently ruins an
+        # export - markers drift a little further from the beat with every
+        # bar. Reading it off the footage removes the guess.
+        ctk.CTkButton(body, text="From video…", width=88, height=30,
+                      corner_radius=7, font=font(10), fg_color=T.BTN,
+                      hover_color=T.BTN_HOV, text_color=T.DIM,
+                      command=self._fps_from_video
+                      ).grid(row=0, column=1, sticky="e", padx=(0, 8), pady=4)
 
         ctk.CTkLabel(body, text="Beat colour", font=font(11), text_color=T.DIM
                      ).grid(row=0, column=2, sticky="w", padx=(16, 6), pady=4)
@@ -555,7 +578,7 @@ class BeatTab(ctk.CTkFrame):
         self.jobs.set_progress("analyze", 1.0, "done", T.OK)
         self.jobs.finish("analyze")
         self._result = result
-        self._fill_results(result)
+        self._fill_results(self.markers)
         msg = self.F("analyze_done", n=len(result.beats), d=len(result.downbeats),
                      bpm=result.bpm)
         self.logview.write(msg, "ok")
@@ -565,8 +588,27 @@ class BeatTab(ctk.CTkFrame):
 
     # ── results table ──────────────────────────────────────────────────────
 
+    @property
+    def markers(self):
+        """The analysis as currently spaced. Everything downstream - the
+        table, the tiles and all three exports - reads this rather than the
+        raw result, so the density buttons cannot disagree with what gets
+        written out."""
+        if self._result is None:
+            return None
+        return be.scale_beats(self._result, self.density_seg.get())
+
+    def _density_changed(self) -> None:
+        if self._result is None:
+            return
+        view = self.markers
+        self._fill_results(view)
+        self.set_status(
+            f"{len(view.beats)} markers · {view.bpm:.1f} BPM", T.OK)
+
     def _clear_results(self) -> None:
         self._result = None
+        self.density_seg.set(be.DEFAULT_DENSITY)
         self.tree.delete(*self.tree.get_children())
         self.tile_bpm.set("--")
         self.tile_beats.set("--")
@@ -602,7 +644,7 @@ class BeatTab(ctk.CTkFrame):
         if not path:
             return
         try:
-            be.save_beats_tsv(self._result, path)
+            be.save_beats_tsv(self.markers, path)
         except OSError as exc:
             self.set_status(f"Couldn't save: {exc}", T.FAIL)
             return
@@ -624,7 +666,7 @@ class BeatTab(ctk.CTkFrame):
         if not path:
             return
         try:
-            be.save_edl(self._result, path, fps=fps, beat_color=beat_color,
+            be.save_edl(self.markers, path, fps=fps, beat_color=beat_color,
                        downbeat_color=down_color, downbeats_only=downbeats_only,
                        start_tc=start_tc)
         except OSError as exc:
@@ -642,11 +684,15 @@ class BeatTab(ctk.CTkFrame):
         _fps, beat_color, down_color, only, _start = self._export_settings()
         self.send_resolve_btn.configure(state="disabled")
         self.set_status("Sending to Resolve…", T.DIM)
+        # Spaced on this thread: `markers` reads a widget, which a worker
+        # thread must not touch.
         threading.Thread(target=self._run_send_resolve,
-                         args=(beat_color, down_color, only), daemon=True).start()
+                         args=(self.markers, beat_color, down_color, only),
+                         daemon=True).start()
 
-    def _run_send_resolve(self, beat_color: str, down_color: str, only: bool) -> None:
-        ok, msg = be.send_to_resolve(self._result, beat_color=beat_color,
+    def _run_send_resolve(self, markers, beat_color: str, down_color: str,
+                           only: bool) -> None:
+        ok, msg = be.send_to_resolve(markers, beat_color=beat_color,
                                      downbeat_color=down_color,
                                      downbeats_only=only)
         self.ui(self._send_resolve_done, ok, msg)
@@ -658,6 +704,28 @@ class BeatTab(ctk.CTkFrame):
         # were tried; the status line is one line tall, so it gets the
         # headline and the log keeps the detail.
         self.set_status(msg.split("\n")[0], T.OK if ok else T.FAIL)
+
+    def _fps_from_video(self) -> None:
+        """Set the export frame rate from a video file's own rate, so it
+        matches the timeline it is being cut on."""
+        path = filedialog.askopenfilename(
+            title="Pick a clip from your timeline", parent=self.root,
+            initialdir=self.cfg.beat_last_export_dir or None,
+            filetypes=[("Video", "*.mp4 *.mov *.mkv *.webm *.avi *.m4v"),
+                       ("All files", "*.*")])
+        if not path:
+            return
+        info = probe(path)
+        rate = (info.fps if info else 0) or 0
+        if not rate:
+            self.set_status("Couldn't read a frame rate from that file.", T.WARN)
+            return
+        # Snap to the listed rate it is closest to: ffprobe reports 23.976
+        # as 24000/1001 = 23.976023..., which won't match a list entry.
+        nearest = min(be.FRAME_RATES, key=lambda f: abs(f - rate))
+        self.fps_box.set(str(nearest))
+        self.set_status(f"Frame rate set to {nearest} from "
+                        f"{os.path.basename(path)} ({rate:.3f} fps).", T.OK)
 
     def _export_settings(self):
         fps = float(self.fps_box.get())

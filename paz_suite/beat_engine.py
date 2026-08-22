@@ -435,6 +435,59 @@ def analyze(audio_path: str, checkpoint: str = DEFAULT_CHECKPOINT,
                        beat_numbers=numbers)
 
 
+# ── marker density ──────────────────────────────────────────────────────
+#
+# Two reasons this exists, and the second is the important one.
+#
+# An editor wants different marker spacing for different cuts: eighths for
+# fast cutting, half-notes for slow. That is a preference.
+#
+# The other is that beat trackers make octave errors - locking onto half or
+# double the intended tempo. It is the most common way this kind of model
+# is wrong, and it is most likely on exactly the music this tab gets
+# pointed at: phonk sits around 140 BPM with a halftime feel that reads
+# convincingly as 70, and a four-to-the-floor techno track reads as
+# convincingly at 128 as at 64. When it happens the beats are not wrong,
+# they are all real - there are just half or twice as many as wanted, and
+# one press fixes it without re-running the model.
+
+DENSITIES = ("÷2", "1×", "×2")
+DEFAULT_DENSITY = "1×"
+
+
+def scale_beats(result: "BeatResult", density: str) -> "BeatResult":
+    """`result` re-spaced. Downbeats are preserved either way, so bar
+    starts keep landing on bar starts."""
+    import numpy as np
+
+    beats = np.asarray(result.beats, dtype=float)
+    downbeats = np.asarray(result.downbeats, dtype=float)
+    if density not in ("÷2", "×2") or len(beats) < 2:
+        return result
+
+    if density == "×2":
+        midpoints = (beats[:-1] + beats[1:]) / 2.0
+        beats = np.sort(np.concatenate([beats, midpoints]))
+    else:
+        # Keep alternate beats, starting from the first downbeat so the
+        # ones that survive are the ones bars start on. Any downbeat that
+        # would fall on the dropped side is kept regardless.
+        first = 0
+        if len(downbeats):
+            hits = np.nonzero(np.isin(beats, downbeats))[0]
+            if len(hits):
+                first = int(hits[0])
+        keep = (np.arange(len(beats)) - first) % 2 == 0
+        keep |= np.isin(beats, downbeats)
+        beats = beats[keep]
+
+    from beat_this.utils import infer_beat_numbers
+    numbers = (infer_beat_numbers(beats, downbeats) if len(beats)
+               else np.array([], dtype=int))
+    return BeatResult(audio_path=result.audio_path, beats=beats,
+                       downbeats=downbeats, beat_numbers=numbers)
+
+
 def save_beats_tsv(result: BeatResult, outpath: str) -> None:
     """The native beat_this format: one `time<TAB>beat_number` line per
     beat (number 1 = downbeat) - importable into Sonic Visualiser."""
@@ -451,22 +504,6 @@ def save_beats_tsv(result: BeatResult, outpath: str) -> None:
 # AddMarker() over the live scripting API (below) is a nicer bonus when
 # Resolve happens to be running right here, but needs local setup.
 
-def _timecode(seconds: float, fps: float) -> str:
-    """HH:MM:SS:FF, non-drop-frame, using the nominal (rounded) frame rate -
-    e.g. 29.97 fps is counted as 30 frames/sec, matching how Resolve labels
-    a non-drop timeline at that rate. Drop-frame timecode isn't produced;
-    use a non-drop timeline, or shift markers afterwards if yours is drop-frame."""
-    nominal = max(int(round(fps)), 1)
-    total_frames = max(int(round(seconds * nominal)), 0)
-    frames = total_frames % nominal
-    total_seconds, _ = divmod(total_frames, nominal)
-    secs = total_seconds % 60
-    total_minutes = total_seconds // 60
-    mins = total_minutes % 60
-    hours = total_minutes // 60
-    return f"{hours:02d}:{mins:02d}:{secs:02d}:{frames:02d}"
-
-
 # Resolve names marker colours "ResolveColorBlue" and so on inside an EDL,
 # and rejects anything it doesn't recognise.
 RESOLVE_COLOR = {name: "ResolveColor" + name for name in MARKER_COLORS}
@@ -480,8 +517,28 @@ DEFAULT_START_TC = "01:00:00:00"
 START_CHOICES = ("01:00:00:00", "00:00:00:00")
 
 
+# Two different conversions live here and mixing them up is how markers
+# end up drifting on a 23.976 or 29.97 timeline.
+#
+# A timecode *label* counts the nominal rate - 30 frames to the labelled
+# second on a 29.97 non-drop timeline - which is exactly why such a
+# timeline's clock runs slow against the wall. Frames themselves still
+# arrive at the real rate. So: seconds -> frames uses the real rate, and
+# frames -> label uses the nominal one. Counting a beat's position at the
+# nominal rate put every marker 0.1% late, which is a quarter of a second
+# by the end of a four-minute song - a visible miss on a cut.
+
+def _nominal(fps: float) -> int:
+    return max(int(round(fps)), 1)
+
+
+def _seconds_to_frames(seconds: float, fps: float) -> int:
+    return max(int(round(float(seconds) * float(fps))), 0)
+
+
 def _tc_to_frames(timecode: str, fps: float) -> int:
-    nominal = max(int(round(fps)), 1)
+    """A timecode label -> a frame count. Labels are nominal-rate."""
+    nominal = _nominal(fps)
     parts = [int(p) for p in str(timecode).strip().replace(";", ":").split(":")]
     while len(parts) < 4:
         parts.insert(0, 0)
@@ -490,7 +547,8 @@ def _tc_to_frames(timecode: str, fps: float) -> int:
 
 
 def _frames_to_tc(frames: int, fps: float) -> str:
-    nominal = max(int(round(fps)), 1)
+    """A frame count -> a non-drop timecode label."""
+    nominal = _nominal(fps)
     frames = max(int(frames), 0)
     rest, frame = divmod(frames, nominal)
     rest, secs = divmod(rest, 60)
@@ -513,6 +571,10 @@ def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
     Markers from EDL does not read it, which is why importing produced an
     error instead of markers.
 
+    Non-drop-frame throughout. On a drop-frame timeline the labels will
+    not line up; use a non-drop timeline, which is what Resolve gives you
+    unless you ask otherwise.
+
     Marker positions are record timecode counted from `start_tc`, which
     defaults to 01:00:00:00 because that is where Resolve starts a new
     timeline. Line the song up at the start of the timeline before
@@ -521,7 +583,6 @@ def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
     """
     name = title or os.path.splitext(os.path.basename(result.audio_path))[0]
     base = _tc_to_frames(start_tc or DEFAULT_START_TC, fps)
-    nominal = max(int(round(fps)), 1)
     beat_name = RESOLVE_COLOR.get(beat_color, "ResolveColorBlue")
     down_name = RESOLVE_COLOR.get(downbeat_color, "ResolveColorRed")
 
@@ -531,7 +592,7 @@ def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
         if downbeats_only and not is_down:
             continue
         event += 1
-        frame = base + int(round(float(time) * nominal))
+        frame = base + _seconds_to_frames(time, fps)
         tc_in = _frames_to_tc(frame, fps)
         tc_out = _frames_to_tc(frame + 1, fps)
         colour = down_name if is_down else beat_name
