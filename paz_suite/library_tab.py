@@ -86,6 +86,7 @@ class LibraryTab(ctk.CTkFrame):
         self._card_font = tkfont.Font(family=T.UI, size=10)
         self._badge_font = tkfont.Font(family=T.MONO, size=8)
         self._spec_font = tkfont.Font(family=T.MONO, size=9)
+        self._chip_font = tkfont.Font(family=T.UI, size=11)
         self.folders_label.configure(text=self._folders_summary())
         self._restore_state()
         self._load_library()
@@ -986,6 +987,56 @@ class LibraryTab(ctk.CTkFrame):
         self.cfg.save()
         self._render_tagpanel()
 
+    # ── tag panel ────────────────────────────────────────────────────────
+    #
+    # Tags render as chips packed into rows, the way the design has them,
+    # not one full-width button per tag: the sidebar holds three or four
+    # times as many that way, and a wall of identical full-width rows is
+    # exactly the "not clean" part. Tk has no flex-wrap, so rows are
+    # measured and filled by hand.
+
+    CHIP_PAD = 18        # chip padding + border, on top of the text width
+    CHIP_ROOM = 236      # usable width inside the sidebar
+
+    def _group_header(self, title: str, key: str, open_now: bool,
+                      count: int, row: int) -> int:
+        header = ctk.CTkButton(
+            self.tagpanel,
+            text=("▾  " if open_now else "▸  ") + f"{title}   {count}",
+            height=22, corner_radius=5, font=font(9, "bold"), anchor="w",
+            fg_color="transparent", hover_color=T.BTN_HOV, text_color=T.FAINT,
+            command=lambda k=key: self._toggle_sidebar_group(k))
+        header.grid(row=row, column=0, sticky="ew", padx=6,
+                    pady=(12 if row else 4, 3))
+        return row + 1
+
+    def _chip_flow(self, items: list, row: int, menu: bool) -> int:
+        """items: (name, count, token, text colour, swatch colour or None).
+        Packs them left-to-right, wrapping when the next chip won't fit."""
+        line = None
+        used = 0
+        for name, count, token, colour, swatch in items:
+            label = f"{name}  {count}"
+            width = self._chip_font.measure(label) + self.CHIP_PAD
+            if swatch:
+                width += 10
+            if line is None or used + width > self.CHIP_ROOM:
+                line = ctk.CTkFrame(self.tagpanel, fg_color="transparent")
+                line.grid(row=row, column=0, sticky="w", padx=5, pady=1)
+                row += 1
+                used = 0
+            chip = ctk.CTkButton(
+                line, text=label, height=24, width=width, corner_radius=6,
+                font=font(11), fg_color=T.SURFACE, hover_color=T.BTN_HOV,
+                border_width=1, border_color=T.LINE, text_color=colour,
+                command=lambda t=token: self.add_token(t))
+            chip.pack(side="left", padx=(0, 4))
+            if menu:
+                chip.bind("<Button-3>",
+                          lambda e, t=token, n=name: self._tag_menu(e, t, n))
+            used += width + 4
+        return row
+
     def _render_tagpanel(self):
         for child in self.tagpanel.winfo_children():
             child.destroy()
@@ -1019,27 +1070,12 @@ class LibraryTab(ctk.CTkFrame):
                 continue
             key = title.lower()
             open_now = self.cfg.sidebar_group_open.get(key, True)
-            header = ctk.CTkButton(
-                self.tagpanel,
-                text=("▾  " if open_now else "▸  ") + f"{title}   {len(visible)}",
-                height=26, corner_radius=6, font=font(10, "bold"), anchor="w",
-                fg_color=T.ELEVATED, hover_color=T.BTN_HOV, text_color=T.FAINT,
-                command=lambda k=key: self._toggle_sidebar_group(k))
-            header.grid(row=row, column=0, sticky="ew", padx=8,
-                        pady=(10 if row else 6, 2))
-            row += 1
+            row = self._group_header(title, key, open_now, len(visible), row)
             if not open_now:
                 continue
-            for name, count in visible:
-                token = prefix + name
-                label = ctk.CTkButton(
-                    self.tagpanel, text=f"{name}   {count}", height=27,
-                    corner_radius=5, font=font(12), anchor="w",
-                    fg_color="transparent", hover_color=T.BTN_HOV, text_color=colour,
-                    command=lambda t=token: self.add_token(t))
-                label.grid(row=row, column=0, sticky="ew", padx=6, pady=1)
-                label.bind("<Button-3>", lambda e, t=token, n=name: self._tag_menu(e, t, n))
-                row += 1
+            row = self._chip_flow(
+                [(name, count, prefix + name, colour, None) for name, count in visible],
+                row, menu=True)
 
         # PROJECTS gets its own block instead of the loop above - project
         # names are free text (can hold spaces), so the search token needs
@@ -1048,25 +1084,13 @@ class LibraryTab(ctk.CTkFrame):
         if projects:
             key = "projects"
             open_now = self.cfg.sidebar_group_open.get(key, True)
-            header = ctk.CTkButton(
-                self.tagpanel,
-                text=("▾  " if open_now else "▸  ") + f"PROJECTS   {len(projects)}",
-                height=26, corner_radius=6, font=font(10, "bold"), anchor="w",
-                fg_color=T.ELEVATED, hover_color=T.BTN_HOV, text_color=T.FAINT,
-                command=lambda k=key: self._toggle_sidebar_group(k))
-            header.grid(row=row, column=0, sticky="ew", padx=8,
-                        pady=(10 if row else 6, 2))
-            row += 1
+            row = self._group_header("PROJECTS", key, open_now, len(projects), row)
             if open_now:
-                for name, count in projects.most_common(60):
-                    colour = self._project_colors.get(name, T.DIM)
-                    label = ctk.CTkButton(
-                        self.tagpanel, text=f"{name}   {count}", height=27,
-                        corner_radius=5, font=font(12), anchor="w",
-                        fg_color="transparent", hover_color=T.BTN_HOV, text_color=colour,
-                        command=lambda n=name: self.add_token(f'used:"{n}"'))
-                    label.grid(row=row, column=0, sticky="ew", padx=6, pady=1)
-                    row += 1
+                row = self._chip_flow(
+                    [(name, count, f'used:"{name}"',
+                      self._project_colors.get(name, T.DIM), self._project_colors.get(name))
+                     for name, count in projects.most_common(60)],
+                    row, menu=False)
         if hidden:
             ctk.CTkButton(self.tagpanel,
                          text=f"{len(hidden)} hidden tag{'s' if len(hidden) != 1 else ''} "
@@ -1205,47 +1229,44 @@ class LibraryTab(ctk.CTkFrame):
         canvas = self.gallery
         tag = f"cd{index}"
 
+        # Each card is a box, the way the design has it: a surface plate
+        # behind image and caption together, and an outline on top that
+        # carries state. The outline is one line doing three jobs - the
+        # project colour when a clip is already spent, the accent when it
+        # is selected or hovered - which is why the old separate "used"
+        # frame and hover strip are gone.
+        bottom = y + self.IMG_H + self.CAP_H - 4
+        canvas.create_rectangle(x, y, x + self.CARD_W, bottom,
+                                fill=T.SURFACE, outline="", tags=(tag, f"cardbg{index}"))
         canvas.create_rectangle(x, y, x + self.CARD_W, y + self.IMG_H,
                                 fill=T.INPUT, outline="", tags=(tag, "well"))
         canvas.create_text(x + self.CARD_W // 2, y + self.IMG_H // 2, text="…",
                            fill=T.FAINT, font=(T.UI, 11), tags=(tag, f"ph{index}"))
-        if rec.used_projects:
-            # A clip already spent on a project stays visibly marked in the
-            # gallery - the colour is that project's own, so different
-            # sessions read as different marks instead of one flat "used".
-            canvas.create_rectangle(x + 1, y + 1, x + self.CARD_W - 1, y + self.IMG_H - 1,
-                                    outline=rec.used_color, width=3,
-                                    tags=(tag, f"used{index}"))
+        colour, width = self._card_outline(rec, hover=False)
+        canvas.create_rectangle(x, y, x + self.CARD_W, bottom, fill="",
+                                outline=colour, width=width, tags=(tag, f"cardline{index}"))
 
-        canvas.create_rectangle(x, y + self.IMG_H + 2, x + self.CARD_W, y + self.IMG_H + 5,
-                                outline="", fill=self._bar_colour(rec, hover=False),
-                                tags=(tag, f"bar{index}"))
+        # Caption follows the design: the clip's own name on top, then the
+        # artist with the score pushed right. Resolution/fps and the rating
+        # moved onto the thumbnail as badges (see _place_thumb) - they read
+        # faster over the frame than as another line of grey text, and it
+        # buys the name a full line instead of sharing one with a dot.
+        name = rec.pid or os.path.splitext(rec.name)[0]
+        canvas.create_text(x + 8, y + self.IMG_H + 15,
+                           text=self._ellipsize(name, x + self.CARD_W - 10),
+                           fill=T.TEXT, font=(T.MONO, 10), anchor="w", tags=(tag, f"tt{index}"))
 
-        tx = x + 2
-        if rec.rating:
-            canvas.create_text(tx, y + self.IMG_H + 15, text="●",
-                               fill=T.RATING.get(rec.rating, T.DIM), font=(T.UI, 7),
-                               anchor="w", tags=(tag,))
-            tx += 12
-        title = rec.artists[0] if rec.artists else (rec.pid or os.path.splitext(rec.name)[0])
-        canvas.create_text(tx, y + self.IMG_H + 15,
-                           text=self._ellipsize(title, x + self.CARD_W - tx - 4),
-                           fill=T.TEXT, font=(T.UI, 10), anchor="w", tags=(tag, f"tt{index}"))
-
-        spec = f"{rec.height}p" if rec.height else "--"
-        if rec.fps:
-            spec += f" · {rec.fps:.0f}fps"
-        sx = x + 2
-        canvas.create_text(sx, y + self.IMG_H + 31, text=spec, fill=T.FAINT,
-                           font=(T.MONO, 9), anchor="w", tags=(tag,))
         score = fmt_score(rec.score)
+        score_w = (self._spec_font.measure(f"▲{score}") + 10) if score else 0
+        if rec.artists:
+            canvas.create_text(x + 8, y + self.IMG_H + 31,
+                               text=self._ellipsize(rec.artists[0],
+                                                    x + self.CARD_W - score_w - 12),
+                               fill=T.ACCENT2, font=(T.UI, 10), anchor="w", tags=(tag,))
         if score:
-            sx += self._spec_font.measure(spec) + 8
-            canvas.create_text(sx, y + self.IMG_H + 31, text=f"▲{score}", fill=T.ACCENT2,
-                               font=(T.MONO, 9), anchor="w", tags=(tag,))
-        if rec.premium:
-            canvas.create_text(x + self.CARD_W - 2, y + self.IMG_H + 31, text="4K ✓",
-                               fill=T.OK, font=(T.MONO, 9, "bold"), anchor="e", tags=(tag,))
+            canvas.create_text(x + self.CARD_W - 8, y + self.IMG_H + 31, text=f"▲{score}",
+                               fill=T.OK if rec.score >= 1000 else T.FAINT,
+                               font=(T.MONO, 9), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
 
@@ -1255,18 +1276,23 @@ class LibraryTab(ctk.CTkFrame):
         canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
         canvas.tag_bind(tag, "<Leave>", lambda e, i=index: self._unhover(i))
 
-    def _bar_colour(self, rec: Rec, hover: bool) -> str:
+    def _card_outline(self, rec: Rec, hover: bool) -> tuple:
+        """(colour, width) for a card's border. Selection outranks the
+        project mark, which outranks hover - you need to know which card
+        you are acting on before you need to know where it has been."""
         if self.selected and self.selected.path == rec.path:
-            return T.ACCENT
+            return T.ACCENT, 2
+        if rec.used_projects and rec.used_color:
+            return rec.used_color, 2
         if hover:
-            return T.ACCENT_HOV
-        return T.LINE_SOFT
+            return T.ACCENT2, 2
+        return T.LINE, 1
 
     def _restyle_cards(self):
         for index, slot in enumerate(self._layout):
-            self.gallery.itemconfigure(
-                f"bar{index}",
-                fill=self._bar_colour(slot["rec"], hover=(index == self._hover_index)))
+            colour, width = self._card_outline(
+                slot["rec"], hover=(index == self._hover_index))
+            self.gallery.itemconfigure(f"cardline{index}", outline=colour, width=width)
 
     def _set_hover(self, index):
         if index == self._hover_index:
@@ -1413,16 +1439,66 @@ class LibraryTab(ctk.CTkFrame):
         self._static_thumb[index] = photo
         canvas.create_image(slot["x"], slot["y"], image=photo, anchor="nw",
                             tags=(slot["tag"], f"im{index}"))
-        text = fmt_len(rec.duration)
-        bx = slot["x"] + self.CARD_W - 5
-        by = slot["y"] + self.IMG_H - 5
-        pad = 4
-        w = self._badge_font.measure(text)
-        canvas.create_rectangle(bx - w - pad * 2, by - 15, bx, by, fill=T.BG, outline="",
-                                tags=(slot["tag"],))
-        canvas.create_text(bx - pad, by - 2, text=text, fill=T.TEXT, font=(T.MONO, 8),
-                           anchor="se", tags=(slot["tag"],))
-        canvas.tag_raise(f"bar{index}")
+        self._draw_badges(index, rec, slot)
+        canvas.tag_raise(f"cardline{index}")
+
+    # ── thumbnail badges ─────────────────────────────────────────────────
+    #
+    # Over the frame rather than under it, the way the design has them: the
+    # three things you scan a wall of clips for - is it edit-ready, how
+    # explicit is it, how long is it - without any of them costing a line
+    # of caption. Drawn here rather than in _draw_card because they have to
+    # sit on top of the thumbnail, which only exists once it has loaded.
+
+    def _pill(self, tag: str, x: int, y: int, text: str, colour: str,
+              anchor: str = "nw") -> None:
+        """A small dark plate with a line of mono on it. `x`,`y` is the
+        corner named by `anchor` ("nw" or "ne")."""
+        canvas = self.gallery
+        pad, h = 4, 14
+        w = self._badge_font.measure(text) + pad * 2
+        x0 = x if anchor == "nw" else x - w
+        canvas.create_rectangle(x0, y, x0 + w, y + h, fill=T.BG, outline="",
+                                tags=(tag,))
+        canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
+                           font=(T.MONO, 8), anchor="w", tags=(tag,))
+
+    def _draw_badges(self, index: int, rec: Rec, slot: dict) -> None:
+        canvas = self.gallery
+        tag = slot["tag"]
+        x, y = slot["x"], slot["y"]
+
+        # Top left: what the pipeline cares about. Green once a clip is
+        # edit-pool quality, dim while it still needs an upscale.
+        spec = f"{rec.height}p" if rec.height else "--"
+        if rec.fps:
+            spec += f"·{rec.fps:.0f}"
+        self._pill(tag, x + 5, y + 5, spec, T.OK if rec.premium else T.DIM)
+
+        # Top right: the rating, as its own colour. Explicit is the loudest
+        # of the three because that is what gets scanned for.
+        if rec.rating:
+            colour = T.RATING.get(rec.rating, T.DIM)
+            cx, cy, r = x + self.CARD_W - 13, y + 12, 8
+            canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=T.BG,
+                               outline="", tags=(tag,))
+            canvas.create_text(cx, cy, text=rec.rating.upper(), fill=colour,
+                               font=(T.MONO, 8, "bold"), tags=(tag,))
+
+        # Bottom right: length.
+        self._pill(tag, x + self.CARD_W - 5, y + self.IMG_H - 19,
+                   fmt_len(rec.duration), T.TEXT, anchor="ne")
+
+        # Bottom left: which project already spent this clip. The coloured
+        # border says "used"; this says used *where*, which is the part you
+        # actually need when deciding whether to reuse it.
+        if rec.used_projects:
+            label = rec.used_projects[0]
+            room = self.CARD_W - 62
+            while label and self._badge_font.measure(label) > room:
+                label = label[:-1]
+            self._pill(tag, x + 5, y + self.IMG_H - 19, label or "used",
+                       rec.used_color or T.DIM)
         if rec.used_projects:
             canvas.tag_raise(f"used{index}")
 
