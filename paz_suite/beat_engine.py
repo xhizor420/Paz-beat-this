@@ -22,9 +22,14 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-import numpy as np
-
 from .files import NO_WINDOW
+
+# numpy is imported inside the functions that use it, not here. This module
+# is reached from app.py via beat_tab, so a module-scope import would make
+# numpy a hard requirement of the whole suite and take Convert/Library/Vault
+# down with an ImportError on a machine that only installed the base
+# requirements. The annotations below are lazy strings (see the __future__
+# import), so nothing here needs numpy at import time.
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _BEAT_THIS_ROOT = os.path.join(_REPO_ROOT, "beat_this")
@@ -198,6 +203,7 @@ def has_ffmpeg() -> bool:
 def load_audio_ffmpeg(path: str) -> tuple:
     """Decode any audio/video file to a mono float64 array at 22.05 kHz.
     Raises RuntimeError with ffmpeg's own message if it can't be read."""
+    import numpy as np
     cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", path,
            "-f", "f32le", "-acodec", "pcm_f32le",
            "-ac", "1", "-ar", str(SAMPLE_RATE), "-"]
@@ -241,10 +247,12 @@ class BeatResult:
 
     @property
     def is_downbeat(self) -> np.ndarray:
+        import numpy as np
         return np.isin(self.beats, self.downbeats)
 
 
 def estimate_bpm(beats: np.ndarray) -> float:
+    import numpy as np
     if len(beats) < 2:
         return 0.0
     intervals = np.diff(beats)
@@ -264,6 +272,7 @@ def analyze(audio_path: str, checkpoint: str = "final0", device: str = "cpu",
             dbn: bool = False, float16: bool = False, progress_cb=None) -> BeatResult:
     """Run the model on one audio file. Blocking - call off the UI thread.
     `progress_cb(str)`, if given, is called with short stage descriptions."""
+    import numpy as np
     from beat_this.inference import Audio2Beats
     from beat_this.utils import infer_beat_numbers
 
