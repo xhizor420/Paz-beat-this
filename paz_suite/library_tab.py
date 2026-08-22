@@ -19,7 +19,7 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from .theme import T, font, LIBRARY_LABELS
-from .format import fmt_len, fmt_clock, fmt_size, fmt_score
+from .format import fmt_len, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
 )
@@ -65,11 +65,13 @@ class LibraryTab(ctk.CTkFrame):
         self._page_refs: list = []
         self._layout: list = []
         self._hover_index = None
-        self._peek_after = None
-        self._peek_token = 0
-        self._peek_path: str | None = None
-        self._peek_busy = False
-        self._peek_pending = None
+        # In-tile hover preview (see "hover preview" further down)
+        self._pv_index: int | None = None
+        self._pv_after = None
+        self._pv_step = 0
+        self._pv_token = 0
+        self._pv_photo = None            # keep-alive for the frame on screen
+        self._static_thumb: dict = {}    # index -> the card's resting thumbnail
         self._search_after = None
         self._resize_after = None
         self._columns = 0
@@ -1146,6 +1148,7 @@ class LibraryTab(ctk.CTkFrame):
         self._page_token += 1
         token = self._page_token
         self._page_refs = []
+        self._static_thumb = {}
         self._layout = []
         self._hover_index = None
         self._peek_hide()
@@ -1251,7 +1254,6 @@ class LibraryTab(ctk.CTkFrame):
         canvas.tag_bind(tag, "<Button-3>", lambda e, r=rec: self._card_menu(e, r))
         canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
         canvas.tag_bind(tag, "<Leave>", lambda e, i=index: self._unhover(i))
-        canvas.tag_bind(tag, "<Motion>", lambda e, i=index: self._card_hover(e, i))
 
     def _bar_colour(self, rec: Rec, hover: bool) -> str:
         if self.selected and self.selected.path == rec.path:
@@ -1271,12 +1273,111 @@ class LibraryTab(ctk.CTkFrame):
             return
         self._hover_index = index
         self._restyle_cards()
+        self._preview_stop()
+        self._preview_arm(index)
 
     def _unhover(self, index):
         if self._hover_index == index:
             self._hover_index = None
             self._restyle_cards()
-        self._peek_hide()
+        self._preview_stop()
+
+    # ── hover preview ────────────────────────────────────────────────────
+    #
+    # YouTube's model: rest on a tile and the tile itself starts cycling
+    # through the clip, with a progress line along the bottom edge showing
+    # how far in each frame is. Nothing floats, nothing follows the cursor.
+    #
+    # The old floating bubble felt sluggish for a structural reason, not a
+    # tuning one: the first hover on a clip had no storyboard yet, so it
+    # spawned an ffmpeg seek and the preview arrived long after the mouse
+    # had moved on. Priming the sheet during the dwell fixes that - by the
+    # time the first frame is due, hover_frame() is an in-memory crop of an
+    # already-built sheet rather than a subprocess. Frames still load off
+    # the UI thread because that first sheet build has to happen somewhere.
+
+    PREVIEW_DWELL_MS = 380     # rest this long before a tile starts playing
+    PREVIEW_TICK_MS  = 550     # then advance a frame this often
+    PREVIEW_STEPS    = 12      # evenly spaced positions across the clip
+
+    def _preview_arm(self, index) -> None:
+        if index is None or index >= len(self._layout):
+            return
+        rec = self._layout[index]["rec"]
+        if rec.duration <= 0:
+            return
+        # Build the storyboard *now*, while the pointer is still settling,
+        # so the first frame is instant instead of waiting on ffmpeg.
+        self.frames.prime_hover(rec.path, rec.duration)
+        self._pv_index = index
+        self._pv_step = 0
+        self._pv_token += 1
+        self._pv_after = self.after(self.PREVIEW_DWELL_MS, self._preview_tick)
+
+    def _preview_tick(self) -> None:
+        self._pv_after = None
+        index = self._pv_index
+        if index is None or index >= len(self._layout):
+            return
+        rec = self._layout[index]["rec"]
+        frac = (self._pv_step % self.PREVIEW_STEPS) / self.PREVIEW_STEPS
+        token = self._pv_token
+        threading.Thread(target=self._preview_load,
+                         args=(rec, frac, index, token), daemon=True).start()
+        self._pv_step += 1
+        self._pv_after = self.after(self.PREVIEW_TICK_MS, self._preview_tick)
+
+    def _preview_load(self, rec: Rec, frac: float, index: int, token: int) -> None:
+        data = self.frames.hover_frame(rec.path, rec.duration, frac)
+        self.ui(self._preview_paint, index, data, frac, token)
+
+    def _preview_paint(self, index: int, data, frac: float, token: int) -> None:
+        if token != self._pv_token or self._pv_index != index or not data:
+            return
+        if index >= len(self._layout):
+            return
+        canvas = self.gallery
+        if not canvas.find_withtag(f"im{index}"):
+            return          # thumbnail hasn't landed yet; nothing to swap
+        slot = self._layout[index]
+        try:
+            image = Image.open(io.BytesIO(data))
+            image = fit_frame(image, self.CARD_W, self.IMG_H, self.cfg.thumb_fit)
+            image = round_corners(image, 9, T.SURFACE)
+            photo = ImageTk.PhotoImage(image)
+        except Exception:
+            return
+        self._pv_photo = photo      # one reference, replaced each tick
+        canvas.itemconfigure(f"im{index}", image=photo)
+
+        x, y = slot["x"], slot["y"]
+        top = y + self.IMG_H - 3
+        canvas.delete(f"pv{index}")
+        canvas.create_rectangle(x, top, x + self.CARD_W, y + self.IMG_H,
+                                fill=T.LINE_SOFT, outline="",
+                                tags=(slot["tag"], f"pv{index}"))
+        played = int(self.CARD_W * min(frac + 1.0 / self.PREVIEW_STEPS, 1.0))
+        canvas.create_rectangle(x, top, x + played, y + self.IMG_H,
+                                fill=T.ACCENT, outline="",
+                                tags=(slot["tag"], f"pv{index}"))
+
+    def _preview_stop(self) -> None:
+        self._pv_token += 1
+        if self._pv_after is not None:
+            try:
+                self.after_cancel(self._pv_after)
+            except ValueError:
+                pass
+            self._pv_after = None
+        index, self._pv_index = self._pv_index, None
+        self._pv_step = 0
+        self._pv_photo = None
+        if index is None:
+            return
+        self.gallery.delete(f"pv{index}")
+        resting = self._static_thumb.get(index)
+        if resting is not None and self.gallery.find_withtag(f"im{index}"):
+            self.gallery.itemconfigure(f"im{index}", image=resting)
 
     def _load_thumbs(self, batch: list, token: int):
         for index, rec in enumerate(batch):
@@ -1309,6 +1410,7 @@ class LibraryTab(ctk.CTkFrame):
         except Exception:
             return
         self._page_refs.append(photo)
+        self._static_thumb[index] = photo
         canvas.create_image(slot["x"], slot["y"], image=photo, anchor="nw",
                             tags=(slot["tag"], f"im{index}"))
         text = fmt_len(rec.duration)
@@ -1326,95 +1428,11 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── hover scrub ─────────────────────────────────────────────────────────
 
-    def _card_hover(self, event, index: int):
-        if index >= len(self._layout):
-            return
-        slot = self._layout[index]
-        rec = slot["rec"]
-        if rec.duration <= 0:
-            return
-        y = self.gallery.canvasy(event.y)
-        if y > slot["y"] + self.IMG_H:
-            self._peek_hide()
-            return
-        if self._peek_after is not None:
-            try:
-                self.after_cancel(self._peek_after)
-            except ValueError:
-                pass
-        x = self.gallery.canvasx(event.x)
-        frac = max(0.0, min((x - slot["x"]) / self.CARD_W, 1.0))
-        self._peek_path = rec.path
-        self._peek_after = self.after(
-            100, lambda: self._peek_fetch(rec, frac, event.x_root, event.y_root))
-
-    def _peek_fetch(self, rec: Rec, frac: float, x_root: int, y_root: int):
-        self._peek_after = None
-        if self._peek_path != rec.path:
-            return
-        moment = max(0.0, min(frac * rec.duration, rec.duration - 0.05))
-        self._peek_token += 1
-        token = self._peek_token
-        request = (rec, moment, token, x_root, y_root)
-        if self._peek_busy:
-            # One extraction in flight at a time - piling up an overlapping
-            # ffmpeg call per debounce tick on fast mouse movement is what
-            # made the preview lag behind the cursor. Only the latest hover
-            # position matters, so it replaces whatever was pending.
-            self._peek_pending = request
-            return
-        self._peek_busy = True
-        self._peek_run(request)
-
-    def _peek_run(self, request) -> None:
-        rec, moment, token, x_root, y_root = request
-        frac = (moment / rec.duration) if rec.duration else 0.0
-
-        def work():
-            # hover_frame() crops a pre-built sprite sheet instead of
-            # spawning ffmpeg per hover - see media.py for why. The sprite
-            # itself still needs one ffmpeg pass the first time a clip is
-            # hovered, hence still doing this off the UI thread. Cell width
-            # stays at the cache's own default rather than matching the
-            # preview bubble 1:1 - keeping the sprite (and the handful kept
-            # in memory) small matters more than a perfectly crisp hover
-            # thumbnail here.
-            data = self.frames.hover_frame(rec.path, rec.duration, frac)
-            self.ui(self._peek_done, rec, data, moment, token, x_root, y_root)
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _peek_done(self, rec: Rec, data, moment, token, x_root, y_root) -> None:
-        self._peek_busy = False
-        if token == self._peek_token:
-            self._peek_show(rec, data, moment, token, x_root, y_root)
-        pending = self._peek_pending
-        self._peek_pending = None
-        if pending is not None:
-            self._peek_busy = True
-            self._peek_run(pending)
-
-    def _peek_show(self, rec: Rec, data, moment, token, x_root, y_root):
-        if token != self._peek_token or self._peek_path != rec.path:
-            return
-        title = rec.pid or rec.name
-        if rec.artists:
-            title = f"{rec.artists[0]} · #{rec.pid}"
-        fraction = (moment / rec.duration) if rec.duration else None
-        self.peek.show_frame(data, title, fmt_clock(moment), x_root, y_root,
-                             fraction=fraction)
-
     def _peek_hide(self):
-        self._peek_path = None
-        self._peek_token += 1
-        self._peek_pending = None
-        if self._peek_after is not None:
-            try:
-                self.after_cancel(self._peek_after)
-            except ValueError:
-                pass
-            self._peek_after = None
-        self.peek.hide()
+        """Kept because several places (tab switch, page render, scroll)
+        want to make sure nothing is previewing. The gallery's preview now
+        lives in the tile, so that is what this stops."""
+        self._preview_stop()
 
     # ── selection & details ─────────────────────────────────────────────────
 
