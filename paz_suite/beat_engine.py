@@ -21,8 +21,12 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .files import NO_WINDOW
+
+if TYPE_CHECKING:      # annotations only - never imported at runtime
+    import numpy as np
 
 # numpy is imported inside the functions that use it, not here. This module
 # is reached from app.py via beat_tab, so a module-scope import would make

@@ -1,39 +1,54 @@
-"""Shared visual identity: palette, fonts and status copy.
+"""Shared visual identity: palette, fonts, app mark and status copy.
 
-Both tabs render from this one module, so the pair look like one suite
-instead of two apps that happen to share a colour scheme.
+Every tab renders from this one module, so the suite looks like one app
+instead of four that happen to share a colour scheme.
+
+The palette is "Neon Den" - the scheme drawn up in design/*.dc.html and
+published as a canvas. It keeps the four tab identities the app has
+always had (pink Convert, violet Library, mint Vault, amber Beat This)
+and their roles, but drops the ground much darker, pushes chroma on the
+accents, and treats accents as light sources rather than flat fills:
+anything active is meant to look lit, not painted. Since this is a
+library of adult material, the explicit rating is deliberately the
+loudest colour in the set - `is:e` should be readable at a glance across
+a wall of thumbnails, not politely muted next to safe and questionable.
 """
 
 from __future__ import annotations
 
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 
 class T:
-    BG        = "#0B0711"    # near-black plum
-    SURFACE   = "#161021"    # cards
-    ELEVATED  = "#1F1631"    # raised cards / menus
-    INPUT     = "#0F0917"    # wells: viewer, log, fields
-    LINE      = "#2F2247"    # hairlines
-    LINE_SOFT = "#1D1430"
+    # ── ground ───────────────────────────────────────────────────────────
+    BG        = "#07040C"    # near-black plum, deeper than the old #0B0711
+    SURFACE   = "#140C1F"    # cards
+    ELEVATED  = "#1C1230"    # raised cards / menus
+    INPUT     = "#080510"    # wells: viewer, log, fields
+    LINE      = "#2B1E45"    # hairlines
+    LINE_SOFT = "#1A1230"
 
-    ACCENT      = "#FF3D9E"  # hot pink — Convert identity
-    ACCENT_HOV  = "#FF7AC1"
-    ACCENT_DEEP = "#441233"
-    ACCENT2      = "#9A6BFF"  # violet — Library identity
-    ACCENT2_HOV  = "#B48CFF"
-    ACCENT2_DEEP = "#241542"
-    ACCENT3      = "#33D9A8"  # teal — Vault identity
-    ACCENT3_HOV  = "#5CE6BC"
-    ACCENT3_DEEP = "#123D33"
-    ACCENT4      = "#FFB84D"  # amber — Beat This identity
+    # ── tab identities ───────────────────────────────────────────────────
+    # Same four roles as before, higher chroma. *_DEEP is a dark fill that
+    # sits behind *bright* text (buttons, the selected tab), so it stays
+    # dark enough to keep that text legible.
+    ACCENT      = "#FF2E9A"  # hot magenta — Convert
+    ACCENT_HOV  = "#FF6BB5"
+    ACCENT_DEEP = "#52123C"
+    ACCENT2      = "#A46BFF"  # violet — Library
+    ACCENT2_HOV  = "#C8A9FF"
+    ACCENT2_DEEP = "#2C1A52"
+    ACCENT3      = "#2EE6B0"  # mint — Vault
+    ACCENT3_HOV  = "#7BF0CC"
+    ACCENT3_DEEP = "#10402F"
+    ACCENT4      = "#FFB03D"  # amber — Beat This
     ACCENT4_HOV  = "#FFCC80"
-    ACCENT4_DEEP = "#3D2A0D"
+    ACCENT4_DEEP = "#4A3110"
 
-    # Colours cycled to auto-assign each new Vault project its own mark,
-    # distinct from the pink/violet/teal tab identities above so a marked
-    # clip's border never reads as "which tab" instead of "which project".
+    # Cycled to auto-assign each new Vault project its own mark, kept
+    # distinct from the four tab identities above so a marked clip's
+    # border reads as "which project", never as "which tab".
     PROJECT_PALETTE = (
         "#4DA3FF",  # blue
         "#FFB84D",  # amber
@@ -45,47 +60,147 @@ class T:
         "#8FD9A8",  # sage
     )
 
-    OK        = "#53E0AE"
-    OK_DEEP   = "#0E2B22"
-    WARN      = "#FFC24D"
-    WARN_DEEP = "#332409"
+    # ── status ───────────────────────────────────────────────────────────
+    OK        = "#2EE6B0"
+    OK_DEEP   = "#0C2E24"
+    WARN      = "#FFB03D"
+    WARN_DEEP = "#3A2A0A"
     FAIL      = "#FF5C6E"
-    FAIL_DEEP = "#33101B"
+    FAIL_DEEP = "#3D1018"
 
-    TEXT  = "#F5EFF9"
-    DIM   = "#AB9AC2"
-    FAINT = "#6E5C88"
+    # ── text ─────────────────────────────────────────────────────────────
+    TEXT  = "#F7EFFA"
+    DIM   = "#C3B2DB"        # lifted from #AB9AC2 — panel copy reads better
+    FAINT = "#6E5C8C"
 
-    BTN        = "#231838"
-    BTN_HOV    = "#30204D"
-    BTN_GO     = "#E01F84"
-    BTN_GO_H   = "#FF3D9E"
-    BTN_STOP   = "#8A1538"
-    BTN_STOP_H = "#B01C49"
+    # ── controls ─────────────────────────────────────────────────────────
+    BTN        = "#1C1230"
+    BTN_HOV    = "#2B1E45"
+    BTN_GO     = "#E82A8E"
+    BTN_GO_H   = "#FF5CAD"
+    BTN_STOP   = "#A3163F"
+    BTN_STOP_H = "#C81E52"
 
-    ROW      = "#140E1E"
-    ROW_ALT  = "#181126"
-    ROW_SEL  = "#41173A"
+    # ── rows ─────────────────────────────────────────────────────────────
+    ROW      = "#120B1D"
+    ROW_ALT  = "#170F24"
+    ROW_SEL  = "#4A1236"
 
-    CARD_SEL = "#41173A"
+    CARD_SEL = "#4A1236"
 
-    RATING = {"e": "#FF5C6E", "q": "#FFC24D", "s": "#53E0AE"}
+    # e is the loudest of the three on purpose — see the module docstring.
+    RATING = {"e": "#FF2D5A", "q": "#FFC24D", "s": "#53E0AE"}
 
-    UI   = "Segoe UI"
-    MONO = "Cascadia Mono"
+    # ── type ─────────────────────────────────────────────────────────────
+    # Placeholders. resolve_fonts() replaces these with whatever is
+    # actually installed once a Tk root exists; the values here are the
+    # Windows defaults so the app still looks right if that never runs.
+    UI      = "Segoe UI"
+    MONO    = "Cascadia Mono"
+    DISPLAY = "Segoe UI"
 
 
-def font(size: int = 12, weight: str = "normal", mono: bool = False) -> ctk.CTkFont:
-    return ctk.CTkFont(family=T.MONO if mono else T.UI, size=size, weight=weight)
+# The design canvas is set in Space Grotesk / Bricolage Grotesque /
+# JetBrains Mono. Tk can only use families installed on the machine, and
+# none of those three ship with Windows or macOS, so each role is a
+# preference list: install the real faces and the app picks them up, else
+# it falls back to the closest thing already present. Ordered best-first.
+# Bahnschrift sits *below* Segoe UI on purpose: it has more character but
+# it is condensed, and these layouts were drawn to Space Grotesk's much
+# wider metrics - swapping in a narrow face makes every label sit wrong.
+_UI_STACK = ("Space Grotesk", "Segoe UI Variable Text", "Segoe UI",
+             "Inter", "Bahnschrift", "DejaVu Sans", "Helvetica")
+_MONO_STACK = ("JetBrains Mono", "Cascadia Mono", "Cascadia Code", "Consolas",
+               "SF Mono", "DejaVu Sans Mono", "Courier New")
+_DISPLAY_STACK = ("Bricolage Grotesque", "Space Grotesk", "Bahnschrift",
+                  "Segoe UI Variable Display", "Segoe UI Semibold",
+                  "Segoe UI", "DejaVu Sans")
+
+
+def resolve_fonts() -> None:
+    """Pick the best installed family for each role. Call once, from the
+    main thread, after the Tk root exists - tkinter.font.families() needs
+    an interpreter to ask. Silently keeps the defaults if anything goes
+    wrong, since a missing font should never stop the app from opening."""
+    try:
+        import tkinter.font as tkfont
+        available = {name.lower() for name in tkfont.families()}
+    except Exception:
+        return
+
+    def first(stack: tuple, fallback: str) -> str:
+        for family in stack:
+            if family.lower() in available:
+                return family
+        return fallback
+
+    T.UI = first(_UI_STACK, T.UI)
+    T.MONO = first(_MONO_STACK, T.MONO)
+    T.DISPLAY = first(_DISPLAY_STACK, T.UI)
+
+
+def mix(color: str, toward: str, amount: float) -> str:
+    """Blend `color` toward `toward` by `amount` (0..1).
+
+    Tk has no opacity, so anything the design canvas draws at partial
+    alpha over a known background has to be pre-blended into a solid
+    hex here instead - the dimmed tab dots, mainly."""
+    a = color.lstrip("#")
+    b = toward.lstrip("#")
+    t = max(0.0, min(1.0, amount))
+    channels = (
+        round(int(a[i:i + 2], 16) * (1 - t) + int(b[i:i + 2], 16) * t)
+        for i in (0, 2, 4)
+    )
+    return "#" + "".join(f"{c:02X}" for c in channels)
+
+
+def font(size: int = 12, weight: str = "normal", mono: bool = False,
+         display: bool = False) -> ctk.CTkFont:
+    if mono:
+        family = T.MONO
+    elif display:
+        family = T.DISPLAY
+    else:
+        family = T.UI
+    return ctk.CTkFont(family=family, size=size, weight=weight)
 
 
 def mark_photo(size: int, color: str) -> "ImageTk.PhotoImage":
-    """The app's window/taskbar icon: a plain rounded-square mark, drawn
-    4x and downsampled for a crisp edge. No mascot, just a colour."""
-    big = size * 4
-    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    """The app's window/taskbar icon: a paw knocked out of a rounded tile
+    in the accent colour, with a soft bloom behind it so it reads as lit
+    rather than flat. Drawn 8x and downsampled for a clean edge at 16px.
+
+    A paw rather than the old plain square because at icon size the suite
+    needs to be recognisable in a taskbar full of other dark squares, and
+    because it says what this library is about without the icon having to
+    be something you would rather not have on a shared screen.
+    """
+    big = size * 8
+    tile = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(tile)
     draw.rounded_rectangle((0, 0, big - 1, big - 1), radius=big * 0.28, fill=color)
+
+    # Bloom: a blurred copy of the tile under the crisp one, so the mark
+    # carries the same "glow" the rest of the palette is built on.
+    glow = tile.filter(ImageFilter.GaussianBlur(big * 0.06))
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    img.alpha_composite(glow)
+    img.alpha_composite(tile)
+
+    paw = ImageDraw.Draw(img)
+
+    def ellipse(cx: float, cy: float, w: float, h: float) -> None:
+        paw.ellipse((int((cx - w / 2) * big), int((cy - h / 2) * big),
+                     int((cx + w / 2) * big), int((cy + h / 2) * big)),
+                    fill=T.BG)
+
+    ellipse(0.50, 0.69, 0.46, 0.34)      # main pad
+    ellipse(0.235, 0.40, 0.16, 0.21)     # toes, outer pair sits lower
+    ellipse(0.415, 0.325, 0.16, 0.21)
+    ellipse(0.605, 0.325, 0.16, 0.21)
+    ellipse(0.785, 0.40, 0.16, 0.21)
+
     return ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
 
 
