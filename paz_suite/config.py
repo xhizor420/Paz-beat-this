@@ -134,7 +134,7 @@ class AppConfig:
     # ── Beat This: song analysis + Resolve marker export ────────────────
     # The 3-model ensemble - see beat_engine.CHECKPOINTS. Slower than any
     # single model and more accurate than all of them.
-    beat_checkpoint: str = "best (3 models)"
+    beat_checkpoint: str = "Best quality"
     # One-time upgrade marker: installs made before the ensemble existed
     # hold the old default of "final0", which nobody chose deliberately -
     # it was simply what beat_this defaults to. Moved across once, then

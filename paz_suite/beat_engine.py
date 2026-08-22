@@ -63,7 +63,13 @@ if os.path.isdir(_BEAT_THIS_ROOT) and _BEAT_THIS_ROOT not in sys.path:
 # rather than an ensemble, so this is a well-founded addition rather than a
 # published number.
 
-ENSEMBLE = "best (3 models)"
+# Named for what it gives you, not for how it works. An earlier name of
+# "best (3 models)" read like a choice between models, which is exactly the
+# decision this option exists to remove.
+ENSEMBLE = "Best quality"
+
+# Settings written before the rename.
+_RENAMED = {"best (3 models)": ENSEMBLE, "ensemble": ENSEMBLE}
 
 CHECKPOINTS = {
     # UI name -> the beat_this shortnames to run and average
@@ -77,7 +83,8 @@ CHECKPOINTS = {
 }
 
 CHECKPOINT_NOTES = {
-    ENSEMBLE: "All three main models, averaged. Most accurate, ~3x slower. 234 MB.",
+    ENSEMBLE: ("The recommended setting. Runs the main model's three trained "
+               "copies and merges them - most accurate, ~3x slower. 234 MB."),
     "final0": "The paper's main model, seed 0 - beat_this's own default. 78 MB.",
     "final1": "The paper's main model, seed 1. Same quality as seed 0. 78 MB.",
     "final2": "The paper's main model, seed 2. Same quality as seed 0. 78 MB.",
@@ -89,10 +96,19 @@ CHECKPOINT_NOTES = {
 DEFAULT_CHECKPOINT = ENSEMBLE
 
 
+def normalize_checkpoint(name: str) -> str:
+    """A stored setting -> a name that exists now. Covers the rename above
+    and anything hand-edited or dropped in a later version, so a stale
+    config falls back to the recommended model instead of failing at
+    analysis time."""
+    name = _RENAMED.get(name, name)
+    return name if name in CHECKPOINTS else DEFAULT_CHECKPOINT
+
+
 def checkpoint_parts(name: str) -> tuple:
     """The beat_this shortnames a UI choice runs. An unknown name is passed
     straight through, so a checkpoint typed in by hand still works."""
-    return CHECKPOINTS.get(name, (name,))
+    return CHECKPOINTS.get(_RENAMED.get(name, name), (name,))
 DEVICE_CHOICES = ("Auto", "CPU", "GPU")
 MARKER_COLORS = ("Blue", "Cyan", "Green", "Yellow", "Red", "Pink", "Purple")
 FRAME_RATES = (23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0)

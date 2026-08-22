@@ -48,9 +48,15 @@ class BeatTab(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         self._build()
-        self._refresh_model_note()
         self._check_deps()
         self.set_status(self.F("idle"), T.FAINT)
+
+    @property
+    def checkpoint(self) -> str:
+        """The model to run. Settings can override it; anything unknown
+        (a hand-edited config, a name dropped from a later version) falls
+        back to the recommended one rather than failing at analysis time."""
+        return be.normalize_checkpoint(self.cfg.beat_checkpoint)
 
     # ── copy ─────────────────────────────────────────────────────────────
 
@@ -117,55 +123,13 @@ class BeatTab(ctk.CTkFrame):
                      text_color=T.DIM, command=self._browse_audio
                      ).grid(row=0, column=1, padx=(8, 0))
 
-        opts = Card(panel, title="Model")
-        opts.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        body = ctk.CTkFrame(opts, fg_color="transparent")
-        body.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 12))
-        for c in (1, 3):
-            body.grid_columnconfigure(c, weight=1)
-
-        ctk.CTkLabel(body, text="Checkpoint", font=font(11), text_color=T.DIM
-                     ).grid(row=0, column=0, sticky="w", padx=(0, 6), pady=4)
-        self.model_box = ctk.CTkComboBox(
-            body, width=140, height=30, corner_radius=7, font=font(11),
-            fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
-            dropdown_text_color=T.TEXT, dropdown_font=font(11),
-            text_color=T.TEXT, values=list(be.CHECKPOINTS), state="readonly",
-            command=lambda _choice: self._model_changed())
-        self.model_box.set(self.cfg.beat_checkpoint if self.cfg.beat_checkpoint
-                           in be.CHECKPOINTS else be.DEFAULT_CHECKPOINT)
-        self.model_box.grid(row=0, column=1, sticky="w", pady=4)
-
-        self.model_note = ctk.CTkLabel(
-            body, text="", font=font(10), text_color=T.FAINT, anchor="w",
-            justify="left", wraplength=470)
-        self.model_note.grid(row=1, column=0, columnspan=4, sticky="w",
-                             pady=(0, 2))
-
-        ctk.CTkLabel(body, text="Device", font=font(11), text_color=T.DIM
-                     ).grid(row=0, column=2, sticky="w", padx=(16, 6), pady=4)
-        self.device_box = ctk.CTkComboBox(
-            body, width=90, height=30, corner_radius=7, font=font(11),
-            fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
-            dropdown_text_color=T.TEXT, dropdown_font=font(11),
-            text_color=T.TEXT, values=list(be.DEVICE_CHOICES), state="readonly")
-        self.device_box.set(self.cfg.beat_device if self.cfg.beat_device
-                            in be.DEVICE_CHOICES else "Auto")
-        self.device_box.grid(row=0, column=3, sticky="w", pady=4)
-
-        self.dbn_switch = ctk.CTkSwitch(
-            body, text="DBN postprocessing (needs madmom)", font=font(11),
-            text_color=T.DIM, progress_color=T.ACCENT4, button_color=T.TEXT)
-        (self.dbn_switch.select() if self.cfg.beat_dbn else self.dbn_switch.deselect())
-        self.dbn_switch.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
-
-        self.f16_switch = ctk.CTkSwitch(
-            body, text="float16 (faster on recent GPUs)", font=font(11),
-            text_color=T.DIM, progress_color=T.ACCENT4, button_color=T.TEXT)
-        (self.f16_switch.select() if self.cfg.beat_float16 else self.f16_switch.deselect())
-        self.f16_switch.grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
+        # No model picker here on purpose. There is one right answer -
+        # the ensemble of all three main checkpoints - and every other
+        # choice beat_this ships is either the same model with a different
+        # random seed or a smaller, less accurate one. Making that a
+        # decision on the way to pressing Analyze only invites picking
+        # something worse. The overrides still exist for anyone who wants
+        # them, in Settings > e621 & App > Beat This.
 
         run_row = ctk.CTkFrame(panel, fg_color="transparent")
         run_row.grid(row=3, column=0, sticky="ew", pady=(0, 10))
@@ -227,8 +191,7 @@ class BeatTab(ctk.CTkFrame):
         self.setup_label.configure(text="Checking…", text_color=T.DIM)
         for btn in (self.install_btn, self.download_btn):
             btn.configure(state="disabled")
-        checkpoint = self.model_box.get()
-        threading.Thread(target=self._probe_setup, args=(checkpoint,),
+        threading.Thread(target=self._probe_setup, args=(self.checkpoint,),
                          daemon=True).start()
 
     def _probe_setup(self, checkpoint: str) -> None:
@@ -306,18 +269,10 @@ class BeatTab(ctk.CTkFrame):
         self.set_status(msg, T.OK if ok else T.FAIL)
         self._refresh_setup()
 
-    def _model_changed(self) -> None:
-        self._refresh_model_note()
-        self._refresh_setup()
-
-    def _refresh_model_note(self) -> None:
-        choice = self.model_box.get()
-        self.model_note.configure(text=be.CHECKPOINT_NOTES.get(choice, ""))
-
     def _download_checkpoint(self) -> None:
         if self._busy:
             return
-        checkpoint = self.model_box.get()
+        checkpoint = self.checkpoint
         self._busy = True
         self._refresh_setup()
         self.set_status(f"Downloading '{checkpoint}'…", T.DIM)
@@ -550,15 +505,10 @@ class BeatTab(ctk.CTkFrame):
             self.logview.write("Missing: " + ", ".join(self._missing), "fail")
             return
 
-        checkpoint = self.model_box.get()
-        device_choice = self.device_box.get()
-        dbn = bool(self.dbn_switch.get())
-        float16 = bool(self.f16_switch.get())
-        self.cfg.beat_checkpoint = checkpoint
-        self.cfg.beat_device = device_choice
-        self.cfg.beat_dbn = dbn
-        self.cfg.beat_float16 = float16
-        self.cfg.save()
+        checkpoint = self.checkpoint
+        device_choice = self.cfg.beat_device
+        dbn = bool(self.cfg.beat_dbn)
+        float16 = bool(self.cfg.beat_float16)
 
         self._busy = True
         self._refresh_setup()
@@ -729,7 +679,10 @@ class BeatTab(ctk.CTkFrame):
         return True
 
     def after_settings_saved(self) -> None:
-        pass
+        # The model can be changed from Settings, and the Setup line is the
+        # only place this tab names it - so re-probe rather than leave it
+        # reporting the old one's download state.
+        self._refresh_setup()
 
 
 HELP_TEXT = """\
@@ -748,31 +701,33 @@ Re-check.
 1. Browse to a song. Audio is read with ffmpeg (already required by the \
 rest of PAZ), so anything ffmpeg can open works - mp3, wav, flac, m4a, \
 ogg, even the audio track of a video file.
-2. Pick a model and a device, then press Analyze (or F5).
+2. Press Analyze (or F5). There is nothing to configure first.
 
-Models. beat_this publishes about forty checkpoints, but most exist to \
-reproduce tables in its paper rather than to track beats well - single_*, \
-fold*, and the single_no* ablations are all trained on reduced data or \
-deliberately missing a feature, so they are not offered here. What is:
-
-  · best (3 models) - the default. Runs final0, final1 and final2 over the \
-same audio and averages their frame-by-frame probabilities before picking \
-peaks. The three are the same model trained with different random seeds, \
-so averaging them cancels the noise particular to any one of them. Three \
-times the work of a single model and 234 MB of checkpoints, for the most \
-accurate result this tracker can give.
-  · final0 / final1 / final2 - the paper's main model, trained on all data \
-except GTZAN. final0 is what beat_this itself defaults to. The seeds are \
-equivalent in expected quality; there is no best one. 78 MB each.
-  · small0 / small1 / small2 - the same recipe at a tenth the size, much \
-faster and a little less accurate. 8.1 MB each. Worth it on a slow \
-machine or a long file.
-
-DBN postprocessing is off by default and should usually stay off - the \
-paper this tracker comes from is called "Accurate Beat Tracking Without \
-DBN Postprocessing", and the DBN is offered only for comparison.
 3. Once analysis finishes, the table lists every beat with its time and \
 its position in the bar (1 = downbeat).
+
+The model. There is no model to pick, on purpose. beat_this publishes \
+about forty checkpoints, but most exist to reproduce tables in its paper \
+rather than to track beats well - single_*, fold*, and the single_no* \
+ablations are all trained on reduced data or deliberately missing a \
+feature. Of what remains, final0/1/2 are the same model with three \
+different random seeds (equivalent in expected quality, there is no best \
+one) and small0/1/2 are a tenth the size and a little less accurate.
+
+So this tab always runs all three final seeds over the same audio and \
+averages their frame-by-frame probabilities before picking peaks, which \
+cancels the noise particular to any one seed. That is one setting, not a \
+choice between models - you never pick anything. Three times the work of a \
+single model and 234 MB of checkpoints, for the most accurate result this \
+tracker can give. Press "Download model" once in Setup to fetch all three \
+ahead of time; otherwise the first analysis stops to download them.
+
+If you ever do need something else - a slow machine where the small model \
+is worth the accuracy, or a GPU to avoid - Settings > e621 & App > Beat \
+This has the overrides. DBN postprocessing lives there too, and should \
+stay off: the paper this tracker comes from is called "Accurate Beat \
+Tracking Without DBN Postprocessing", so the DBN is there for comparison, \
+not for quality.
 
 Export:
 - Save .beats writes the plain-text format beat_this and Sonic Visualiser \
