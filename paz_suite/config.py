@@ -140,6 +140,9 @@ class AppConfig:
     beat_beat_color: str = "Blue"
     beat_downbeat_color: str = "Red"
     beat_downbeats_only: bool = False
+    # Where the Resolve timeline the markers are for begins. EDL marker
+    # import is absolute, and Resolve starts a new timeline at 01:00:00:00.
+    beat_start_tc: str = "01:00:00:00"
     beat_last_audio_dir: str = ""
     beat_last_export_dir: str = ""
 
