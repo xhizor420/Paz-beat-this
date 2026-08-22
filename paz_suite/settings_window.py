@@ -130,7 +130,8 @@ class SettingsWindow(ctk.CTkToplevel):
         menu = ctk.CTkOptionMenu(
             parent, values=values, width=140, height=30, font=font(11),
             fg_color=T.INPUT, button_color=T.LINE, button_hover_color=T.BTN_HOV,
-            dropdown_fg_color=T.ELEVATED, text_color=T.TEXT)
+            dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT2_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT)
         menu.set(str(getattr(self.cfg, key)))
         menu.grid(row=row, column=1, sticky="w", pady=3)
         self.fields[key] = menu

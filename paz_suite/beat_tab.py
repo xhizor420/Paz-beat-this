@@ -128,7 +128,8 @@ class BeatTab(ctk.CTkFrame):
         self.model_box = ctk.CTkComboBox(
             body, width=110, height=30, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
+            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=list(be.CHECKPOINTS), state="readonly",
             command=lambda _choice: self._refresh_setup())
         self.model_box.set(self.cfg.beat_checkpoint if self.cfg.beat_checkpoint
@@ -140,7 +141,8 @@ class BeatTab(ctk.CTkFrame):
         self.device_box = ctk.CTkComboBox(
             body, width=90, height=30, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
+            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=list(be.DEVICE_CHOICES), state="readonly")
         self.device_box.set(self.cfg.beat_device if self.cfg.beat_device
                             in be.DEVICE_CHOICES else "Auto")
@@ -368,7 +370,8 @@ class BeatTab(ctk.CTkFrame):
         self.fps_box = ctk.CTkComboBox(
             body, width=90, height=30, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
+            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=[str(f) for f in be.FRAME_RATES], state="readonly")
         self.fps_box.set(str(self.cfg.beat_fps) if self.cfg.beat_fps in be.FRAME_RATES
                          else "30.0")
@@ -379,7 +382,8 @@ class BeatTab(ctk.CTkFrame):
         self.beat_color_box = ctk.CTkComboBox(
             body, width=100, height=30, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
+            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=list(be.MARKER_COLORS), state="readonly")
         self.beat_color_box.set(self.cfg.beat_beat_color if self.cfg.beat_beat_color
                                 in be.MARKER_COLORS else "Blue")
@@ -390,7 +394,8 @@ class BeatTab(ctk.CTkFrame):
         self.down_color_box = ctk.CTkComboBox(
             body, width=100, height=30, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
+            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=list(be.MARKER_COLORS), state="readonly")
         self.down_color_box.set(self.cfg.beat_downbeat_color
                                 if self.cfg.beat_downbeat_color in be.MARKER_COLORS

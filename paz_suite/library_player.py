@@ -88,7 +88,8 @@ class InlinePlayer:
             controls, values=["0.5x", "1x", "1.5x", "2x"], width=64, height=26,
             font=font(10), corner_radius=6, fg_color=T.INPUT,
             button_color=T.LINE, button_hover_color=T.BTN_HOV,
-            dropdown_fg_color=T.ELEVATED, text_color=T.TEXT,
+            dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT2_DEEP,
+            dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT,
             command=lambda v: setattr(self.engine, "speed", float(v.rstrip("x"))))
         self.speed_menu.set("1x")
         self.speed_menu.pack(side="left", padx=(0, 5))

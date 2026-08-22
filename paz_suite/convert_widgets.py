@@ -18,7 +18,7 @@ from .theme import T, font
 from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
-from .widgets import PeekWindow
+from .widgets import PeekWindow, popup_menu
 from .player_engine import ClipPlayer, HAS_FFPLAY
 from . import uithread
 
@@ -138,9 +138,7 @@ class QueueTable(ctk.CTkFrame):
                         "<Button-1>", "<Button-3>", "<KeyPress>"):
             self.tree.bind(hide_on, self._peek_hide, add="+")
 
-        self.menu = tk.Menu(self, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
-                             activebackground=T.ACCENT_DEEP, activeforeground=T.TEXT,
-                             bd=0, font=(T.UI, 10))
+        self.menu = popup_menu(self)
         self.tree.bind("<Button-3>", self._on_right_click)
 
     def _build_style(self) -> None:

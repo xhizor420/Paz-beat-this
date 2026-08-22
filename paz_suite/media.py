@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFilter
 
 from .config import THUMB_DIR
+from .theme import T
 from .files import NO_WINDOW
 
 
@@ -241,15 +242,13 @@ def fit_frame(image, box_w: int, box_h: int, mode: str = "contain",
     return canvas.filter(ImageFilter.GaussianBlur(9)) if blur else canvas
 
 
-def round_corners(image, radius: int, bg: str = None):
+def round_corners(image, radius: int, bg: str = ""):
     """Give a frame softly rounded corners against the gallery surface.
-    Defaults to the palette's surface colour rather than a literal - the
-    old hardcoded #161021 was left over from the pre-Neon-Den palette and
-    put a faintly wrong-coloured corner on every tile."""
-    if bg is None:
-        from .theme import T
-        bg = T.SURFACE
-    rgb = tuple(int(bg.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+
+    `bg` is what shows through the cut corners, so it has to be whatever
+    the frame is actually sitting on. Defaults to the theme's card
+    surface, which is where every current caller puts it."""
+    rgb = tuple(int((bg or T.SURFACE).lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
     mask = Image.new("L", image.size, 0)
     ImageDraw.Draw(mask).rounded_rectangle(
         (0, 0, image.width - 1, image.height - 1), radius=radius, fill=255)
@@ -728,39 +727,3 @@ def dhash(image) -> int:
 
 def hamming(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
-
-
-def set_custom_thumb(clip_path: str, image_path: str, width: int = 480) -> str | None:
-    """Use `image_path` as the gallery tile for `clip_path`.
-
-    The gallery reads one JPEG per clip out of THUMB_DIR, keyed by the
-    clip's path, so a custom tile is just that file written from a picture
-    of your own instead of an extracted frame. Nothing else in the app has
-    to know the difference - the grid, the Vault strip and the contact
-    sheet all pick it up automatically.
-
-    Returns an error string on failure, None on success.
-    """
-    try:
-        with Image.open(image_path) as source:
-            image = source.convert("RGB")
-    except Exception as exc:
-        return f"Couldn't read that image: {exc}"
-    if image.width > width:
-        height = max(int(image.height * width / image.width), 1)
-        image = image.resize((width, height), Image.LANCZOS)
-    try:
-        os.makedirs(THUMB_DIR, exist_ok=True)
-        image.save(os.path.join(THUMB_DIR, thumb_key(clip_path)),
-                   "JPEG", quality=88)
-    except OSError as exc:
-        return f"Couldn't save the thumbnail: {exc}"
-    return None
-
-
-def clear_custom_thumb(clip_path: str) -> None:
-    """Drop the stored tile so the next sync re-extracts one from the clip."""
-    try:
-        os.remove(os.path.join(THUMB_DIR, thumb_key(clip_path)))
-    except OSError:
-        pass
