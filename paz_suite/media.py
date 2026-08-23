@@ -23,6 +23,17 @@ from .theme import T
 from .files import NO_WINDOW
 
 
+def _drain(proc) -> None:
+    """Collect a terminated ffmpeg without making anyone wait for it."""
+    try:
+        proc.wait(timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
 def _split_mjpeg(blob: bytes) -> list:
     """Cut an MJPEG pipe into individual JPEGs on the SOI/EOI markers.
     ffmpeg writes them back to back with no container, so the markers are
@@ -373,6 +384,71 @@ class ThumbCache:
         if result.returncode != 0 or not result.stdout:
             return []
         return _split_mjpeg(result.stdout)
+
+    def preview_reel_stream(self, path: str, duration: float, width: int,
+                             on_frames, alive=None, fps: int = REEL_FPS,
+                             seconds: float = REEL_SECONDS) -> None:
+        """The same reel, but handed over as it decodes rather than in one
+        lump at the end.
+
+        Waiting for a whole ten-second reel of 4K before showing anything
+        is seconds of nothing happening after the pointer stops - long
+        enough that the preview looked broken. ffmpeg emits the first
+        frames almost immediately, so they go straight to the caller and
+        playback starts while the rest is still decoding.
+
+        `on_frames(list_of_jpegs, done)` is called from this thread each
+        time whole frames come out of the pipe, and once more with
+        done=True at the end. `alive()`, if given, is polled to abandon a
+        decode whose preview nobody is waiting for any more.
+        """
+        if not path or duration <= 0 or not os.path.exists(path):
+            on_frames([], True)
+            return
+        start = duration * 0.08 if duration > 6 else 0.0
+        span = min(seconds, max(duration - start, 0.5))
+        cmd = [
+            "ffmpeg", "-nostdin", "-v", "error",
+            "-ss", f"{start:.3f}", "-i", path, "-t", f"{span:.3f}",
+            "-an", "-sn",
+            "-vf", f"fps={fps},scale={int(width)}:-2:flags=fast_bilinear",
+            "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "6", "-",
+        ]
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, bufsize=0,
+                                    creationflags=NO_WINDOW)
+        except OSError:
+            on_frames([], True)
+            return
+
+        buffer = b""
+        try:
+            while True:
+                if alive is not None and not alive():
+                    break
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                buffer += chunk
+                # Only whole JPEGs are handed on; a partial tail stays in
+                # the buffer until its end marker turns up.
+                cut = buffer.rfind(b"\xff\xd9")
+                if cut == -1:
+                    continue
+                ready, buffer = buffer[:cut + 2], buffer[cut + 2:]
+                frames = _split_mjpeg(ready)
+                if frames:
+                    on_frames(frames, False)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+            threading.Thread(target=_drain, args=(proc,), daemon=True).start()
+        on_frames([], True)
 
     def frame(self, path: str, pos: float, width: int = 640,
               fast: bool = False) -> bytes | None:

@@ -1381,7 +1381,7 @@ class LibraryTab(ctk.CTkFrame):
     # Decoded reels are kept for the last few clips hovered, so going back
     # to a tile you just left starts instantly instead of decoding again.
 
-    PREVIEW_DWELL_MS = 320     # rest this long before a tile starts
+    PREVIEW_DWELL_MS = 140     # rest this long before a tile starts
     # Clips worth of decoded frames to keep. Held down as the preview
     # window grew, so the total frames in memory stays about where it was.
     REEL_CACHE       = 4
@@ -1425,19 +1425,43 @@ class LibraryTab(ctk.CTkFrame):
                          args=(rec, index, token), daemon=True).start()
 
     def _preview_decode(self, rec: Rec, index: int, token: int) -> None:
+        """Decode on a worker thread, handing frames to the UI as they
+        appear instead of when the whole reel is done. A ten-second reel of
+        4K takes seconds to decode in full; the first frames are ready
+        almost at once, and that is the difference between a preview that
+        starts when you stop moving and one that looks broken."""
         fps = self._preview_fps(rec)
-        reel = self.frames.preview_reel(rec.path, rec.duration, self.CARD_W, fps=fps)
-        self.ui(self._preview_ready, rec.path, index, reel, fps, token)
+        self.frames.preview_reel_stream(
+            rec.path, rec.duration, self.CARD_W,
+            on_frames=lambda frames, done: self.ui(
+                self._preview_frames, rec.path, index, frames, done, fps, token),
+            alive=lambda: token == self._pv_token,
+            fps=fps)
 
-    def _preview_ready(self, path: str, index: int, reel: list, fps: int,
-                        token: int) -> None:
-        if reel:
-            self._reels[path] = {"frames": reel, "photos": {}, "fps": fps}
+    def _preview_frames(self, path: str, index: int, frames: list, done: bool,
+                         fps: int, token: int) -> None:
+        reel = self._reels.get(path)
+        if reel is None:
+            reel = {"frames": [], "photos": {}, "fps": fps, "done": False}
+            self._reels[path] = reel
             while len(self._reels) > self.REEL_CACHE:
-                self._reels.pop(next(iter(self._reels)))
-        if token != self._pv_token or self._pv_index != index or not reel:
+                oldest = next(iter(self._reels))
+                if oldest != path:
+                    self._reels.pop(oldest)
+                else:
+                    break
+        reel["frames"].extend(frames)
+        if done:
+            reel["done"] = True
+            if not reel["frames"]:
+                self._reels.pop(path, None)
+                return
+        if token != self._pv_token or self._pv_index != index:
             return
-        self._preview_play(index, self._reels[path], token)
+        # Start on the first batch; later batches just extend what is
+        # already playing, so nothing restarts mid-preview.
+        if frames and len(reel["frames"]) == len(frames):
+            self._preview_play(index, reel, token)
 
     def _preview_play(self, index: int, reel: dict, token: int) -> None:
         if token != self._pv_token or self._pv_index != index:
@@ -1447,7 +1471,9 @@ class LibraryTab(ctk.CTkFrame):
         count = len(reel["frames"])
         if not count:
             return
-        i = self._pv_step % count
+        # Only wrap once the whole reel is in. Wrapping early would loop
+        # the first second over and over while the rest is still decoding.
+        i = self._pv_step % count if reel.get("done") else min(self._pv_step, count - 1)
         frame = self._reel_photo(reel, i)
         if frame is not None:
             self.gallery.itemconfigure(f"im{index}", image=frame)

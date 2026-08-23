@@ -42,6 +42,40 @@ from .media import read_exact, has_ffplay
 HAS_FFPLAY = has_ffplay()
 
 
+def _reap(proc) -> None:
+    """Stop `proc` without waiting for it here.
+
+    terminate() returns immediately but wait() does not, and a 4K ffmpeg
+    can take the better part of a second to actually go away. Every seek,
+    every pause and every change of clip went through two of those waits
+    (video and audio), on the UI thread, which is why clicking the seek bar
+    froze the window and swallowed the click. The process still gets
+    collected - just on a thread nobody is looking at.
+    """
+    if proc is None:
+        return
+
+    def run():
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=3)
+        except (OSError, subprocess.SubprocessError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        # The pipes are deliberately left alone. A reader thread may still
+        # be blocked inside read() on this same file object, and closing it
+        # underneath that thread aborts the interpreter outright. The
+        # process dying gives the reader a clean EOF, and subprocess closes
+        # the descriptors when the object is collected.
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 class ClipPlayer:
 
     # How much decoded video to keep buffered ahead. Half a second absorbs
@@ -88,7 +122,12 @@ class ClipPlayer:
         self._canvas_item = None
         self._decoded = 0
         # wall-clock pacing
-        self._clock_t0 = 0.0        # monotonic time this playback run started
+        # None until the decoder hands over its first frame - see
+        # _arm_clock. Audio is held back until then so the two start
+        # together instead of sound running ahead of a black canvas.
+        self._clock_t0 = None
+        self._wants_audio = False
+        self._waiting_since = 0.0
         self._clock_pos = 0.0       # source position that _clock_t0 corresponds to
         self._frames_shown = 0      # frames consumed since _clock_t0 (incl. dropped)
         self._starved_at = 0.0      # when the queue first came up empty
@@ -137,12 +176,12 @@ class ClipPlayer:
         if self.proc is None:
             if self._spawn(self.position) is False:
                 return
-        elif self.audio_proc is None:
+        elif self.audio_proc is None and self._clock_t0 is not None:
             self._spawn_audio(self.position)
         self.playing = True
         if self.on_state:
             self.on_state(True)
-        self._start_clock(self.position)
+        self._arm_clock(self.position)
         self._schedule()
 
     def pause(self) -> None:
@@ -181,7 +220,7 @@ class ClipPlayer:
         # landed on instead.
         if self._spawn(self.position, with_audio=was_playing) is False:
             return
-        self._start_clock(self.position)
+        self._arm_clock(self.position)
         if was_playing:
             self.playing = True
             self._schedule()
@@ -215,11 +254,15 @@ class ClipPlayer:
         return max(4, min(by_time, by_bytes, 90))
 
     def _spawn(self, position: float, with_audio: bool = True):
-        self._kill()
-        if with_audio:
-            self._spawn_audio(position)
+        # Bump first: it invalidates every previous reader's alive() check
+        # before the old process is even asked to stop, so no frame from
+        # the old position can reach the new queue.
         self._token += 1
         token = self._token
+        self._kill()
+        # Held until the first frame arrives (_begin_clock). Starting it
+        # here is what let sound run ahead of the picture.
+        self._wants_audio = bool(with_audio)
         # The whole point of the pool is 4K/60 - capping decode below the
         # source rate here was making 60fps footage play back at half its
         # actual smoothness. self.fps is already clamped to 60 in load().
@@ -302,29 +345,13 @@ class ClipPlayer:
             self.audio_proc = None
 
     def _kill_audio(self):
-        if self.audio_proc is not None:
-            try:
-                self.audio_proc.terminate()
-                self.audio_proc.wait(timeout=1)
-            except (OSError, subprocess.SubprocessError):
-                try:
-                    self.audio_proc.kill()
-                except OSError:
-                    pass
-            self.audio_proc = None
+        _reap(self.audio_proc)
+        self.audio_proc = None
 
     def _kill(self):
         self._kill_audio()
-        if self.proc is not None:
-            try:
-                self.proc.terminate()
-                self.proc.wait(timeout=1)
-            except (OSError, subprocess.SubprocessError):
-                try:
-                    self.proc.kill()
-                except OSError:
-                    pass
-            self.proc = None
+        _reap(self.proc)
+        self.proc = None
 
     def _fail(self, message: str):
         self.playing = False
@@ -349,11 +376,29 @@ class ClipPlayer:
 
     # ── pacing ──────────────────────────────────────────────────────────
 
-    def _start_clock(self, position: float) -> None:
-        self._clock_t0 = time.monotonic()
+    def _arm_clock(self, position: float) -> None:
+        """Get ready to play from `position`, but don't start counting yet.
+
+        The clock used to start the instant play() was called, while
+        ffmpeg was still opening the file. On a 4K clip that is easily
+        half a second before the first frame exists - and the audio was
+        already running, so sound led picture by however long the decoder
+        took, every time. Counting starts when there is actually something
+        to show; see _begin_clock.
+        """
+        self._clock_t0 = None
         self._clock_pos = position
         self._frames_shown = 0
         self._starved_at = 0.0
+        self._waiting_since = time.monotonic()
+
+    def _begin_clock(self) -> None:
+        """First frame is in hand: start the clock and the sound together."""
+        self._clock_t0 = time.monotonic()
+        self._frames_shown = 0
+        if self._wants_audio:
+            self._spawn_audio(self._clock_pos)
+            self._wants_audio = False
 
     def _period(self) -> float:
         """Wall-clock seconds between frames at the current speed."""
@@ -361,6 +406,11 @@ class ClipPlayer:
 
     def _schedule(self):
         if not self.playing:
+            return
+        if self._clock_t0 is None:
+            # Still waiting on the decoder's first frame. Poll briskly so
+            # playback begins the moment it lands.
+            self._after = self.canvas.after(5, self._tick)
             return
         # Deadline for the *next* frame, measured from the start of this
         # run - not "now + one frame", which is what accumulated drift.
@@ -372,8 +422,31 @@ class ClipPlayer:
         self._after = None
         if not self.playing:
             return
-        period = self._period()
         now = time.monotonic()
+
+        if self._clock_t0 is None:
+            # Waiting for frame one. Nothing is late yet, so no catch-up
+            # logic applies - take a frame if there is one and start.
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                if now - self._waiting_since > self.STARVE_TIMEOUT:
+                    self._fail("Could not decode this file")
+                else:
+                    self._after = self.canvas.after(5, self._tick)
+                return
+            if item is None:
+                self._handle_eof()
+                return
+            self._begin_clock()
+            self._frames_shown = 1
+            self._blit(item)
+            if self.on_tick:
+                self.on_tick(self.position)
+            self._schedule()
+            return
+
+        period = self._period()
         # How many frames should already have been shown by now. If the
         # display fell behind, pull (and discard) the stale ones so the
         # frame we actually paint is the one that belongs on screen right
@@ -428,7 +501,7 @@ class ClipPlayer:
         if self.loop and self.path is not None:
             self.position = 0.0
             self._spawn(0.0)
-            self._start_clock(0.0)
+            self._arm_clock(0.0)
             self._schedule()
             return
         self.pause()
