@@ -2278,6 +2278,22 @@ class LibraryTab(ctk.CTkFrame):
             gone = [p for p in known if p not in on_disk]
             todo = [p for p, sig in on_disk.items() if known.get(p) != sig]
 
+            # A sync that finds nothing is not the same as a library with
+            # nothing in it. An unmounted drive, a renamed folder, a drive
+            # letter that came back as something else - all of them look
+            # exactly like "every file was deleted", and the old code
+            # believed it: every row dropped and every thumbnail removed
+            # from disk, silently, in one press. Losing an index of ten
+            # thousand clips and the hours of thumbnailing behind it to a
+            # cable that came loose is not a risk worth taking, so a
+            # deletion this large has to be asked for.
+            refused = self._refuse_mass_delete(gone, known, on_disk)
+            if refused:
+                self.ui(self.set_status, refused, T.FAIL)
+                self.ui(self._sync_blocked, refused)
+                gone = []
+                todo = []
+
             for path in gone:
                 conn.execute("DELETE FROM files WHERE path=?", (path,))
                 try:
@@ -2329,6 +2345,38 @@ class LibraryTab(ctk.CTkFrame):
         finally:
             conn.close()
             self.ui(self._sync_done, len(gone))
+
+    # Below this many clips the library is small enough that a wrong
+    # answer costs minutes, not an evening, and the check would only get
+    # in the way while things are being set up.
+    SYNC_GUARD_FLOOR = 40
+    SYNC_GUARD_SHARE = 0.30
+
+    def _refuse_mass_delete(self, gone: list, known: dict, on_disk: dict):
+        """A reason to refuse this sync, or None to let it run."""
+        if not known or not gone:
+            return None
+        if not self.library_dirs():
+            return ("Sync stopped: the library folder isn't reachable. "
+                    "Nothing was changed - check the drive is connected, "
+                    "then try again.")
+        if len(known) < self.SYNC_GUARD_FLOOR:
+            return None
+        if not on_disk:
+            return (f"Sync stopped: the folders are reachable but hold no "
+                    f"matching files, which would have removed all "
+                    f"{len(known):,} clips. Nothing was changed.")
+        if len(gone) >= len(known) * self.SYNC_GUARD_SHARE:
+            share = len(gone) / len(known) * 100
+            return (f"Sync stopped: {len(gone):,} of {len(known):,} clips "
+                    f"({share:.0f}%) are no longer where the library expects "
+                    f"them. That usually means a folder moved rather than "
+                    f"the clips being gone. Nothing was changed - use "
+                    f"Rebuild everything if the move was deliberate.")
+        return None
+
+    def _sync_blocked(self, reason: str) -> None:
+        self.toaster.show(reason, "fail", ms=15000)
 
     def _sync_done(self, removed: int):
         self.busy = False

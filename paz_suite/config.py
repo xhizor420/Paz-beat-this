@@ -94,14 +94,12 @@ class AppConfig:
     theater: bool = False
     last_search: str = ""
     last_sort: str = ""
-    last_rating: str = "All"
     detail_open: dict = field(default_factory=dict)
     sidebar_group_open: dict = field(default_factory=dict)
     sort: str = "Newest"
     hidden_tags: list = field(default_factory=list)
 
     # ── Library: player ──────────────────────────────────────────────────
-    player_height: int = 540
     player_loop: bool = True
     player_volume: int = 80
     player_muted: bool = False
