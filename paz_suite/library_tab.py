@@ -61,6 +61,11 @@ class LibraryTab(ctk.CTkFrame):
         self._project_colors: dict = {}
         self.page = 0
         self.selected: Rec | None = None
+        # Paths rather than records: the record objects are rebuilt on
+        # every library load, so holding them would silently orphan a
+        # selection the moment tags were fetched.
+        self.marked: set = set()
+        self._mark_anchor: int | None = None
 
         self.busy = False
         self._page_token = 0
@@ -401,6 +406,9 @@ class LibraryTab(ctk.CTkFrame):
         self._info_stacked = False
         self.quick_chips = {}
         for key, text, token in (
+                # Unused leads: on a library this size the question is
+                # almost always "what haven't I already spent".
+                ("unused", "Never used", "is:unused"),
                 ("untagged", "Untagged", "is:untagged"),
                 ("noid", "No post ID", "is:noid"),
                 ("4k", "4K ✓", "is:4k"),
@@ -511,6 +519,8 @@ class LibraryTab(ctk.CTkFrame):
     def _gal_background_click(self, event):
         if not self.gallery.find_withtag("current"):
             self.selected = None
+            self.marked.clear()
+            self._mark_anchor = None
             self._restyle_cards()
             self._render_details()
 
@@ -602,8 +612,8 @@ class LibraryTab(ctk.CTkFrame):
             return b
 
         dbtn("Folder", self._reveal)
-        dbtn("→ Resolve", lambda: self.send_to_resolve(
-            [self.selected] if self.selected else []), T.ACCENT3, 92)
+        dbtn("→ Resolve", lambda: self.send_to_resolve(self.targets()),
+             T.ACCENT3, 92)
         self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 58)
         dbtn("Grid", self._grid, T.ACCENT, 62)
         dbtn("Copy name", lambda: self._copy(self.selected.name)
@@ -680,7 +690,9 @@ class LibraryTab(ctk.CTkFrame):
     def key_escape(self, event):
         if self.is_typing(event):
             return
-        if self.player.playing:
+        if self.marked:
+            self.clear_marks()
+        elif self.player.playing:
             self.player.pause()
         elif self.selected:
             self.selected = None
@@ -845,6 +857,7 @@ class LibraryTab(ctk.CTkFrame):
         if not getattr(self, "quick_chips", None) or not self.records:
             return
         counts = {
+            "unused": sum(1 for r in self.records if not r.used_projects),
             "untagged": sum(1 for r in self.records if not r.tags),
             "noid": sum(1 for r in self.records if not r.pid),
             "4k": sum(1 for r in self.records if r.premium),
@@ -1407,7 +1420,12 @@ class LibraryTab(ctk.CTkFrame):
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
 
-        canvas.tag_bind(tag, "<Button-1>", lambda e, r=rec: self._select(r))
+        canvas.tag_bind(tag, "<Button-1>",
+                        lambda e, r=rec, i=index: self._card_click(e, r, i))
+        canvas.tag_bind(tag, "<Control-Button-1>",
+                        lambda e, r=rec, i=index: self._card_click(e, r, i))
+        canvas.tag_bind(tag, "<Shift-Button-1>",
+                        lambda e, r=rec, i=index: self._card_click(e, r, i))
         canvas.tag_bind(tag, "<Double-Button-1>", lambda e, r=rec: self._select_and_play(r))
         canvas.tag_bind(tag, "<Button-3>", lambda e, r=rec: self._card_menu(e, r))
         canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
@@ -1417,6 +1435,13 @@ class LibraryTab(ctk.CTkFrame):
         """(colour, width) for a card's border. Selection outranks the
         project mark, which outranks hover - you need to know which card
         you are acting on before you need to know where it has been."""
+        # Selection cannot be "a coloured border": project marks are
+        # coloured borders too, and a project whose colour happens to
+        # match makes the two indistinguishable. Selected cards get the
+        # Library's own violet at a heavier weight AND a tick in the
+        # corner - see _draw_badges - so it reads even at a glance.
+        if rec.path in self.marked:
+            return T.ACCENT2, 3
         if self.selected and self.selected.path == rec.path:
             return T.ACCENT, 2
         if rec.used_projects and rec.used_color:
@@ -1430,6 +1455,7 @@ class LibraryTab(ctk.CTkFrame):
             colour, width = self._card_outline(
                 slot["rec"], hover=(index == self._hover_index))
             self.gallery.itemconfigure(f"cardline{index}", outline=colour, width=width)
+            self._draw_tick(index, slot["rec"], slot)
 
     def _set_hover(self, index):
         if index == self._hover_index:
@@ -1673,17 +1699,39 @@ class LibraryTab(ctk.CTkFrame):
         canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
                            font=(T.MONO, pt(8)), anchor="w", tags=(tag,))
 
+    def _draw_tick(self, index: int, rec: Rec, slot: dict) -> None:
+        """The selection tick, on its own tag so selection can be repainted
+        in place. Redrawing the whole page instead would send the gallery
+        back to the top, which is no way to build a selection."""
+        canvas = self.gallery
+        canvas.delete(f"tick{index}")
+        if rec.path not in self.marked:
+            return
+        x, y = slot["x"], slot["y"]
+        size = px(24)
+        tags = (slot["tag"], f"tick{index}")
+        canvas.create_oval(x + px(6), y + px(6), x + px(6) + size,
+                           y + px(6) + size, fill=T.ACCENT2, outline=T.BG,
+                           width=2, tags=tags)
+        canvas.create_text(x + px(6) + size // 2, y + px(6) + size // 2 + 1,
+                           text="✓", fill=T.BG, font=(T.UI, pt(12), "bold"),
+                           tags=tags)
+
     def _draw_badges(self, index: int, rec: Rec, slot: dict) -> None:
         canvas = self.gallery
         tag = slot["tag"]
         x, y = slot["x"], slot["y"]
 
+        self._draw_tick(index, rec, slot)
+
         # Top left: what the pipeline cares about. Green once a clip is
-        # edit-pool quality, dim while it still needs an upscale.
+        # edit-pool quality, dim while it still needs an upscale. Sits
+        # below the top edge so the selection tick owns that corner.
         spec = f"{rec.height}p" if rec.height else "--"
         if rec.fps:
             spec += f"·{rec.fps:.0f}"
-        self._pill(tag, x + 5, y + 5, spec, T.OK if rec.premium else T.DIM)
+        self._pill(tag, x + px(5), y + self.IMG_H - px(38), spec,
+                   T.OK if rec.premium else T.DIM)
 
         # Top right: the rating, as its own colour. Explicit is the loudest
         # of the three because that is what gets scanned for.
@@ -1722,10 +1770,71 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── selection & details ─────────────────────────────────────────────────
 
+    # ── picking clips out ───────────────────────────────────────────────
+    #
+    # One click still selects one clip and fills the inspector - that is
+    # what the tab is for most of the time. Ctrl and Shift build a set on
+    # top of that, and every tool that used to act on "the selected clip"
+    # or "everything on this page" acts on the set when there is one.
+
+    def _card_click(self, event, rec: Rec, index: int):
+        ctrl = bool(event.state & 0x0004)
+        shift = bool(event.state & 0x0001)
+        if ctrl:
+            if rec.path in self.marked:
+                self.marked.discard(rec.path)
+            else:
+                self.marked.add(rec.path)
+            self._mark_anchor = index
+        elif shift and self._mark_anchor is not None:
+            low, high = sorted((self._mark_anchor, index))
+            for slot in self._layout[low:high + 1]:
+                self.marked.add(slot["rec"].path)
+        else:
+            self.marked.clear()
+            self._mark_anchor = index
+        self._select(rec)
+
+    def targets(self, fallback: Rec | None = None) -> list:
+        """What an action should act on: the marked set if there is one,
+        otherwise the single clip in hand."""
+        if self.marked:
+            picked = [self.by_path[p] for p in self.marked if p in self.by_path]
+            if picked:
+                return picked
+        rec = fallback or self.selected
+        return [rec] if rec else []
+
+    def mark_all_on_page(self, event=None):
+        # Ctrl+A inside a text field means "select all this text", and the
+        # binding that brings us here is on the window, not the gallery.
+        if event is not None and self.is_typing(event):
+            return
+        self.marked = {slot["rec"].path for slot in self._layout}
+        self._mark_anchor = 0
+        self._restyle_cards()
+        self._report_marks()
+        return "break"
+
+    def clear_marks(self) -> None:
+        if not self.marked:
+            return
+        self.marked.clear()
+        self._mark_anchor = None
+        self._restyle_cards()
+        self.set_status(self.F("idle"), T.FAINT)
+
+    def _report_marks(self) -> None:
+        count = len(self.marked)
+        if count:
+            self.set_status(f"{count} clip{'s' if count != 1 else ''} selected "
+                            "· right-click for what to do with them", T.ACCENT2)
+
     def _select(self, rec: Rec):
         self.selected = rec
         self._restyle_cards()
         self._render_details()
+        self._report_marks()
 
     def _select_and_play(self, rec: Rec):
         self._select(rec)
@@ -1863,8 +1972,20 @@ class LibraryTab(ctk.CTkFrame):
             menu.grab_release()
 
     def _card_menu(self, event, rec: Rec):
-        self._select(rec)
+        # Right-clicking inside a selection acts on the selection; right-
+        # clicking outside one moves to that clip first, which is what a
+        # file manager does and what people expect.
+        if rec.path not in self.marked:
+            self.marked.clear()
+            self._select(rec)
+        picked = self.targets(rec)
+        many = len(picked) > 1
+        what = f"{len(picked)} clips" if many else rec.name
+
         menu = popup_menu(self.root)
+        if many:
+            menu.add_command(label=f"{len(picked)} clips selected", state="disabled")
+            menu_rule(menu)
         menu.add_command(label="Play here", command=lambda: self._select_and_play(rec))
         menu.add_command(label="Open externally", command=lambda: open_file(rec.path))
         menu.add_command(label="Show in folder", command=lambda: open_in_explorer(rec.path))
@@ -1873,27 +1994,34 @@ class LibraryTab(ctk.CTkFrame):
                              command=lambda: self._open_url(rec))
         menu_rule(menu)
         page = self.page_recs()
-        if rec.pid:
+        if many or rec.pid:
             menu.add_command(
-                label="Fetch e621 tags for this clip",
-                command=lambda: self.fetch_for([rec], rec.name))
+                label=f"Fetch e621 tags for {what}",
+                command=lambda: self.fetch_for(picked, what))
         else:
             menu.add_command(label="No post ID - nothing to fetch",
                              state="disabled")
         untagged = [r for r in page if r.pid and not r.tags]
-        if untagged:
+        if untagged and not many:
             menu.add_command(
                 label=f"Fetch tags for the {len(untagged)} untagged here",
                 command=lambda: self.fetch_for(untagged,
                                                f"{len(untagged)} untagged"))
-        menu.add_command(label=f"Fetch tags for all {len(page)} results",
-                         command=lambda: self.fetch_for(page,
-                                                        f"{len(page)} results"))
+        if not many:
+            menu.add_command(label=f"Fetch tags for all {len(page)} results",
+                             command=lambda: self.fetch_for(page,
+                                                            f"{len(page)} results"))
         menu_rule(menu)
-        menu.add_command(label="Add to Resolve",
-                         command=lambda: self.send_to_resolve([rec]))
-        menu.add_command(label=f"Add these {len(page)} results to Resolve",
-                         command=lambda: self.send_to_resolve(page))
+        menu.add_command(label=f"Add {what} to Resolve",
+                         command=lambda: self.send_to_resolve(picked))
+        if not many:
+            menu.add_command(label=f"Add these {len(page)} results to Resolve",
+                             command=lambda: self.send_to_resolve(page))
+        menu_rule(menu)
+        menu.add_command(label="Select everything on this page",
+                         command=self.mark_all_on_page)
+        if self.marked:
+            menu.add_command(label="Clear selection", command=self.clear_marks)
         menu_rule(menu)
 
         used_menu = popup_menu(menu)
@@ -1903,11 +2031,13 @@ class LibraryTab(ctk.CTkFrame):
         finally:
             conn.close()
         for name, _color, _count, _created in projects:
-            if name in rec.used_projects:
+            if not many and name in rec.used_projects:
                 continue
-            used_menu.add_command(label=name, command=lambda n=name: self._mark_used(rec, n))
-        used_menu.add_command(label="New project…", command=lambda: self._mark_used_new(rec))
-        menu.add_cascade(label="Mark as used…", menu=used_menu)
+            used_menu.add_command(label=name,
+                                  command=lambda n=name: self._mark_used(picked, n))
+        used_menu.add_command(label="New project…",
+                              command=lambda: self._mark_used_new(picked))
+        menu.add_cascade(label=f"Mark {what} as used…", menu=used_menu)
         for name in rec.used_projects:
             menu.add_command(label=f"Remove from '{name}'",
                              command=lambda n=name: self._unmark_used(rec, n))
@@ -2031,17 +2161,32 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── Vault marks (right-click "used in a project") ───────────────────
 
-    def _mark_used(self, rec: Rec, project: str) -> None:
+    def _mark_used(self, recs, project: str) -> None:
+        recs = recs if isinstance(recs, list) else [recs]
+        paths = [r.path for r in recs if r]
+        if not paths:
+            return
         conn = db_connect()
         try:
-            vault_mark(conn, [rec.path], project)
+            vault_mark(conn, paths, project)
         finally:
             conn.close()
-        self._resync_after_vault_change(rec.path)
-        self.set_status(f"Marked as used in '{project}'.", T.OK)
+        for path in paths:
+            self._resync_after_vault_change(path)
+        count = len(paths)
+        self.set_status(f"Marked {count} clip{'s' if count != 1 else ''} as used "
+                        f"in '{project}'.", T.OK)
 
-    def _mark_used_new(self, rec: Rec) -> None:
-        dialog = ctk.CTkInputDialog(text="Name this project:", title="Mark as used")
+    def _mark_used_new(self, recs) -> None:
+        recs = recs if isinstance(recs, list) else [recs]
+        count = len(recs)
+        dialog = ctk.CTkInputDialog(
+            title="Mark as used",
+            text=f"Name a project for {count} clip{'s' if count != 1 else ''}:",
+            fg_color=T.SURFACE, text_color=T.TEXT,
+            button_fg_color=T.ACCENT2_DEEP, button_hover_color=T.BTN_HOV,
+            button_text_color=T.ACCENT2, entry_fg_color=T.INPUT,
+            entry_border_color=T.LINE, entry_text_color=T.TEXT)
         name = (dialog.get_input() or "").strip()
         if not name:
             return
@@ -2051,7 +2196,7 @@ class LibraryTab(ctk.CTkFrame):
             vault_ensure_project(conn, name, T.PROJECT_PALETTE[existing % len(T.PROJECT_PALETTE)])
         finally:
             conn.close()
-        self._mark_used(rec, name)
+        self._mark_used(recs, name)
 
     def _unmark_used(self, rec: Rec, project: str) -> None:
         conn = db_connect()

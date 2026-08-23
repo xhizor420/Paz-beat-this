@@ -397,6 +397,9 @@ class PazApp:
             self.convert.key_stop() if self._active() == "Convert"
             else self.library.key_escape(e) if self._active() == "Library"
             else None))
+        root.bind("<Control-a>", lambda e: (
+            self.library.mark_all_on_page(e) if self._active() == "Library"
+            else None))
         root.bind("<space>", lambda e: (
             self.convert.key_space(e) if self._active() == "Convert"
             else self.library.key_space(e) if self._active() == "Library"

@@ -166,6 +166,13 @@ def term_hits(rec: Rec, kind: str, value: str) -> bool:
             return rec.orientation == "widescreen"
         if value == "square":
             return rec.orientation == "square"
+        # "Never gone into any project" - the clips still worth reaching
+        # for. `-used:any` says the same thing; this is the version that
+        # fits on a chip.
+        if value in ("unused", "fresh", "new"):
+            return not rec.used_projects
+        if value == "used":
+            return bool(rec.used_projects)
         return False
     if kind == "artist":
         return any(value == a or fnmatch.fnmatch(a, value) for a in rec.artists)
