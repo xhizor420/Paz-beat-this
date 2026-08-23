@@ -18,7 +18,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, lens_photo, LIBRARY_LABELS
+from .theme import T, font, lens_photo, pt, px, LIBRARY_LABELS
 from .format import fmt_len, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
@@ -29,6 +29,7 @@ from .e621 import E621_POST
 from .library_db import (
     db_connect, Rec, parse_query, rec_matches, SORTS,
     vault_marks_by_path, vault_unmark, vault_projects_list, vault_ensure_project, vault_mark,
+    manual_tags_by_path, manual_tag_set, manual_tag_add, clean_tags,
 )
 from .library_player import InlinePlayer
 from . import uithread
@@ -89,10 +90,10 @@ class LibraryTab(ctk.CTkFrame):
         self._apply_brand()
         import tkinter.font as tkfont
         self._card_font = tkfont.Font(family=T.UI, size=10)
-        self._badge_font = tkfont.Font(family=T.MONO, size=8)
+        self._badge_font = tkfont.Font(family=T.MONO, size=pt(8))
         self._spec_font = tkfont.Font(family=T.MONO, size=9)
-        self._chip_font = tkfont.Font(family=T.UI, size=11)
-        self._quick_font = tkfont.Font(family=T.UI, size=10)
+        self._chip_font = tkfont.Font(family=T.UI, size=pt(11))
+        self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
         self.folders_label.configure(text=self._folders_summary())
         self._restore_state()
         self._load_library()
@@ -809,6 +810,7 @@ class LibraryTab(ctk.CTkFrame):
             "SELECT path,name,folder,pid,size,mtime,duration,width,height,fps "
             "FROM files").fetchall()
         vault_marks = vault_marks_by_path(conn)
+        manual = manual_tags_by_path(conn)
         self._project_colors = {name: color for name, color, _n, _t
                                 in vault_projects_list(conn)}
         conn.close()
@@ -850,6 +852,14 @@ class LibraryTab(ctk.CTkFrame):
             alt_path = premium.get(rec.folder, {}).get(rec.name)
             rec.premium = rec.height >= 2000 or alt_path is not None
             rec.premium_path = alt_path or ""
+            # Hand-typed tags sit alongside anything fetched, so a clip
+            # with no post ID is still searchable and no longer counts as
+            # untagged. Kept separately as well so the tag editor knows
+            # which of a clip's tags are yours to change.
+            rec.manual = manual.get(rec.path, set())
+            if rec.manual:
+                rec.tags = set(rec.tags) | rec.manual
+                rec.compute_named()
             marks = vault_marks.get(rec.path)
             if marks:
                 rec.used_projects = [project for project, _color, _t in marks]
@@ -1159,11 +1169,21 @@ class LibraryTab(ctk.CTkFrame):
     # ── gallery ─────────────────────────────────────────────────────────────
 
     CARD_W, IMG_H = 224, 126
-    CAP_H, GAP = 42, 10
+    GAP = 10
+
+    @property
+    def CAP_H(self) -> int:
+        """Caption strip height. Grows with the text scale - at 200% the
+        two lines of caption no longer fit in a fixed 42px band."""
+        return px(42)
 
     @property
     def card_width(self) -> int:
-        return max(120, min(int(self.cfg.card_width), 480))
+        """The tile width actually drawn. The setting is in unscaled
+        pixels - what it looks like at 100% - so raising the display scale
+        grows the tiles along with the text in them, instead of leaving
+        224px tiles surrounded by text that no longer fits."""
+        return px(max(120, min(int(self.cfg.card_width), 480)))
 
     def _leave_grid(self, _event=None):
         self._set_hover(None)
@@ -1259,11 +1279,11 @@ class LibraryTab(ctk.CTkFrame):
 
         if not self.records:
             canvas.create_text(24, 28, text=self.F("empty_db"), fill=T.FAINT,
-                               font=(T.UI, 12), anchor="nw", width=width - 60)
+                               font=(T.UI, pt(12)), anchor="nw", width=width - 60)
             return
         if not batch:
             canvas.create_text(24, 28, text=self.F("no_results"), fill=T.FAINT,
-                               font=(T.UI, 12), anchor="nw")
+                               font=(T.UI, pt(12)), anchor="nw")
             return
 
         cell_h = self.IMG_H + self.CAP_H + self.GAP
@@ -1297,7 +1317,7 @@ class LibraryTab(ctk.CTkFrame):
         canvas.create_rectangle(x, y, x + self.CARD_W, y + self.IMG_H,
                                 fill=T.INPUT, outline="", tags=(tag, "well"))
         canvas.create_text(x + self.CARD_W // 2, y + self.IMG_H // 2, text="…",
-                           fill=T.FAINT, font=(T.UI, 11), tags=(tag, f"ph{index}"))
+                           fill=T.FAINT, font=(T.UI, pt(11)), tags=(tag, f"ph{index}"))
         colour, width = self._card_outline(rec, hover=False)
         canvas.create_rectangle(x, y, x + self.CARD_W, bottom, fill="",
                                 outline=colour, width=width, tags=(tag, f"cardline{index}"))
@@ -1308,21 +1328,21 @@ class LibraryTab(ctk.CTkFrame):
         # faster over the frame than as another line of grey text, and it
         # buys the name a full line instead of sharing one with a dot.
         name = rec.pid or os.path.splitext(rec.name)[0]
-        canvas.create_text(x + 8, y + self.IMG_H + 15,
+        canvas.create_text(x + px(8), y + self.IMG_H + px(15),
                            text=self._ellipsize(name, x + self.CARD_W - 10),
-                           fill=T.TEXT, font=(T.MONO, 10), anchor="w", tags=(tag, f"tt{index}"))
+                           fill=T.TEXT, font=(T.MONO, pt(10)), anchor="w", tags=(tag, f"tt{index}"))
 
         score = fmt_score(rec.score)
         score_w = (self._spec_font.measure(f"▲{score}") + 10) if score else 0
         if rec.artists:
-            canvas.create_text(x + 8, y + self.IMG_H + 31,
+            canvas.create_text(x + px(8), y + self.IMG_H + px(31),
                                text=self._ellipsize(rec.artists[0],
                                                     x + self.CARD_W - score_w - 12),
-                               fill=T.ACCENT2, font=(T.UI, 10), anchor="w", tags=(tag,))
+                               fill=T.ACCENT2, font=(T.UI, pt(10)), anchor="w", tags=(tag,))
         if score:
-            canvas.create_text(x + self.CARD_W - 8, y + self.IMG_H + 31, text=f"▲{score}",
+            canvas.create_text(x + self.CARD_W - px(8), y + self.IMG_H + px(31), text=f"▲{score}",
                                fill=T.OK if rec.score >= 1000 else T.FAINT,
-                               font=(T.MONO, 9), anchor="e", tags=(tag,))
+                               font=(T.MONO, pt(9)), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
 
@@ -1554,7 +1574,7 @@ class LibraryTab(ctk.CTkFrame):
         canvas.delete(f"ph{index}")
         if not data:
             canvas.create_text(slot["x"] + self.CARD_W // 2, slot["y"] + self.IMG_H // 2,
-                               text="no thumb", fill=T.FAINT, font=(T.UI, 9),
+                               text="no thumb", fill=T.FAINT, font=(T.UI, pt(9)),
                                tags=(slot["tag"],))
             return
         try:
@@ -1584,13 +1604,13 @@ class LibraryTab(ctk.CTkFrame):
         """A small dark plate with a line of mono on it. `x`,`y` is the
         corner named by `anchor` ("nw" or "ne")."""
         canvas = self.gallery
-        pad, h = 4, 14
+        pad, h = px(4), px(14)
         w = self._badge_font.measure(text) + pad * 2
         x0 = x if anchor == "nw" else x - w
         canvas.create_rectangle(x0, y, x0 + w, y + h, fill=T.BG, outline="",
                                 tags=(tag,))
         canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
-                           font=(T.MONO, 8), anchor="w", tags=(tag,))
+                           font=(T.MONO, pt(8)), anchor="w", tags=(tag,))
 
     def _draw_badges(self, index: int, rec: Rec, slot: dict) -> None:
         canvas = self.gallery
@@ -1612,10 +1632,10 @@ class LibraryTab(ctk.CTkFrame):
             canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=T.BG,
                                outline="", tags=(tag,))
             canvas.create_text(cx, cy, text=rec.rating.upper(), fill=colour,
-                               font=(T.MONO, 8, "bold"), tags=(tag,))
+                               font=(T.MONO, pt(8), "bold"), tags=(tag,))
 
         # Bottom right: length.
-        self._pill(tag, x + self.CARD_W - 5, y + self.IMG_H - 19,
+        self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(19),
                    fmt_len(rec.duration), T.TEXT, anchor="ne")
 
         # Bottom left: which project already spent this clip. The coloured
@@ -1626,7 +1646,7 @@ class LibraryTab(ctk.CTkFrame):
             room = self.CARD_W - 62
             while label and self._badge_font.measure(label) > room:
                 label = label[:-1]
-            self._pill(tag, x + 5, y + self.IMG_H - 19, label or "used",
+            self._pill(tag, x + px(5), y + self.IMG_H - px(19), label or "used",
                        rec.used_color or T.DIM)
         if rec.used_projects:
             canvas.tag_raise(f"used{index}")
@@ -1791,6 +1811,11 @@ class LibraryTab(ctk.CTkFrame):
             menu.add_command(label=f"Open e621 post #{rec.pid}",
                              command=lambda: self._open_url(rec))
         menu_rule(menu)
+        menu.add_command(label="Tags…", command=lambda: self._edit_tags(rec))
+        page = self.page_recs()
+        menu.add_command(label=f"Tag these {len(page)} results…",
+                         command=lambda: self._bulk_tag(page))
+        menu_rule(menu)
         menu.add_command(label="Add to Resolve",
                          command=lambda: self.send_to_resolve([rec]))
         page = self.page_recs()
@@ -1860,6 +1885,95 @@ class LibraryTab(ctk.CTkFrame):
             webbrowser.open(url)
         except Exception:
             self._copy(url)
+
+    # ── tags you type yourself ──────────────────────────────────────────
+    #
+    # Fetching from e621 needs a post ID and a lot of patience; on a
+    # library of 4K files it is an evening's work, and it can do nothing at
+    # all for a clip whose ID was lost in a rename. Typing a few tags by
+    # hand takes seconds and works on anything, so "Untagged" stops being a
+    # filter you can look at but not act on.
+
+    def _ask_tags(self, title: str, prompt: str, initial: str = "") -> str | None:
+        """A themed text prompt. CustomTkinter's input dialog builds its
+        entry a beat after construction, so an initial value has to be put
+        in on a timer rather than straight away - and left to its own
+        colours it turns up in stock blue, which nothing else here is."""
+        dialog = ctk.CTkInputDialog(
+            title=title, text=prompt,
+            fg_color=T.SURFACE, text_color=T.TEXT,
+            button_fg_color=T.ACCENT2_DEEP, button_hover_color=T.BTN_HOV,
+            button_text_color=T.ACCENT2, entry_fg_color=T.INPUT,
+            entry_border_color=T.LINE, entry_text_color=T.TEXT)
+
+        def prefill() -> None:
+            entry = getattr(dialog, "_entry", None)
+            if entry is None:
+                dialog.after(30, prefill)
+                return
+            if initial:
+                entry.insert(0, initial)
+            entry.focus_set()
+
+        dialog.after(40, prefill)
+        return dialog.get_input()
+
+    def _edit_tags(self, rec: Rec) -> None:
+        answer = self._ask_tags(
+            f"Tags for {rec.name}",
+            "Your own tags, separated by spaces.\n"
+            "Anything fetched from e621 is kept as well.",
+            " ".join(sorted(rec.manual)))
+        if answer is None:
+            return
+        tags = clean_tags(answer)
+        conn = db_connect()
+        try:
+            manual_tag_set(conn, rec.path, tags)
+        finally:
+            conn.close()
+        self._reload_and_keep_place()
+        self.set_status(
+            f"{len(tags)} tag{'s' if len(tags) != 1 else ''} on {rec.name}."
+            if tags else f"Cleared your tags on {rec.name}.", T.OK)
+
+    def _bulk_tag(self, recs: list) -> None:
+        """Add the same tags to everything currently on screen. Adds only -
+        a bulk edit that could wipe tags off a hundred clips at once is not
+        worth the one keystroke it saves."""
+        recs = [r for r in recs if r]
+        if not recs:
+            return
+        answer = self._ask_tags(
+            f"Tag {len(recs)} clips",
+            f"Tags to add to all {len(recs)} results on this page, "
+            "separated by spaces.")
+        if answer is None:
+            return
+        tags = clean_tags(answer)
+        if not tags:
+            return
+        conn = db_connect()
+        try:
+            added = manual_tag_add(conn, [r.path for r in recs], tags)
+        finally:
+            conn.close()
+        self._reload_and_keep_place()
+        self.set_status(f"Added {', '.join(tags)} to {len(recs)} clips "
+                        f"({added} new).", T.OK)
+
+    def _reload_and_keep_place(self) -> None:
+        """Re-read the library and land back where you were, rather than
+        bouncing to page one after every edit."""
+        page, selected = self.page, self.selected.path if self.selected else ""
+        self._load_library()
+        self.run_search()
+        self.page = page
+        if selected and selected in self.by_path:
+            self.selected = self.by_path[selected]
+        self.render_page()
+        self._render_details()
+        self._render_tagpanel()
 
     # ── Resolve hand-off ────────────────────────────────────────────────
     #
