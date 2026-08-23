@@ -278,9 +278,16 @@ def vault_rename_project(conn: sqlite3.Connection, old: str, new: str) -> None:
 
 def vault_projects_list(conn: sqlite3.Connection) -> list:
     """[(name, color, clip_count, created_at), ...], newest project first."""
+    # Counted against files that are still indexed. A mark outlives the
+    # clip it was put on - deliberately, so a drive being unplugged or a
+    # folder being reorganised doesn't erase the record of what you spent -
+    # but a project claiming 39 clips when four of them no longer exist is
+    # just a wrong number.
     rows = conn.execute(
-        "SELECT p.name, p.color, p.created_at, COUNT(m.path) "
-        "FROM vault_projects p LEFT JOIN vault_marks m ON m.project = p.name "
+        "SELECT p.name, p.color, p.created_at, COUNT(f.path) "
+        "FROM vault_projects p "
+        "LEFT JOIN vault_marks m ON m.project = p.name "
+        "LEFT JOIN files f ON f.path = m.path "
         "GROUP BY p.name ORDER BY p.created_at DESC").fetchall()
     return [(name, color, count, created_at) for name, color, created_at, count in rows]
 

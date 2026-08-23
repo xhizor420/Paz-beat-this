@@ -37,18 +37,40 @@ until DISPLAY=:99 xdpyinfo >/dev/null 2>&1; do sleep 1; done
 DISPLAY=:99 /usr/bin/python3.12 main.py          # run_in_background
 ```
 
-Window is `PAZ Suite  1.0` at 1760x1020, positioned 0,0.
+Window is `PAZ Suite  0.8 beta`, positioned 0,0. Its **size follows the
+display** (~78% of screen width, floor 1760x1020, clamped to fit), so a
+1920x1080 Xvfb gives 1760x960 and a 3840x2160 one gives ~2992x1780. Ask
+rather than assume:
+
+```bash
+DISPLAY=:99 xdotool search --name "PAZ Suite" | while read w; do
+  xdotool getwindowgeometry --shell $w; done
+```
+
+The UI also **scales itself** from the display: `Auto` picks 1.5x at 4K
+and 1.25x at 1440p even when the desktop reports no DPI scaling, so every
+coordinate below is 1080p-only. Pin it with `"ui_scale": "100%"` in the
+config if you want fixed coordinates on a big virtual screen.
 
 ## Screenshot + drive
 
 No ImageMagick/scrot; **ffmpeg x11grab** is the working capture path:
 
 ```bash
-ffmpeg -y -f x11grab -video_size 1760x1020 -i :99+0,0 -frames:v 1 shot.png
+ffmpeg -y -f x11grab -video_size 1760x960 -i :99+0,0 -frames:v 1 shot.png
 ffmpeg -y -f x11grab -video_size 900x140  -i :99+0,180 -frames:v 1 crop.png  # region
 ```
 
-Tab strip y=73: Convert x=50, Library x=125, Vault x=191, Beat This x=266.
+At 1080p / scale 1.0, tab strip y=99: Convert x=74, Library x=152,
+Vault x=277, Beat This x=383. Gallery cards start x=325 y=265, each
+274px wide and 215px tall, so card centres are (473|779|1085, 375|590).
+
+**Menus are the fiddly part.** `tk_popup` coordinates are easy to miss by
+a few pixels, and a missed click looks exactly like a feature that did
+nothing — several "the guard didn't fire" dead ends here were really just
+that. Prefer a keyboard route where one exists, and confirm the menu is
+open with a screenshot before clicking an item. F5 = sync (Library) /
+scan (Convert) / look up (Vault) / analyze (Beat This).
 
 ```bash
 DISPLAY=:99 xdotool mousemove 266 73 click 1     # switch tab
@@ -103,3 +125,42 @@ Click an artboard's ▷ icon to expand it to full resolution.
   construction) is still verifiable, and reaching that error is itself
   evidence the audio path succeeded.
 - No CUDA; device resolves to cpu.
+
+
+## Driving in-process (no mainloop) — read this before believing a result
+
+Constructing `PazApp` under `root.update()` instead of `root.mainloop()`
+**silently swallows every worker-thread callback**: `uithread.post()`
+parks them until the main loop is actually running, so status text never
+updates, toasts never appear and anything posted from a thread looks like
+it never ran. It is fine for timing synchronous work (search, render,
+library load) and useless for observing anything a background thread
+reports. For that, launch the real app and drive it with xdotool.
+
+One Tk root per process, too — creating and destroying several aborts the
+interpreter partway through, because PhotoImages belonging to a destroyed
+interpreter free themselves by calling into it. `tests/test_player_engine.py`
+shares a module-scoped root for exactly this reason.
+
+## Measuring at a realistic size
+
+Six clips hide everything. Two of the worst problems found so far - a
+600ms tag-sidebar rebuild inside every search, and a 1.4s full library
+re-read after fetching one clip's tags - only appeared against a
+synthetic 11,000-clip library. Seed one by writing rows straight into
+`files` and a matching `e621_meta.json`, back up the real ones first, and
+put them back afterwards:
+
+```python
+conn = db_connect(); conn.execute("DELETE FROM files")
+conn.executemany("INSERT INTO files (path,name,folder,pid,size,mtime,"
+                 "duration,width,height,fps) VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+```
+
+## Destructive paths worth testing deliberately
+
+Sync deletes rows and thumbnail files. To check the guard, point
+`library_root` at a folder that exists but is empty (a re-mounted drive),
+press F5, and confirm the clip count is unchanged and a red toast
+explains why. A root that does not exist at all is caught earlier, by
+`_sync`, which opens the Folders dialog instead.
