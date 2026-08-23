@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import fnmatch
 import os
-import re
 import shlex
 import sqlite3
 import time
@@ -32,11 +31,6 @@ CREATE TABLE IF NOT EXISTS vault_projects (
     name       TEXT PRIMARY KEY,
     color      TEXT,
     created_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS manual_tags (
-    path TEXT NOT NULL,
-    tag  TEXT NOT NULL,
-    PRIMARY KEY (path, tag)
 );
 CREATE TABLE IF NOT EXISTS vault_marks (
     path      TEXT NOT NULL,
@@ -91,10 +85,6 @@ class Rec:
     # time instead of on every tag-panel and detail-panel render - the
     # difference is real once a library runs into five figures of clips.
     named: frozenset = field(default_factory=frozenset)
-    # Tags typed by hand, keyed by path rather than post ID - see
-    # manual_tags_by_path. Already folded into `tags`; kept apart so the
-    # tag editor only offers to change the ones that are yours.
-    manual: set = field(default_factory=set)
     # Vault marks: which project(s) this clip has been used in, filled in
     # at load time from vault_marks. used_color is the most-recently-marked
     # project's colour (a clip can be marked in more than one), used for
@@ -299,64 +289,3 @@ def vault_marks_by_path(conn: sqlite3.Connection) -> dict:
         by_path.setdefault(path, []).append((project, color, marked_at))
     return by_path
 
-
-# ── tags you typed yourself ─────────────────────────────────────────────
-#
-# e621 tags are keyed by post ID, so a clip without one - anything not
-# from e621, anything whose ID didn't survive a rename - can never be
-# tagged at all. That left "Untagged" as a filter with nothing to do
-# about it but a full e621 fetch, which on a 4K library is an evening.
-# These are keyed by path instead, live alongside the fetched tags rather
-# than replacing them, and survive a refetch.
-
-def manual_tags_by_path(conn: sqlite3.Connection) -> dict:
-    """path -> set of tags typed by hand."""
-    rows = conn.execute("SELECT path, tag FROM manual_tags").fetchall()
-    by_path: dict = {}
-    for path, tag in rows:
-        by_path.setdefault(path, set()).add(tag)
-    return by_path
-
-
-def clean_tags(text: str) -> list:
-    """Free text -> tags. Space or comma separated, lowercased, spaces
-    inside a tag written as underscores the way e621 does it."""
-    parts = re.split(r"[,\s]+", (text or "").strip().lower())
-    seen, out = set(), []
-    for part in parts:
-        tag = part.strip().strip(",").replace(" ", "_")
-        if tag and tag not in seen:
-            seen.add(tag)
-            out.append(tag)
-    return out
-
-
-def manual_tag_add(conn: sqlite3.Connection, paths: list, tags: list) -> int:
-    """Add `tags` to every path. Returns the number of new (path, tag)
-    pairs actually written."""
-    if not paths or not tags:
-        return 0
-    before = conn.execute("SELECT COUNT(*) FROM manual_tags").fetchone()[0]
-    conn.executemany(
-        "INSERT OR IGNORE INTO manual_tags (path, tag) VALUES (?, ?)",
-        [(path, tag) for path in paths for tag in tags])
-    conn.commit()
-    after = conn.execute("SELECT COUNT(*) FROM manual_tags").fetchone()[0]
-    return after - before
-
-
-def manual_tag_set(conn: sqlite3.Connection, path: str, tags: list) -> None:
-    """Replace one clip's hand-typed tags outright."""
-    conn.execute("DELETE FROM manual_tags WHERE path = ?", (path,))
-    if tags:
-        conn.executemany("INSERT OR IGNORE INTO manual_tags (path, tag) "
-                          "VALUES (?, ?)", [(path, tag) for tag in tags])
-    conn.commit()
-
-
-def manual_tag_remove(conn: sqlite3.Connection, paths: list, tag: str) -> None:
-    if not paths or not tag:
-        return
-    conn.executemany("DELETE FROM manual_tags WHERE path = ? AND tag = ?",
-                     [(path, tag) for path in paths])
-    conn.commit()

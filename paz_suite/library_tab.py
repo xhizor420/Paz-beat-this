@@ -29,7 +29,6 @@ from .e621 import E621_POST
 from .library_db import (
     db_connect, Rec, parse_query, rec_matches, SORTS,
     vault_marks_by_path, vault_unmark, vault_projects_list, vault_ensure_project, vault_mark,
-    manual_tags_by_path, manual_tag_set, manual_tag_add, clean_tags,
 )
 from .library_player import InlinePlayer
 from . import uithread
@@ -810,7 +809,6 @@ class LibraryTab(ctk.CTkFrame):
             "SELECT path,name,folder,pid,size,mtime,duration,width,height,fps "
             "FROM files").fetchall()
         vault_marks = vault_marks_by_path(conn)
-        manual = manual_tags_by_path(conn)
         self._project_colors = {name: color for name, color, _n, _t
                                 in vault_projects_list(conn)}
         conn.close()
@@ -852,14 +850,6 @@ class LibraryTab(ctk.CTkFrame):
             alt_path = premium.get(rec.folder, {}).get(rec.name)
             rec.premium = rec.height >= 2000 or alt_path is not None
             rec.premium_path = alt_path or ""
-            # Hand-typed tags sit alongside anything fetched, so a clip
-            # with no post ID is still searchable and no longer counts as
-            # untagged. Kept separately as well so the tag editor knows
-            # which of a clip's tags are yours to change.
-            rec.manual = manual.get(rec.path, set())
-            if rec.manual:
-                rec.tags = set(rec.tags) | rec.manual
-                rec.compute_named()
             marks = vault_marks.get(rec.path)
             if marks:
                 rec.used_projects = [project for project, _color, _t in marks]
@@ -1811,14 +1801,26 @@ class LibraryTab(ctk.CTkFrame):
             menu.add_command(label=f"Open e621 post #{rec.pid}",
                              command=lambda: self._open_url(rec))
         menu_rule(menu)
-        menu.add_command(label="Tags…", command=lambda: self._edit_tags(rec))
         page = self.page_recs()
-        menu.add_command(label=f"Tag these {len(page)} results…",
-                         command=lambda: self._bulk_tag(page))
+        if rec.pid:
+            menu.add_command(
+                label="Fetch e621 tags for this clip",
+                command=lambda: self.fetch_for([rec], rec.name))
+        else:
+            menu.add_command(label="No post ID - nothing to fetch",
+                             state="disabled")
+        untagged = [r for r in page if r.pid and not r.tags]
+        if untagged:
+            menu.add_command(
+                label=f"Fetch tags for the {len(untagged)} untagged here",
+                command=lambda: self.fetch_for(untagged,
+                                               f"{len(untagged)} untagged"))
+        menu.add_command(label=f"Fetch tags for all {len(page)} results",
+                         command=lambda: self.fetch_for(page,
+                                                        f"{len(page)} results"))
         menu_rule(menu)
         menu.add_command(label="Add to Resolve",
                          command=lambda: self.send_to_resolve([rec]))
-        page = self.page_recs()
         menu.add_command(label=f"Add these {len(page)} results to Resolve",
                          command=lambda: self.send_to_resolve(page))
         menu_rule(menu)
@@ -1885,82 +1887,6 @@ class LibraryTab(ctk.CTkFrame):
             webbrowser.open(url)
         except Exception:
             self._copy(url)
-
-    # ── tags you type yourself ──────────────────────────────────────────
-    #
-    # Fetching from e621 needs a post ID and a lot of patience; on a
-    # library of 4K files it is an evening's work, and it can do nothing at
-    # all for a clip whose ID was lost in a rename. Typing a few tags by
-    # hand takes seconds and works on anything, so "Untagged" stops being a
-    # filter you can look at but not act on.
-
-    def _ask_tags(self, title: str, prompt: str, initial: str = "") -> str | None:
-        """A themed text prompt. CustomTkinter's input dialog builds its
-        entry a beat after construction, so an initial value has to be put
-        in on a timer rather than straight away - and left to its own
-        colours it turns up in stock blue, which nothing else here is."""
-        dialog = ctk.CTkInputDialog(
-            title=title, text=prompt,
-            fg_color=T.SURFACE, text_color=T.TEXT,
-            button_fg_color=T.ACCENT2_DEEP, button_hover_color=T.BTN_HOV,
-            button_text_color=T.ACCENT2, entry_fg_color=T.INPUT,
-            entry_border_color=T.LINE, entry_text_color=T.TEXT)
-
-        def prefill() -> None:
-            entry = getattr(dialog, "_entry", None)
-            if entry is None:
-                dialog.after(30, prefill)
-                return
-            if initial:
-                entry.insert(0, initial)
-            entry.focus_set()
-
-        dialog.after(40, prefill)
-        return dialog.get_input()
-
-    def _edit_tags(self, rec: Rec) -> None:
-        answer = self._ask_tags(
-            f"Tags for {rec.name}",
-            "Your own tags, separated by spaces.\n"
-            "Anything fetched from e621 is kept as well.",
-            " ".join(sorted(rec.manual)))
-        if answer is None:
-            return
-        tags = clean_tags(answer)
-        conn = db_connect()
-        try:
-            manual_tag_set(conn, rec.path, tags)
-        finally:
-            conn.close()
-        self._reload_and_keep_place()
-        self.set_status(
-            f"{len(tags)} tag{'s' if len(tags) != 1 else ''} on {rec.name}."
-            if tags else f"Cleared your tags on {rec.name}.", T.OK)
-
-    def _bulk_tag(self, recs: list) -> None:
-        """Add the same tags to everything currently on screen. Adds only -
-        a bulk edit that could wipe tags off a hundred clips at once is not
-        worth the one keystroke it saves."""
-        recs = [r for r in recs if r]
-        if not recs:
-            return
-        answer = self._ask_tags(
-            f"Tag {len(recs)} clips",
-            f"Tags to add to all {len(recs)} results on this page, "
-            "separated by spaces.")
-        if answer is None:
-            return
-        tags = clean_tags(answer)
-        if not tags:
-            return
-        conn = db_connect()
-        try:
-            added = manual_tag_add(conn, [r.path for r in recs], tags)
-        finally:
-            conn.close()
-        self._reload_and_keep_place()
-        self.set_status(f"Added {', '.join(tags)} to {len(recs)} clips "
-                        f"({added} new).", T.OK)
 
     def _reload_and_keep_place(self) -> None:
         """Re-read the library and land back where you were, rather than
@@ -2371,13 +2297,56 @@ class LibraryTab(ctk.CTkFrame):
             self.set_status("Every post ID is already tagged or cached, and "
                             "nothing is due for a refresh yet.", T.OK)
             return
+        self._run_fetch(todo, len(refreshing))
+
+    # ── fetching a few, on demand ───────────────────────────────────────
+    #
+    # The Fetch button walks the whole library, which on a large one is a
+    # long wait for tags you wanted on one clip. These fetch exactly what
+    # you point at, right now, and go through the same worker - same rate
+    # limit, same progress, same reporting.
+
+    def fetch_for(self, recs: list, what: str = "") -> None:
+        """Fetch e621 data for `recs` and nothing else."""
+        if self.busy:
+            self.set_status("Already fetching - let that finish first.", T.WARN)
+            return
+        if not self.cfg.e621_enabled:
+            self.set_status("e621 lookups are switched off - turn them back "
+                            "on in Settings.", T.WARN)
+            return
+        recs = [r for r in recs if r]
+        without = [r for r in recs if not r.pid]
+        pids, seen = [], set()
+        for rec in recs:
+            if rec.pid and rec.pid not in seen:
+                seen.add(rec.pid)
+                pids.append(rec.pid)
+
+        if not pids:
+            self.set_status(
+                "No post ID on "
+                + ("that clip" if len(recs) == 1 else f"any of those {len(recs)} clips")
+                + " - e621 is looked up by post ID, which comes from the file "
+                  "name. Nothing to fetch.", T.WARN)
+            return
+
+        # Asked for explicitly, so cached entries are re-fetched rather than
+        # skipped - "fetch this one" should go and look, not tell you it
+        # already has an answer from months ago.
+        note = what or (f"{len(pids)} clips" if len(pids) != 1 else "1 clip")
+        if without:
+            note += f" ({len(without)} skipped, no post ID)"
+        self._run_fetch(pids, 0, note)
+
+    def _run_fetch(self, todo: list, refreshing: int, note: str = "") -> None:
         self.busy = True
         self.fetch_btn.configure(state="disabled")
         self.fix_btn.configure(state="disabled")
         delay = max(float(self.cfg.e621_fetch_delay), 0.5)
-        status = f"{self.F('fetching')} · {len(todo)} posts"
+        status = f"{self.F('fetching')} · {note or f'{len(todo)} posts'}"
         if refreshing:
-            status += f" ({len(refreshing)} refreshed for freshness)"
+            status += f" ({refreshing} refreshed for freshness)"
         status += f" (~{fmt_len(len(todo) * (delay + 0.1))})"
         self.set_status(status, T.ACCENT2)
         self.progress.set(0)
@@ -2408,15 +2377,13 @@ class LibraryTab(ctk.CTkFrame):
                 self.busy = False
                 self.ui(self.fetch_btn.configure, state="normal")
                 self.ui(self.fix_btn.configure, state="normal")
-                self.ui(self._fetch_done, hits, missing, failed, last_error, len(refreshing))
+                self.ui(self._fetch_done, hits, missing, failed, last_error, refreshing)
 
         threading.Thread(target=work, daemon=True).start()
 
     def _fetch_done(self, hits: int, missing: int, failed: int = 0,
                     last_error: str = "", refreshed: int = 0) -> None:
-        self._load_library()
-        self.run_search()
-        self._render_details()
+        self._reload_and_keep_place()
         # "missing" (post deleted/hidden on e621, cached so it's never
         # retried) and "failed" (a transient network error, not cached, so
         # it's retried the next time Fix missing / Fetch tags runs) look the
