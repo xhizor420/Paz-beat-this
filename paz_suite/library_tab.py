@@ -256,6 +256,10 @@ class LibraryTab(ctk.CTkFrame):
             text_color=T.FAINT, command=lambda: HelpWindow(self.root))
         self.help_btn.pack(side="left")
 
+    # Everything this app sends lands in one bin, so a Resolve project
+    # doesn't end up with library clips scattered through its root.
+    RESOLVE_BIN = "PAZ Library"
+
     SIDEBAR_W = 280
 
     def _build_sidebar(self):
@@ -564,6 +568,8 @@ class LibraryTab(ctk.CTkFrame):
             return b
 
         dbtn("Folder", self._reveal)
+        dbtn("→ Resolve", lambda: self.send_to_resolve(
+            [self.selected] if self.selected else []), T.ACCENT3, 92)
         self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 58)
         dbtn("Grid", self._grid, T.ACCENT, 62)
         dbtn("Copy name", lambda: self._copy(self.selected.name)
@@ -1759,6 +1765,12 @@ class LibraryTab(ctk.CTkFrame):
             menu.add_command(label=f"Open e621 post #{rec.pid}",
                              command=lambda: self._open_url(rec))
         menu_rule(menu)
+        menu.add_command(label="Add to Resolve",
+                         command=lambda: self.send_to_resolve([rec]))
+        page = self.page_recs()
+        menu.add_command(label=f"Add these {len(page)} results to Resolve",
+                         command=lambda: self.send_to_resolve(page))
+        menu_rule(menu)
 
         used_menu = popup_menu(menu)
         conn = db_connect()
@@ -1822,6 +1834,63 @@ class LibraryTab(ctk.CTkFrame):
             webbrowser.open(url)
         except Exception:
             self._copy(url)
+
+    # ── Resolve hand-off ────────────────────────────────────────────────
+    #
+    # The library already holds two copies of a clip - the converted one it
+    # indexes and, where the Convert tab made one, a 4K/60 edit-ready copy
+    # in the premium pool. That is the same split Resolve calls master and
+    # proxy, so importing wires it up: the 4K file becomes the clip and the
+    # converted one becomes its proxy. Timeline playback stays cheap and
+    # renders still come off the big file, without anyone linking proxies
+    # by hand.
+
+    def page_recs(self) -> list:
+        """What the gallery is showing right now - the current page of the
+        current search, not the whole library. Sending "everything" from a
+        five-figure library would be a mistake nobody could undo quickly."""
+        start = self.page * self.cfg.page_size
+        return self.filtered[start:start + self.cfg.page_size]
+
+    def _resolve_pair(self, rec: Rec) -> tuple:
+        """(what Resolve should treat as the clip, what it should use as
+        the proxy). The premium copy leads when there is one; with no
+        premium copy there is nothing to proxy, so the file stands alone."""
+        if rec.premium_path and os.path.exists(rec.premium_path):
+            return rec.premium_path, rec.path
+        return rec.path, ""
+
+    def send_to_resolve(self, recs: list, bin_name: str = "") -> None:
+        """Import `recs` into Resolve's media pool. `bin_name` overrides the
+        default bin - the Vault sends a whole project into a bin named after
+        it, which is how you'd organise it by hand anyway."""
+        recs = [r for r in recs if r]
+        if not recs:
+            self.set_status("Nothing selected to send.", T.WARN)
+            return
+        pairs = [self._resolve_pair(rec) for rec in recs]
+        premium = sum(1 for _master, proxy in pairs if proxy)
+        self.set_status(
+            f"Sending {len(pairs)} clip{'s' if len(pairs) != 1 else ''} "
+            f"to Resolve…", T.DIM)
+        threading.Thread(target=self._run_send_to_resolve,
+                         args=(pairs, premium, bin_name or self.RESOLVE_BIN),
+                         daemon=True).start()
+
+    def _run_send_to_resolve(self, pairs: list, premium: int, bin_name: str) -> None:
+        from .resolve_api import import_clips
+        ok, message = import_clips(pairs, bin_name=bin_name)
+        self.ui(self._sent_to_resolve, ok, message, premium)
+
+    def _sent_to_resolve(self, ok: bool, message: str, premium: int) -> None:
+        if ok and premium:
+            message += (f" {premium} came from the 4K pool."
+                        if premium != 1 else " It came from the 4K pool.")
+        # The failure text is a multi-line checklist; the status bar is one
+        # line, so it gets the headline and the toast carries the rest.
+        self.set_status(message.split("\n")[0], T.OK if ok else T.FAIL)
+        self.toaster.show(message, "ok" if ok else "fail",
+                          ms=5000 if ok else 12000)
 
     # ── Vault marks (right-click "used in a project") ───────────────────
 

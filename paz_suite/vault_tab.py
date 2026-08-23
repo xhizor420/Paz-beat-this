@@ -459,12 +459,30 @@ class VaultTab(ctk.CTkFrame):
         menu.add_command(label="Browse clips here", command=lambda: self._select_project(name))
         menu.add_command(label="Open in Library", command=lambda: self._open_in_library(name))
         menu_rule(menu)
+        menu.add_command(label="Add all clips to Resolve",
+                         command=lambda: self._send_project_to_resolve(name))
+        menu_rule(menu)
         menu.add_command(label="Rename…", command=lambda: self._rename_project(name))
         menu.add_command(label="Clear", command=lambda: self._clear_project(name))
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _send_project_to_resolve(self, project: str) -> None:
+        """Every clip marked as used in this project, into a Resolve bin
+        named after it. The Library owns the actual hand-off - it is the
+        tab that knows which copy of a clip is the 4K one."""
+        library = getattr(self.app, "library", None)
+        if library is None:
+            return
+        clips = [r for r in library.records if project in r.used_projects]
+        if not clips:
+            self.set_status(f"'{project}' has no clips marked yet.", T.WARN)
+            return
+        library.send_to_resolve(clips, bin_name=project)
+        self.set_status(f"Sending {len(clips)} clips from '{project}' to "
+                        f"Resolve - see the Library tab for the result.", T.DIM)
 
     def _open_in_library(self, project: str | None) -> None:
         library = getattr(self.app, "library", None)
