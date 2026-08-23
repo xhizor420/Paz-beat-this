@@ -94,6 +94,10 @@ class BeatTab(ctk.CTkFrame):
 
         right = ctk.CTkFrame(bar, fg_color="transparent")
         right.grid(row=0, column=1, sticky="e", padx=20)
+        ctk.CTkButton(right, text="Settings", width=80, height=30, corner_radius=7,
+                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                     text_color=T.DIM, command=self._open_settings
+                     ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(right, text="?", width=30, height=30, corner_radius=7,
                      font=font(12, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
                      text_color=T.FAINT, command=self._open_help).pack(side="left")
@@ -473,6 +477,9 @@ class BeatTab(ctk.CTkFrame):
 
     def set_status(self, text: str, colour: str = T.DIM) -> None:
         self.status_label.configure(text=text, text_color=colour)
+
+    def _open_settings(self) -> None:
+        self.app.open_settings(initial_tab="e621 & App")
 
     def _open_help(self) -> None:
         win = ctk.CTkToplevel(self.root)

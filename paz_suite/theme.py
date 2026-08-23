@@ -97,6 +97,7 @@ class T:
     # Placeholders. resolve_fonts() replaces these with whatever is
     # actually installed once a Tk root exists; the values here are the
     # Windows defaults so the app still looks right if that never runs.
+    SCALE   = 1.0            # see the module-level pt()/px() helpers
     UI      = "Segoe UI"
     MONO    = "Cascadia Mono"
     DISPLAY = "Segoe UI"
@@ -155,6 +156,25 @@ def mix(color: str, toward: str, amount: float) -> str:
         for i in (0, 2, 4)
     )
     return "#" + "".join(f"{c:02X}" for c in channels)
+
+
+# How much bigger everything this app draws by hand should be. CTk scales
+# its own widgets from the system DPI, but a tk.Canvas gets none of that -
+# so on a 4K screen the gallery kept drawing 8pt badges and 10pt captions
+# at their literal pixel size while every button around them grew. Set
+# once at startup (see app.PazApp._apply_scaling) and read by pt()/px().
+SCALE = 1.0
+
+
+def pt(size: float) -> int:
+    """A hand-drawn font size, scaled. Floors at 7pt - past that the text
+    is decoration, not something anyone can read."""
+    return max(int(round(size * T.SCALE)), 7)
+
+
+def px(value: float) -> int:
+    """A hand-drawn pixel measurement, scaled."""
+    return int(round(value * T.SCALE))
 
 
 def font(size: int = 12, weight: str = "normal", mono: bool = False,

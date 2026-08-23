@@ -46,13 +46,23 @@ class PazApp:
         self._icon = None
         self._header_icon = None
 
-        root.geometry("1760x1020")
+        self._apply_scaling()
+
+        # Clamped to the screen: a scaled-up window on a small display,
+        # or a remembered size from a larger monitor, should still open
+        # somewhere you can reach its title bar.
+        try:
+            room_w = max(int(root.winfo_screenwidth()) - 80, 900)
+            room_h = max(int(root.winfo_screenheight()) - 120, 620)
+        except tk.TclError:
+            room_w, room_h = 1760, 1020
+        root.geometry(f"{min(1760, room_w)}x{min(1020, room_h)}")
         # Every panel below (gallery columns, the inspector/player, the
         # queue table) already recalculates its own layout on resize, so
         # this is a floor for legibility, not a hard requirement - the
         # window is just as usable maximized on a 4K display as tiled on a
         # 13" laptop screen.
-        root.minsize(1180, 700)
+        root.minsize(min(1180, room_w), min(700, room_h))
         root.configure(fg_color=T.BG)
 
         self._build_header()
@@ -93,6 +103,49 @@ class PazApp:
         self._bind_keys()
         root.bind("<Configure>", self._on_root_configure, add="+")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ── display scaling ───────────────────────────────────────────────────
+    #
+    # CustomTkinter scales its own widgets from the system DPI, but a
+    # tk.Canvas gets none of that - so on a 4K screen the gallery kept
+    # drawing 8pt badges and 10pt captions at their literal size while
+    # every button around them grew. theme.pt()/px() read T.SCALE, which
+    # is set here, once, before a single widget exists.
+
+    SCALE_CHOICES = ("Auto", "100%", "125%", "150%", "175%", "200%")
+
+    def _apply_scaling(self) -> None:
+        choice = self.cfg.ui_scale if self.cfg.ui_scale in self.SCALE_CHOICES else "Auto"
+        scale = self._detect_scale() if choice == "Auto" else int(choice.rstrip("%")) / 100
+        scale = max(1.0, min(scale, 2.5))
+        T.SCALE = scale
+        try:
+            ctk.set_widget_scaling(scale)
+            # Deliberately NOT set_window_scaling: that multiplies every
+            # geometry string, so asking for a 1760px window at 175% asks
+            # for 3080px and the window manager quietly declines to show it
+            # at all on anything smaller. Window sizes here are already in
+            # real pixels; it is the contents that need to grow.
+            ctk.set_window_scaling(1.0)
+        except Exception:
+            pass
+
+    def _detect_scale(self) -> float:
+        """What the desktop says it is doing, as a multiple of 96 DPI.
+
+        Tk reports the DPI the window manager hands it, which on Windows
+        already reflects the display-scaling setting - so a 4K screen at
+        150% comes back as 144. A 4K screen left at 100% reports 96 and
+        gets 1.0, which is correct: everything really is that small, and
+        the fix there is to pick a scale by hand.
+        """
+        try:
+            dpi = float(self.root.winfo_fpixels("1i"))
+        except (tk.TclError, ValueError):
+            return 1.0
+        if dpi <= 0:
+            return 1.0
+        return round(dpi / 96.0, 2)
 
     # ── header (shared identity, above the tab strip) ──────────────────────
     #

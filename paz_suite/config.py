@@ -156,6 +156,10 @@ class AppConfig:
     # ── App-wide ──────────────────────────────────────────────────────────
     # Your own picture across the header strip. Empty means the built-in
     # sweep in the four tab colours; see theme.banner_image.
+    # How much larger to draw everything. "Auto" follows the desktop's own
+    # DPI; a 4K screen left at 100% reports 96 DPI and needs a hand-picked
+    # value, which is the case this setting exists for.
+    ui_scale: str = "Auto"
     banner_path: str = ""
     banner_dir: str = ""      # last folder a header picture came from
     last_tab: str = "Convert"

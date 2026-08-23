@@ -18,7 +18,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, lens_photo, LIBRARY_LABELS
+from .theme import T, font, lens_photo, pt, px, LIBRARY_LABELS
 from .format import fmt_len, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
@@ -89,10 +89,10 @@ class LibraryTab(ctk.CTkFrame):
         self._apply_brand()
         import tkinter.font as tkfont
         self._card_font = tkfont.Font(family=T.UI, size=10)
-        self._badge_font = tkfont.Font(family=T.MONO, size=8)
+        self._badge_font = tkfont.Font(family=T.MONO, size=pt(8))
         self._spec_font = tkfont.Font(family=T.MONO, size=9)
-        self._chip_font = tkfont.Font(family=T.UI, size=11)
-        self._quick_font = tkfont.Font(family=T.UI, size=10)
+        self._chip_font = tkfont.Font(family=T.UI, size=pt(11))
+        self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
         self.folders_label.configure(text=self._folders_summary())
         self._restore_state()
         self._load_library()
@@ -1159,11 +1159,21 @@ class LibraryTab(ctk.CTkFrame):
     # ── gallery ─────────────────────────────────────────────────────────────
 
     CARD_W, IMG_H = 224, 126
-    CAP_H, GAP = 42, 10
+    GAP = 10
+
+    @property
+    def CAP_H(self) -> int:
+        """Caption strip height. Grows with the text scale - at 200% the
+        two lines of caption no longer fit in a fixed 42px band."""
+        return px(42)
 
     @property
     def card_width(self) -> int:
-        return max(120, min(int(self.cfg.card_width), 480))
+        """The tile width actually drawn. The setting is in unscaled
+        pixels - what it looks like at 100% - so raising the display scale
+        grows the tiles along with the text in them, instead of leaving
+        224px tiles surrounded by text that no longer fits."""
+        return px(max(120, min(int(self.cfg.card_width), 480)))
 
     def _leave_grid(self, _event=None):
         self._set_hover(None)
@@ -1259,11 +1269,11 @@ class LibraryTab(ctk.CTkFrame):
 
         if not self.records:
             canvas.create_text(24, 28, text=self.F("empty_db"), fill=T.FAINT,
-                               font=(T.UI, 12), anchor="nw", width=width - 60)
+                               font=(T.UI, pt(12)), anchor="nw", width=width - 60)
             return
         if not batch:
             canvas.create_text(24, 28, text=self.F("no_results"), fill=T.FAINT,
-                               font=(T.UI, 12), anchor="nw")
+                               font=(T.UI, pt(12)), anchor="nw")
             return
 
         cell_h = self.IMG_H + self.CAP_H + self.GAP
@@ -1297,7 +1307,7 @@ class LibraryTab(ctk.CTkFrame):
         canvas.create_rectangle(x, y, x + self.CARD_W, y + self.IMG_H,
                                 fill=T.INPUT, outline="", tags=(tag, "well"))
         canvas.create_text(x + self.CARD_W // 2, y + self.IMG_H // 2, text="…",
-                           fill=T.FAINT, font=(T.UI, 11), tags=(tag, f"ph{index}"))
+                           fill=T.FAINT, font=(T.UI, pt(11)), tags=(tag, f"ph{index}"))
         colour, width = self._card_outline(rec, hover=False)
         canvas.create_rectangle(x, y, x + self.CARD_W, bottom, fill="",
                                 outline=colour, width=width, tags=(tag, f"cardline{index}"))
@@ -1308,21 +1318,21 @@ class LibraryTab(ctk.CTkFrame):
         # faster over the frame than as another line of grey text, and it
         # buys the name a full line instead of sharing one with a dot.
         name = rec.pid or os.path.splitext(rec.name)[0]
-        canvas.create_text(x + 8, y + self.IMG_H + 15,
+        canvas.create_text(x + px(8), y + self.IMG_H + px(15),
                            text=self._ellipsize(name, x + self.CARD_W - 10),
-                           fill=T.TEXT, font=(T.MONO, 10), anchor="w", tags=(tag, f"tt{index}"))
+                           fill=T.TEXT, font=(T.MONO, pt(10)), anchor="w", tags=(tag, f"tt{index}"))
 
         score = fmt_score(rec.score)
         score_w = (self._spec_font.measure(f"▲{score}") + 10) if score else 0
         if rec.artists:
-            canvas.create_text(x + 8, y + self.IMG_H + 31,
+            canvas.create_text(x + px(8), y + self.IMG_H + px(31),
                                text=self._ellipsize(rec.artists[0],
                                                     x + self.CARD_W - score_w - 12),
-                               fill=T.ACCENT2, font=(T.UI, 10), anchor="w", tags=(tag,))
+                               fill=T.ACCENT2, font=(T.UI, pt(10)), anchor="w", tags=(tag,))
         if score:
-            canvas.create_text(x + self.CARD_W - 8, y + self.IMG_H + 31, text=f"▲{score}",
+            canvas.create_text(x + self.CARD_W - px(8), y + self.IMG_H + px(31), text=f"▲{score}",
                                fill=T.OK if rec.score >= 1000 else T.FAINT,
-                               font=(T.MONO, 9), anchor="e", tags=(tag,))
+                               font=(T.MONO, pt(9)), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
 
@@ -1381,7 +1391,7 @@ class LibraryTab(ctk.CTkFrame):
     # Decoded reels are kept for the last few clips hovered, so going back
     # to a tile you just left starts instantly instead of decoding again.
 
-    PREVIEW_DWELL_MS = 320     # rest this long before a tile starts
+    PREVIEW_DWELL_MS = 140     # rest this long before a tile starts
     # Clips worth of decoded frames to keep. Held down as the preview
     # window grew, so the total frames in memory stays about where it was.
     REEL_CACHE       = 4
@@ -1425,19 +1435,43 @@ class LibraryTab(ctk.CTkFrame):
                          args=(rec, index, token), daemon=True).start()
 
     def _preview_decode(self, rec: Rec, index: int, token: int) -> None:
+        """Decode on a worker thread, handing frames to the UI as they
+        appear instead of when the whole reel is done. A ten-second reel of
+        4K takes seconds to decode in full; the first frames are ready
+        almost at once, and that is the difference between a preview that
+        starts when you stop moving and one that looks broken."""
         fps = self._preview_fps(rec)
-        reel = self.frames.preview_reel(rec.path, rec.duration, self.CARD_W, fps=fps)
-        self.ui(self._preview_ready, rec.path, index, reel, fps, token)
+        self.frames.preview_reel_stream(
+            rec.path, rec.duration, self.CARD_W,
+            on_frames=lambda frames, done: self.ui(
+                self._preview_frames, rec.path, index, frames, done, fps, token),
+            alive=lambda: token == self._pv_token,
+            fps=fps)
 
-    def _preview_ready(self, path: str, index: int, reel: list, fps: int,
-                        token: int) -> None:
-        if reel:
-            self._reels[path] = {"frames": reel, "photos": {}, "fps": fps}
+    def _preview_frames(self, path: str, index: int, frames: list, done: bool,
+                         fps: int, token: int) -> None:
+        reel = self._reels.get(path)
+        if reel is None:
+            reel = {"frames": [], "photos": {}, "fps": fps, "done": False}
+            self._reels[path] = reel
             while len(self._reels) > self.REEL_CACHE:
-                self._reels.pop(next(iter(self._reels)))
-        if token != self._pv_token or self._pv_index != index or not reel:
+                oldest = next(iter(self._reels))
+                if oldest != path:
+                    self._reels.pop(oldest)
+                else:
+                    break
+        reel["frames"].extend(frames)
+        if done:
+            reel["done"] = True
+            if not reel["frames"]:
+                self._reels.pop(path, None)
+                return
+        if token != self._pv_token or self._pv_index != index:
             return
-        self._preview_play(index, self._reels[path], token)
+        # Start on the first batch; later batches just extend what is
+        # already playing, so nothing restarts mid-preview.
+        if frames and len(reel["frames"]) == len(frames):
+            self._preview_play(index, reel, token)
 
     def _preview_play(self, index: int, reel: dict, token: int) -> None:
         if token != self._pv_token or self._pv_index != index:
@@ -1447,7 +1481,9 @@ class LibraryTab(ctk.CTkFrame):
         count = len(reel["frames"])
         if not count:
             return
-        i = self._pv_step % count
+        # Only wrap once the whole reel is in. Wrapping early would loop
+        # the first second over and over while the rest is still decoding.
+        i = self._pv_step % count if reel.get("done") else min(self._pv_step, count - 1)
         frame = self._reel_photo(reel, i)
         if frame is not None:
             self.gallery.itemconfigure(f"im{index}", image=frame)
@@ -1528,7 +1564,7 @@ class LibraryTab(ctk.CTkFrame):
         canvas.delete(f"ph{index}")
         if not data:
             canvas.create_text(slot["x"] + self.CARD_W // 2, slot["y"] + self.IMG_H // 2,
-                               text="no thumb", fill=T.FAINT, font=(T.UI, 9),
+                               text="no thumb", fill=T.FAINT, font=(T.UI, pt(9)),
                                tags=(slot["tag"],))
             return
         try:
@@ -1558,13 +1594,13 @@ class LibraryTab(ctk.CTkFrame):
         """A small dark plate with a line of mono on it. `x`,`y` is the
         corner named by `anchor` ("nw" or "ne")."""
         canvas = self.gallery
-        pad, h = 4, 14
+        pad, h = px(4), px(14)
         w = self._badge_font.measure(text) + pad * 2
         x0 = x if anchor == "nw" else x - w
         canvas.create_rectangle(x0, y, x0 + w, y + h, fill=T.BG, outline="",
                                 tags=(tag,))
         canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
-                           font=(T.MONO, 8), anchor="w", tags=(tag,))
+                           font=(T.MONO, pt(8)), anchor="w", tags=(tag,))
 
     def _draw_badges(self, index: int, rec: Rec, slot: dict) -> None:
         canvas = self.gallery
@@ -1586,10 +1622,10 @@ class LibraryTab(ctk.CTkFrame):
             canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=T.BG,
                                outline="", tags=(tag,))
             canvas.create_text(cx, cy, text=rec.rating.upper(), fill=colour,
-                               font=(T.MONO, 8, "bold"), tags=(tag,))
+                               font=(T.MONO, pt(8), "bold"), tags=(tag,))
 
         # Bottom right: length.
-        self._pill(tag, x + self.CARD_W - 5, y + self.IMG_H - 19,
+        self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(19),
                    fmt_len(rec.duration), T.TEXT, anchor="ne")
 
         # Bottom left: which project already spent this clip. The coloured
@@ -1600,7 +1636,7 @@ class LibraryTab(ctk.CTkFrame):
             room = self.CARD_W - 62
             while label and self._badge_font.measure(label) > room:
                 label = label[:-1]
-            self._pill(tag, x + 5, y + self.IMG_H - 19, label or "used",
+            self._pill(tag, x + px(5), y + self.IMG_H - px(19), label or "used",
                        rec.used_color or T.DIM)
         if rec.used_projects:
             canvas.tag_raise(f"used{index}")
@@ -1765,9 +1801,26 @@ class LibraryTab(ctk.CTkFrame):
             menu.add_command(label=f"Open e621 post #{rec.pid}",
                              command=lambda: self._open_url(rec))
         menu_rule(menu)
+        page = self.page_recs()
+        if rec.pid:
+            menu.add_command(
+                label="Fetch e621 tags for this clip",
+                command=lambda: self.fetch_for([rec], rec.name))
+        else:
+            menu.add_command(label="No post ID - nothing to fetch",
+                             state="disabled")
+        untagged = [r for r in page if r.pid and not r.tags]
+        if untagged:
+            menu.add_command(
+                label=f"Fetch tags for the {len(untagged)} untagged here",
+                command=lambda: self.fetch_for(untagged,
+                                               f"{len(untagged)} untagged"))
+        menu.add_command(label=f"Fetch tags for all {len(page)} results",
+                         command=lambda: self.fetch_for(page,
+                                                        f"{len(page)} results"))
+        menu_rule(menu)
         menu.add_command(label="Add to Resolve",
                          command=lambda: self.send_to_resolve([rec]))
-        page = self.page_recs()
         menu.add_command(label=f"Add these {len(page)} results to Resolve",
                          command=lambda: self.send_to_resolve(page))
         menu_rule(menu)
@@ -1834,6 +1887,19 @@ class LibraryTab(ctk.CTkFrame):
             webbrowser.open(url)
         except Exception:
             self._copy(url)
+
+    def _reload_and_keep_place(self) -> None:
+        """Re-read the library and land back where you were, rather than
+        bouncing to page one after every edit."""
+        page, selected = self.page, self.selected.path if self.selected else ""
+        self._load_library()
+        self.run_search()
+        self.page = page
+        if selected and selected in self.by_path:
+            self.selected = self.by_path[selected]
+        self.render_page()
+        self._render_details()
+        self._render_tagpanel()
 
     # ── Resolve hand-off ────────────────────────────────────────────────
     #
@@ -2231,13 +2297,56 @@ class LibraryTab(ctk.CTkFrame):
             self.set_status("Every post ID is already tagged or cached, and "
                             "nothing is due for a refresh yet.", T.OK)
             return
+        self._run_fetch(todo, len(refreshing))
+
+    # ── fetching a few, on demand ───────────────────────────────────────
+    #
+    # The Fetch button walks the whole library, which on a large one is a
+    # long wait for tags you wanted on one clip. These fetch exactly what
+    # you point at, right now, and go through the same worker - same rate
+    # limit, same progress, same reporting.
+
+    def fetch_for(self, recs: list, what: str = "") -> None:
+        """Fetch e621 data for `recs` and nothing else."""
+        if self.busy:
+            self.set_status("Already fetching - let that finish first.", T.WARN)
+            return
+        if not self.cfg.e621_enabled:
+            self.set_status("e621 lookups are switched off - turn them back "
+                            "on in Settings.", T.WARN)
+            return
+        recs = [r for r in recs if r]
+        without = [r for r in recs if not r.pid]
+        pids, seen = [], set()
+        for rec in recs:
+            if rec.pid and rec.pid not in seen:
+                seen.add(rec.pid)
+                pids.append(rec.pid)
+
+        if not pids:
+            self.set_status(
+                "No post ID on "
+                + ("that clip" if len(recs) == 1 else f"any of those {len(recs)} clips")
+                + " - e621 is looked up by post ID, which comes from the file "
+                  "name. Nothing to fetch.", T.WARN)
+            return
+
+        # Asked for explicitly, so cached entries are re-fetched rather than
+        # skipped - "fetch this one" should go and look, not tell you it
+        # already has an answer from months ago.
+        note = what or (f"{len(pids)} clips" if len(pids) != 1 else "1 clip")
+        if without:
+            note += f" ({len(without)} skipped, no post ID)"
+        self._run_fetch(pids, 0, note)
+
+    def _run_fetch(self, todo: list, refreshing: int, note: str = "") -> None:
         self.busy = True
         self.fetch_btn.configure(state="disabled")
         self.fix_btn.configure(state="disabled")
         delay = max(float(self.cfg.e621_fetch_delay), 0.5)
-        status = f"{self.F('fetching')} · {len(todo)} posts"
+        status = f"{self.F('fetching')} · {note or f'{len(todo)} posts'}"
         if refreshing:
-            status += f" ({len(refreshing)} refreshed for freshness)"
+            status += f" ({refreshing} refreshed for freshness)"
         status += f" (~{fmt_len(len(todo) * (delay + 0.1))})"
         self.set_status(status, T.ACCENT2)
         self.progress.set(0)
@@ -2268,15 +2377,13 @@ class LibraryTab(ctk.CTkFrame):
                 self.busy = False
                 self.ui(self.fetch_btn.configure, state="normal")
                 self.ui(self.fix_btn.configure, state="normal")
-                self.ui(self._fetch_done, hits, missing, failed, last_error, len(refreshing))
+                self.ui(self._fetch_done, hits, missing, failed, last_error, refreshing)
 
         threading.Thread(target=work, daemon=True).start()
 
     def _fetch_done(self, hits: int, missing: int, failed: int = 0,
                     last_error: str = "", refreshed: int = 0) -> None:
-        self._load_library()
-        self.run_search()
-        self._render_details()
+        self._reload_and_keep_place()
         # "missing" (post deleted/hidden on e621, cached so it's never
         # retried) and "failed" (a transient network error, not cached, so
         # it's retried the next time Fix missing / Fetch tags runs) look the

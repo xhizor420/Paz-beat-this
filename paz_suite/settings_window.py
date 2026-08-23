@@ -383,19 +383,25 @@ class SettingsWindow(ctk.CTkToplevel):
                           "runs after you flip it on for the session.")
 
         self._section(tab, "Interface", 10)
-        self._switch(tab, 11, "hover_peek", "Hover peek on the Convert queue")
-        self._number(tab, 12, "filmstrip_frames", "Filmstrip frames", 4, 16)
+        self._choice(tab, 11, "ui_scale", "Display scale",
+                     list(self.app.SCALE_CHOICES))
+        self._hint(tab, 12, "How large everything is drawn. Auto follows the "
+                            "desktop's own scaling; a 4K screen left at 100% "
+                            "reports no scaling at all and needs a value "
+                            "picked by hand. Takes effect on restart.")
+        self._switch(tab, 13, "hover_peek", "Hover peek on the Convert queue")
+        self._number(tab, 14, "filmstrip_frames", "Filmstrip frames", 4, 16)
 
         # Also reachable by right-clicking the strip itself, but that is not
         # a thing anyone discovers on their own.
-        self._label(tab, "Header picture", 13)
+        self._label(tab, "Header picture", 15)
         self.banner_label = ctk.CTkLabel(
             tab, text=self._banner_summary(), font=font(11, mono=True),
             text_color=T.ACCENT2 if self.cfg.banner_path else T.FAINT,
             anchor="w", wraplength=self.HINT_W, justify="left")
-        self.banner_label.grid(row=13, column=1, columnspan=2, sticky="w", pady=4)
+        self.banner_label.grid(row=15, column=1, columnspan=2, sticky="w", pady=4)
         banner_row = ctk.CTkFrame(tab, fg_color="transparent")
-        banner_row.grid(row=14, column=1, columnspan=2, sticky="w", pady=(2, 4))
+        banner_row.grid(row=16, column=1, columnspan=2, sticky="w", pady=(2, 4))
         ctk.CTkButton(banner_row, text="Choose picture…", width=140, height=32,
                       corner_radius=7, font=font(11), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.DIM,
@@ -404,7 +410,7 @@ class SettingsWindow(ctk.CTkToplevel):
                       corner_radius=7, font=font(11), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.DIM,
                       command=self._clear_banner).pack(side="left")
-        self._hint(tab, 15, "Your own picture across the top strip, behind the "
+        self._hint(tab, 17, "Your own picture across the top strip, behind the "
                             "PAZ mark. Wide pictures suit it best - it is a "
                             "76px band, cropped to fill from just above centre.")
 
@@ -412,15 +418,15 @@ class SettingsWindow(ctk.CTkToplevel):
         # right answer and putting it in the way of pressing Analyze only
         # invites picking something worse. These are the escape hatches for
         # the rare machine that needs them.
-        self._section(tab, "Beat This", 16)
-        self._choice(tab, 17, "beat_checkpoint", "Model", list(be.CHECKPOINTS))
-        self._hint(tab, 18, "Leave this alone unless you have a reason. "
+        self._section(tab, "Beat This", 18)
+        self._choice(tab, 19, "beat_checkpoint", "Model", list(be.CHECKPOINTS))
+        self._hint(tab, 20, "Leave this alone unless you have a reason. "
                             + be.CHECKPOINT_NOTES.get(be.DEFAULT_CHECKPOINT, ""))
-        self._choice(tab, 19, "beat_device", "Run on", list(be.DEVICE_CHOICES))
-        self._switch(tab, 20, "beat_float16", "float16 (faster on recent GPUs, "
+        self._choice(tab, 21, "beat_device", "Run on", list(be.DEVICE_CHOICES))
+        self._switch(tab, 22, "beat_float16", "float16 (faster on recent GPUs, "
                                               "slightly less precise)")
-        self._switch(tab, 21, "beat_dbn", "DBN postprocessing (needs madmom)")
-        self._hint(tab, 22, "DBN is off for a reason: the paper this tracker "
+        self._switch(tab, 23, "beat_dbn", "DBN postprocessing (needs madmom)")
+        self._hint(tab, 24, "DBN is off for a reason: the paper this tracker "
                             "comes from is called \"Accurate Beat Tracking "
                             "Without DBN Postprocessing\". It is here for "
                             "comparison, not for quality.")

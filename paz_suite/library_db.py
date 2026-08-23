@@ -288,3 +288,4 @@ def vault_marks_by_path(conn: sqlite3.Connection) -> dict:
     for path, project, color, marked_at in rows:
         by_path.setdefault(path, []).append((project, color, marked_at))
     return by_path
+
