@@ -40,7 +40,75 @@ _BEAT_THIS_ROOT = os.path.join(_REPO_ROOT, "beat_this")
 if os.path.isdir(_BEAT_THIS_ROOT) and _BEAT_THIS_ROOT not in sys.path:
     sys.path.insert(0, _BEAT_THIS_ROOT)
 
-CHECKPOINTS = ("final0", "final1", "final2", "small0", "small1", "small2")
+# ── which models to offer ───────────────────────────────────────────────
+#
+# beat_this publishes about forty checkpoints, but most of them exist to
+# reproduce tables in the paper, not to track beats well: `single_*` is
+# trained on one reduced split, `fold0..7` on one fold each, and the
+# `single_no*` family are deliberately crippled ablations (no tempo
+# augmentation, no sum head, and so on). Offering those would only invite
+# picking a worse model by accident.
+#
+# What's left is the two that are actually meant for use, per the project's
+# own README: `final0/1/2`, the paper's main system trained on everything
+# except GTZAN (78 MB each, three random seeds), and `small0/1/2`, the same
+# recipe at a fraction of the size (8.1 MB). The three seeds are equivalent
+# in expected quality - there is no "best seed".
+#
+# The default here is neither: running all three `final` seeds and averaging
+# their frame-wise probabilities before peak-picking is the one option that
+# beats any single one of them, at three times the compute. Averaging
+# independently-seeded runs of the same architecture is standard practice
+# and cancels per-seed noise; the beat_this authors report per-seed means
+# rather than an ensemble, so this is a well-founded addition rather than a
+# published number.
+
+# Named for what it gives you, not for how it works. An earlier name of
+# "best (3 models)" read like a choice between models, which is exactly the
+# decision this option exists to remove.
+ENSEMBLE = "Best quality"
+
+# Settings written before the rename.
+_RENAMED = {"best (3 models)": ENSEMBLE, "ensemble": ENSEMBLE}
+
+CHECKPOINTS = {
+    # UI name -> the beat_this shortnames to run and average
+    ENSEMBLE:  ("final0", "final1", "final2"),
+    "final0":  ("final0",),
+    "final1":  ("final1",),
+    "final2":  ("final2",),
+    "small0":  ("small0",),
+    "small1":  ("small1",),
+    "small2":  ("small2",),
+}
+
+CHECKPOINT_NOTES = {
+    ENSEMBLE: ("The recommended setting. Runs the main model's three trained "
+               "copies and merges them - most accurate, ~3x slower. 234 MB."),
+    "final0": "The paper's main model, seed 0 - beat_this's own default. 78 MB.",
+    "final1": "The paper's main model, seed 1. Same quality as seed 0. 78 MB.",
+    "final2": "The paper's main model, seed 2. Same quality as seed 0. 78 MB.",
+    "small0": "Small model, seed 0. Much faster, a little less accurate. 8.1 MB.",
+    "small1": "Small model, seed 1. 8.1 MB.",
+    "small2": "Small model, seed 2. 8.1 MB.",
+}
+
+DEFAULT_CHECKPOINT = ENSEMBLE
+
+
+def normalize_checkpoint(name: str) -> str:
+    """A stored setting -> a name that exists now. Covers the rename above
+    and anything hand-edited or dropped in a later version, so a stale
+    config falls back to the recommended model instead of failing at
+    analysis time."""
+    name = _RENAMED.get(name, name)
+    return name if name in CHECKPOINTS else DEFAULT_CHECKPOINT
+
+
+def checkpoint_parts(name: str) -> tuple:
+    """The beat_this shortnames a UI choice runs. An unknown name is passed
+    straight through, so a checkpoint typed in by hand still works."""
+    return CHECKPOINTS.get(_RENAMED.get(name, name), (name,))
 DEVICE_CHOICES = ("Auto", "CPU", "GPU")
 MARKER_COLORS = ("Blue", "Cyan", "Green", "Yellow", "Red", "Pink", "Purple")
 FRAME_RATES = (23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0)
@@ -145,22 +213,39 @@ def checkpoint_file(name: str) -> str | None:
 
 
 def checkpoint_present(name: str) -> bool:
-    path = checkpoint_file(name)
-    return bool(path) and os.path.exists(path)
+    """True once every checkpoint this choice needs is cached - the
+    ensemble needs all three of its models, not just the first."""
+    parts = checkpoint_parts(name)
+    return all(bool(checkpoint_file(p)) and os.path.exists(checkpoint_file(p))
+               for p in parts)
+
+
+def missing_checkpoints(name: str) -> list:
+    return [p for p in checkpoint_parts(name)
+            if not (checkpoint_file(p) and os.path.exists(checkpoint_file(p)))]
 
 
 def download_checkpoint(name: str, progress_cb=None) -> tuple:
-    """Fetch one checkpoint into the cache ahead of time. Returns (ok, msg)."""
-    if checkpoint_present(name):
+    """Fetch everything this choice needs into the cache ahead of time, so
+    the first analysis isn't a silent multi-minute download. Returns
+    (ok, msg)."""
+    missing = missing_checkpoints(name)
+    if not missing:
         return True, f"'{name}' is already downloaded."
-    if progress_cb:
-        progress_cb(f"Downloading checkpoint '{name}'…")
     try:
         from beat_this.inference import load_checkpoint
-        load_checkpoint(name, "cpu")
     except Exception as exc:
-        return False, f"Couldn't download '{name}': {exc}"
-    return True, f"Downloaded '{name}'."
+        return False, f"Can't download yet - {exc}"
+    for index, part in enumerate(missing, 1):
+        if progress_cb:
+            progress_cb(f"Downloading checkpoint '{part}' "
+                        f"({index} of {len(missing)})…")
+        try:
+            load_checkpoint(part, "cpu")
+        except Exception as exc:
+            return False, f"Couldn't download '{part}': {exc}"
+    downloaded = ", ".join(missing)
+    return True, f"Downloaded {downloaded}."
 
 
 def resolve_device(choice: str) -> str:
@@ -268,43 +353,139 @@ def estimate_bpm(beats: np.ndarray) -> float:
 
 # One loaded model per (checkpoint, device, dbn, float16) combination, kept
 # for the life of the process - reloading a 78 MB checkpoint before every
-# analysis would make "try another song" painfully slow.
+# analysis would make "try another song" painfully slow, and the ensemble
+# holds three of them. Keyed without the DBN setting, since postprocessing
+# now happens after the model rather than inside it.
 _MODEL_CACHE: dict = {}
 
 
-def analyze(audio_path: str, checkpoint: str = "final0", device: str = "cpu",
-            dbn: bool = False, float16: bool = False, progress_cb=None) -> BeatResult:
+def analyze(audio_path: str, checkpoint: str = DEFAULT_CHECKPOINT,
+            device: str = "cpu", dbn: bool = False, float16: bool = False,
+            progress_cb=None) -> BeatResult:
     """Run the model on one audio file. Blocking - call off the UI thread.
-    `progress_cb(str)`, if given, is called with short stage descriptions."""
+    `progress_cb(str)`, if given, is called with short stage descriptions.
+
+    A `checkpoint` naming more than one model (see CHECKPOINTS) runs each
+    of them over the same spectrogram and averages their frame-wise
+    probabilities before a single round of peak-picking. Probabilities
+    rather than logits, because the postprocessor keeps peaks above 0.5
+    probability - so an averaged probability makes that threshold mean
+    "most of the models agree", which averaging logits would not.
+    """
     import numpy as np
-    from beat_this.inference import Audio2Beats
+    import torch
+    from beat_this.inference import Audio2Frames
+    from beat_this.model.postprocessor import Postprocessor
     from beat_this.utils import infer_beat_numbers
 
     def note(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)
 
+    parts = checkpoint_parts(checkpoint)
+
     # Decoded before the model is touched: a file ffmpeg can't read should
     # fail in a second with ffmpeg's reason, not after a checkpoint download.
     note("Reading audio…")
     signal, sample_rate = load_audio(audio_path)
 
-    key = (checkpoint, device, dbn, float16)
-    audio2beats = _MODEL_CACHE.get(key)
-    if audio2beats is None:
-        note(f"Loading model '{checkpoint}' on {device}…")
-        audio2beats = Audio2Beats(checkpoint_path=checkpoint, device=device,
-                                   dbn=dbn, float16=float16)
-        _MODEL_CACHE[key] = audio2beats
+    models = []
+    for index, part in enumerate(parts, 1):
+        key = (part, device, float16)
+        model = _MODEL_CACHE.get(key)
+        if model is None:
+            note(f"Loading model '{part}' on {device}…"
+                 + (f" ({index} of {len(parts)})" if len(parts) > 1 else ""))
+            model = Audio2Frames(checkpoint_path=part, device=device,
+                                 float16=float16)
+            _MODEL_CACHE[key] = model
+        models.append(model)
 
-    note("Analyzing audio…")
-    beats, downbeats = audio2beats(signal, sample_rate)
+    # The mel spectrogram doesn't depend on which checkpoint is loaded, and
+    # every model here is on the same device, so it is computed once and
+    # reused rather than recomputed per model.
+    spect = models[0].signal2spect(signal, sample_rate)
+
+    beat_logits = downbeat_logits = None
+    for index, model in enumerate(models, 1):
+        note("Analyzing audio…" + (f" (model {index} of {len(models)})"
+                                    if len(models) > 1 else ""))
+        beat, down = model.spect2frames(spect)
+        if len(models) == 1:
+            beat_logits, downbeat_logits = beat, down
+            break
+        beat, down = torch.sigmoid(beat), torch.sigmoid(down)
+        beat_logits = beat if beat_logits is None else beat_logits + beat
+        downbeat_logits = down if downbeat_logits is None else downbeat_logits + down
+
+    if len(models) > 1:
+        note("Combining models…")
+        scale = float(len(models))
+        eps = 1e-6
+        beat_logits = torch.logit((beat_logits / scale).clamp(eps, 1 - eps))
+        downbeat_logits = torch.logit((downbeat_logits / scale).clamp(eps, 1 - eps))
+
+    beats, downbeats = Postprocessor(type="dbn" if dbn else "minimal")(
+        beat_logits, downbeat_logits)
     beats = np.asarray(beats, dtype=float)
     downbeats = np.asarray(downbeats, dtype=float)
     numbers = (infer_beat_numbers(beats, downbeats) if len(beats)
                else np.array([], dtype=int))
     return BeatResult(audio_path=audio_path, beats=beats, downbeats=downbeats,
                        beat_numbers=numbers)
+
+
+# ── marker density ──────────────────────────────────────────────────────
+#
+# Two reasons this exists, and the second is the important one.
+#
+# An editor wants different marker spacing for different cuts: eighths for
+# fast cutting, half-notes for slow. That is a preference.
+#
+# The other is that beat trackers make octave errors - locking onto half or
+# double the intended tempo. It is the most common way this kind of model
+# is wrong, and it is most likely on exactly the music this tab gets
+# pointed at: phonk sits around 140 BPM with a halftime feel that reads
+# convincingly as 70, and a four-to-the-floor techno track reads as
+# convincingly at 128 as at 64. When it happens the beats are not wrong,
+# they are all real - there are just half or twice as many as wanted, and
+# one press fixes it without re-running the model.
+
+DENSITIES = ("÷2", "1×", "×2")
+DEFAULT_DENSITY = "1×"
+
+
+def scale_beats(result: "BeatResult", density: str) -> "BeatResult":
+    """`result` re-spaced. Downbeats are preserved either way, so bar
+    starts keep landing on bar starts."""
+    import numpy as np
+
+    beats = np.asarray(result.beats, dtype=float)
+    downbeats = np.asarray(result.downbeats, dtype=float)
+    if density not in ("÷2", "×2") or len(beats) < 2:
+        return result
+
+    if density == "×2":
+        midpoints = (beats[:-1] + beats[1:]) / 2.0
+        beats = np.sort(np.concatenate([beats, midpoints]))
+    else:
+        # Keep alternate beats, starting from the first downbeat so the
+        # ones that survive are the ones bars start on. Any downbeat that
+        # would fall on the dropped side is kept regardless.
+        first = 0
+        if len(downbeats):
+            hits = np.nonzero(np.isin(beats, downbeats))[0]
+            if len(hits):
+                first = int(hits[0])
+        keep = (np.arange(len(beats)) - first) % 2 == 0
+        keep |= np.isin(beats, downbeats)
+        beats = beats[keep]
+
+    from beat_this.utils import infer_beat_numbers
+    numbers = (infer_beat_numbers(beats, downbeats) if len(beats)
+               else np.array([], dtype=int))
+    return BeatResult(audio_path=result.audio_path, beats=beats,
+                       downbeats=downbeats, beat_numbers=numbers)
 
 
 def save_beats_tsv(result: BeatResult, outpath: str) -> None:
@@ -323,22 +504,6 @@ def save_beats_tsv(result: BeatResult, outpath: str) -> None:
 # AddMarker() over the live scripting API (below) is a nicer bonus when
 # Resolve happens to be running right here, but needs local setup.
 
-def _timecode(seconds: float, fps: float) -> str:
-    """HH:MM:SS:FF, non-drop-frame, using the nominal (rounded) frame rate -
-    e.g. 29.97 fps is counted as 30 frames/sec, matching how Resolve labels
-    a non-drop timeline at that rate. Drop-frame timecode isn't produced;
-    use a non-drop timeline, or shift markers afterwards if yours is drop-frame."""
-    nominal = max(int(round(fps)), 1)
-    total_frames = max(int(round(seconds * nominal)), 0)
-    frames = total_frames % nominal
-    total_seconds, _ = divmod(total_frames, nominal)
-    secs = total_seconds % 60
-    total_minutes = total_seconds // 60
-    mins = total_minutes % 60
-    hours = total_minutes // 60
-    return f"{hours:02d}:{mins:02d}:{secs:02d}:{frames:02d}"
-
-
 # Resolve names marker colours "ResolveColorBlue" and so on inside an EDL,
 # and rejects anything it doesn't recognise.
 RESOLVE_COLOR = {name: "ResolveColor" + name for name in MARKER_COLORS}
@@ -352,8 +517,28 @@ DEFAULT_START_TC = "01:00:00:00"
 START_CHOICES = ("01:00:00:00", "00:00:00:00")
 
 
+# Two different conversions live here and mixing them up is how markers
+# end up drifting on a 23.976 or 29.97 timeline.
+#
+# A timecode *label* counts the nominal rate - 30 frames to the labelled
+# second on a 29.97 non-drop timeline - which is exactly why such a
+# timeline's clock runs slow against the wall. Frames themselves still
+# arrive at the real rate. So: seconds -> frames uses the real rate, and
+# frames -> label uses the nominal one. Counting a beat's position at the
+# nominal rate put every marker 0.1% late, which is a quarter of a second
+# by the end of a four-minute song - a visible miss on a cut.
+
+def _nominal(fps: float) -> int:
+    return max(int(round(fps)), 1)
+
+
+def _seconds_to_frames(seconds: float, fps: float) -> int:
+    return max(int(round(float(seconds) * float(fps))), 0)
+
+
 def _tc_to_frames(timecode: str, fps: float) -> int:
-    nominal = max(int(round(fps)), 1)
+    """A timecode label -> a frame count. Labels are nominal-rate."""
+    nominal = _nominal(fps)
     parts = [int(p) for p in str(timecode).strip().replace(";", ":").split(":")]
     while len(parts) < 4:
         parts.insert(0, 0)
@@ -362,7 +547,8 @@ def _tc_to_frames(timecode: str, fps: float) -> int:
 
 
 def _frames_to_tc(frames: int, fps: float) -> str:
-    nominal = max(int(round(fps)), 1)
+    """A frame count -> a non-drop timecode label."""
+    nominal = _nominal(fps)
     frames = max(int(frames), 0)
     rest, frame = divmod(frames, nominal)
     rest, secs = divmod(rest, 60)
@@ -385,6 +571,10 @@ def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
     Markers from EDL does not read it, which is why importing produced an
     error instead of markers.
 
+    Non-drop-frame throughout. On a drop-frame timeline the labels will
+    not line up; use a non-drop timeline, which is what Resolve gives you
+    unless you ask otherwise.
+
     Marker positions are record timecode counted from `start_tc`, which
     defaults to 01:00:00:00 because that is where Resolve starts a new
     timeline. Line the song up at the start of the timeline before
@@ -393,7 +583,6 @@ def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
     """
     name = title or os.path.splitext(os.path.basename(result.audio_path))[0]
     base = _tc_to_frames(start_tc or DEFAULT_START_TC, fps)
-    nominal = max(int(round(fps)), 1)
     beat_name = RESOLVE_COLOR.get(beat_color, "ResolveColorBlue")
     down_name = RESOLVE_COLOR.get(downbeat_color, "ResolveColorRed")
 
@@ -403,7 +592,7 @@ def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
         if downbeats_only and not is_down:
             continue
         event += 1
-        frame = base + int(round(float(time) * nominal))
+        frame = base + _seconds_to_frames(time, fps)
         tc_in = _frames_to_tc(frame, fps)
         tc_out = _frames_to_tc(frame + 1, fps)
         colour = down_name if is_down else beat_name

@@ -16,6 +16,7 @@ from .theme import T, font
 from .config import AppConfig, CONFIG_PATH
 from .convert_engine import GPU_ENCODERS
 from .media import available_encoders
+from . import beat_engine as be
 
 
 class SettingsWindow(ctk.CTkToplevel):
@@ -152,7 +153,11 @@ class SettingsWindow(ctk.CTkToplevel):
             fg_color=T.INPUT, button_color=T.LINE, button_hover_color=T.BTN_HOV,
             dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT)
-        menu.set(str(getattr(self.cfg, key)))
+        # A stored value that is no longer offered (renamed, or dropped in a
+        # later version) would otherwise show as a dead entry that saves
+        # itself straight back; fall back to the first, recommended choice.
+        current = str(getattr(self.cfg, key))
+        menu.set(current if current in values else values[0])
         menu.grid(row=row, column=1, sticky="w", pady=4)
         self.fields[key] = menu
 
@@ -402,6 +407,23 @@ class SettingsWindow(ctk.CTkToplevel):
         self._hint(tab, 15, "Your own picture across the top strip, behind the "
                             "PAZ mark. Wide pictures suit it best - it is a "
                             "76px band, cropped to fill from just above centre.")
+
+        # The Beat This tab deliberately has no model picker - there is one
+        # right answer and putting it in the way of pressing Analyze only
+        # invites picking something worse. These are the escape hatches for
+        # the rare machine that needs them.
+        self._section(tab, "Beat This", 16)
+        self._choice(tab, 17, "beat_checkpoint", "Model", list(be.CHECKPOINTS))
+        self._hint(tab, 18, "Leave this alone unless you have a reason. "
+                            + be.CHECKPOINT_NOTES.get(be.DEFAULT_CHECKPOINT, ""))
+        self._choice(tab, 19, "beat_device", "Run on", list(be.DEVICE_CHOICES))
+        self._switch(tab, 20, "beat_float16", "float16 (faster on recent GPUs, "
+                                              "slightly less precise)")
+        self._switch(tab, 21, "beat_dbn", "DBN postprocessing (needs madmom)")
+        self._hint(tab, 22, "DBN is off for a reason: the paper this tracker "
+                            "comes from is called \"Accurate Beat Tracking "
+                            "Without DBN Postprocessing\". It is here for "
+                            "comparison, not for quality.")
 
     def _banner_summary(self) -> str:
         path = self.cfg.banner_path
