@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .files import NO_WINDOW
+from .resolve_api import current_project
 
 if TYPE_CHECKING:      # annotations only - never imported at runtime
     import numpy as np
@@ -611,120 +612,6 @@ def save_edl(result: BeatResult, outpath: str, **kw) -> None:
         fh.write(text)
 
 
-# ── the Resolve scripting API ───────────────────────────────────────────
-#
-# Resolve's own README tells you to set RESOLVE_SCRIPT_API,
-# RESOLVE_SCRIPT_LIB and PYTHONPATH by hand before any of this imports.
-# Almost nobody has, so relying on a bare `import DaVinciResolveScript`
-# meant the live handoff reported "can't reach Resolve" on machines where
-# Resolve was open on the next monitor. The installer puts everything in
-# fixed places, so look there instead.
-
-def _resolve_paths() -> tuple:
-    """(scripting API dirs, fusionscript library files) to try, in order,
-    for this platform. Environment variables win when they are set."""
-    api, lib = [], []
-    env_api = os.environ.get("RESOLVE_SCRIPT_API")
-    env_lib = os.environ.get("RESOLVE_SCRIPT_LIB")
-    if env_api:
-        api.append(env_api)
-    if env_lib:
-        lib.append(env_lib)
-
-    if sys.platform.startswith("win"):
-        data = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
-        api.append(os.path.join(data, "Blackmagic Design", "DaVinci Resolve",
-                                 "Support", "Developer", "Scripting"))
-        for root in (os.environ.get("PROGRAMFILES", r"C:\Program Files"),
-                     r"C:\Program Files"):
-            lib.append(os.path.join(root, "Blackmagic Design", "DaVinci Resolve",
-                                     "fusionscript.dll"))
-    elif sys.platform == "darwin":
-        api.append("/Library/Application Support/Blackmagic Design/"
-                   "DaVinci Resolve/Developer/Scripting")
-        lib.append("/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/"
-                   "Libraries/Fusion/fusionscript.so")
-        lib.append("/Applications/DaVinci Resolve.app/Contents/Libraries/"
-                   "Fusion/fusionscript.so")
-    else:
-        api.append("/opt/resolve/Developer/Scripting")
-        api.append("/home/resolve/Developer/Scripting")
-        lib.append("/opt/resolve/libs/Fusion/fusionscript.so")
-        lib.append("/home/resolve/libs/Fusion/fusionscript.so")
-
-    seen = set()
-    api = [p for p in api if not (p in seen or seen.add(p))]
-    seen = set()
-    lib = [p for p in lib if not (p in seen or seen.add(p))]
-    return api, lib
-
-
-def resolve_module() -> tuple:
-    """(module, None) once the Resolve scripting API is importable, else
-    (None, a diagnostic saying exactly what was looked for and what to
-    check). Three attempts, cheapest first: an already-configured
-    PYTHONPATH, the installer's own Modules folder, and finally loading
-    fusionscript straight off disk as an extension module."""
-    import importlib
-    notes = []
-
-    try:
-        return importlib.import_module("DaVinciResolveScript"), None
-    except Exception:
-        pass
-
-    api_dirs, lib_files = _resolve_paths()
-    lib = next((p for p in lib_files if os.path.exists(p)), "")
-    if lib:
-        # DaVinciResolveScript.py reads this to find the native library.
-        os.environ.setdefault("RESOLVE_SCRIPT_LIB", lib)
-
-    for api in api_dirs:
-        modules = os.path.join(api, "Modules")
-        if not os.path.isdir(modules):
-            notes.append(f"not found: {modules}")
-            continue
-        if modules not in sys.path:
-            sys.path.append(modules)
-        try:
-            return importlib.import_module("DaVinciResolveScript"), None
-        except Exception as exc:
-            notes.append(f"{modules}: {exc}")
-
-    # Last resort: DaVinciResolveScript.py is only a thin wrapper that
-    # loads this same library, so load it directly and skip the wrapper.
-    if lib:
-        try:
-            import importlib.util
-            from importlib.machinery import ExtensionFileLoader
-            spec = importlib.util.spec_from_file_location(
-                "fusionscript", lib, loader=ExtensionFileLoader("fusionscript", lib))
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            if hasattr(module, "scriptapp"):
-                return module, None
-            notes.append(f"{lib}: loaded but has no scriptapp()")
-        except Exception as exc:
-            notes.append(f"{lib}: {exc}")
-    else:
-        notes.append("no fusionscript library found at: "
-                     + ", ".join(lib_files))
-
-    detail = "\n".join("  - " + n for n in notes)
-    return None, (
-        "Couldn't load the DaVinci Resolve scripting API.\n\n"
-        "Check, in this order:\n"
-        "  1. Resolve > Preferences > System > General > 'External scripting "
-        "using' is set to Local (it is Disabled by default, and this is the "
-        "usual cause even with Resolve open).\n"
-        "  2. Resolve and this app are both 64-bit and on the same machine.\n"
-        "  3. fusionscript is built for a specific Python version - if the "
-        "detail below mentions a DLL or module load failure, run this app on "
-        "the Python version Resolve supports.\n\n"
-        "What was tried:\n" + detail + "\n\n"
-        "The EDL export needs none of this and always works.")
-
-
 def send_to_resolve(result: BeatResult, beat_color: str = "Blue",
                      downbeat_color: str = "Red",
                      downbeats_only: bool = False) -> tuple[bool, str]:
@@ -735,18 +622,9 @@ def send_to_resolve(result: BeatResult, beat_color: str = "Blue",
     README. Drops one marker per beat onto the currently open timeline, at
     its own frame rate, from its own start frame - so unlike the EDL, the
     audio clip doesn't need to sit at timeline zero first."""
-    dvr, problem = resolve_module()
-    if dvr is None:
-        return False, problem
-    resolve = dvr.scriptapp("Resolve")
-    if resolve is None:
-        return False, ("Loaded Resolve's scripting API, but it can't attach to a "
-                        "running Resolve. Open Resolve, then set Preferences > "
-                        "System > General > 'External scripting using' to Local "
-                        "and try again.")
-    project = resolve.GetProjectManager().GetCurrentProject()
+    project, problem = current_project()
     if project is None:
-        return False, "No project open in Resolve."
+        return False, problem + "\n\nThe EDL export needs none of this."
     timeline = project.GetCurrentTimeline()
     if timeline is None:
         return False, "No timeline open in Resolve - open one first."
