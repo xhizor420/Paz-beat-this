@@ -11,6 +11,7 @@ import shutil
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from tkinter import messagebox, ttk
@@ -306,6 +307,8 @@ class ConvertTab(ctk.CTkFrame):
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.ACCENT2, width=150, command=self._promote)
         self.promote_btn.pack(side="right", padx=(7, 0))
+        # Measured so the button can grow when a count is appended.
+        self._btn_font = tkfont.Font(family=T.UI, size=11)
         self.gaps_btn = ctk.CTkButton(
             actions, text="Find upscale gaps", height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
@@ -774,10 +777,16 @@ class ConvertTab(ctk.CTkFrame):
         except Exception:
             return
         if total:
-            self.gaps_btn.configure(text=f"{self.F('gaps')} ({total})",
+            # Sized to its own text: the count pushes this past the fixed
+            # 150px it was given, and "Find upscale gaps (980)" came out as
+            # "nd upscale gaps (".
+            label = f"{self.F('gaps')} ({total})"
+            self.gaps_btn.configure(text=label,
+                                    width=self._btn_font.measure(label) + 28,
                                     fg_color=T.WARN_DEEP, text_color=T.WARN)
         else:
-            self.gaps_btn.configure(text=self.F("gaps"), fg_color=T.BTN, text_color=T.FAINT)
+            self.gaps_btn.configure(text=self.F("gaps"), width=150,
+                                    fg_color=T.BTN, text_color=T.FAINT)
 
     def _list_gaps(self):
         if self.busy_tool:

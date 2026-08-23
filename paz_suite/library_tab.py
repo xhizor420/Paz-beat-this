@@ -66,6 +66,7 @@ class LibraryTab(ctk.CTkFrame):
         # selection the moment tags were fetched.
         self.marked: set = set()
         self._mark_anchor: int | None = None
+        self._said_marks = False
 
         self.busy = False
         self._page_token = 0
@@ -1822,13 +1823,19 @@ class LibraryTab(ctk.CTkFrame):
         self.marked.clear()
         self._mark_anchor = None
         self._restyle_cards()
-        self.set_status(self.F("idle"), T.FAINT)
+        self._report_marks()
 
     def _report_marks(self) -> None:
+        """Keep the status line honest about the selection - including when
+        there stops being one. A plain click clears the set, and without
+        this the line went on claiming three clips were selected."""
         count = len(self.marked)
         if count:
             self.set_status(f"{count} clip{'s' if count != 1 else ''} selected "
                             "· right-click for what to do with them", T.ACCENT2)
+        elif self._said_marks:
+            self.set_status(self.F("idle"), T.FAINT)
+        self._said_marks = bool(count)
 
     def _select(self, rec: Rec):
         self.selected = rec
@@ -2239,6 +2246,7 @@ class LibraryTab(ctk.CTkFrame):
     def _sync_work(self, full: bool):
         conn = db_connect()
         gone: list = []
+        blocked = False
         try:
             if full:
                 conn.execute("DELETE FROM files")
@@ -2289,10 +2297,12 @@ class LibraryTab(ctk.CTkFrame):
             # deletion this large has to be asked for.
             refused = self._refuse_mass_delete(gone, known, on_disk)
             if refused:
-                self.ui(self.set_status, refused, T.FAIL)
+                # Stop here rather than carrying on with empty lists: the
+                # rest of this reports what it did and would overwrite the
+                # refusal with a cheerful "synced, 0 changed".
+                blocked = True
                 self.ui(self._sync_blocked, refused)
-                gone = []
-                todo = []
+                return
 
             for path in gone:
                 conn.execute("DELETE FROM files WHERE path=?", (path,))
@@ -2344,7 +2354,9 @@ class LibraryTab(ctk.CTkFrame):
                 conn.commit()
         finally:
             conn.close()
-            self.ui(self._sync_done, len(gone))
+            # _sync_blocked has already restored the buttons and said why.
+            if not blocked:
+                self.ui(self._sync_done, len(gone))
 
     # Below this many clips the library is small enough that a wrong
     # answer costs minutes, not an evening, and the check would only get
@@ -2360,12 +2372,17 @@ class LibraryTab(ctk.CTkFrame):
             return ("Sync stopped: the library folder isn't reachable. "
                     "Nothing was changed - check the drive is connected, "
                     "then try again.")
-        if len(known) < self.SYNC_GUARD_FLOOR:
-            return None
+        # Finding nothing at all is suspicious whatever the size of the
+        # library: an indexed library does not go to zero files on its own.
         if not on_disk:
             return (f"Sync stopped: the folders are reachable but hold no "
-                    f"matching files, which would have removed all "
-                    f"{len(known):,} clips. Nothing was changed.")
+                    f"matching files at all, which would have removed every "
+                    f"one of the {len(known):,} clips indexed. Nothing was "
+                    f"changed - check the drive is the one you think it is.")
+        # The proportional check does need a floor: while folders are still
+        # being set up, losing most of a handful of clips is expected.
+        if len(known) < self.SYNC_GUARD_FLOOR:
+            return None
         if len(gone) >= len(known) * self.SYNC_GUARD_SHARE:
             share = len(gone) / len(known) * 100
             return (f"Sync stopped: {len(gone):,} of {len(known):,} clips "
@@ -2376,7 +2393,14 @@ class LibraryTab(ctk.CTkFrame):
         return None
 
     def _sync_blocked(self, reason: str) -> None:
-        self.toaster.show(reason, "fail", ms=15000)
+        self.busy = False
+        self.more_btn.configure(state="normal")
+        self.progress.set(0)
+        # The status bar is one line and this is a paragraph, so it gets
+        # the headline; the toast and the log carry the whole thing.
+        self.set_status(reason.split(" - ")[0].rstrip(".") + " - see the "
+                        "message for why.", T.FAIL)
+        self.toaster.show(reason, "fail", ms=20000)
 
     def _sync_done(self, removed: int):
         self.busy = False

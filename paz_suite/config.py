@@ -142,6 +142,7 @@ class AppConfig:
     # it was simply what beat_this defaults to. Moved across once, then
     # never touched again, so a later deliberate choice of final0 sticks.
     beat_default_upgraded: bool = False
+    player_default_upgraded: bool = False
     beat_device: str = "Auto"           # Auto | CPU | GPU
     beat_dbn: bool = False
     beat_float16: bool = False
@@ -182,14 +183,30 @@ class AppConfig:
         return cfg
 
     def _upgrade_beat_default(self) -> bool:
-        """Move pre-ensemble installs onto the new default exactly once.
-        Returns True when something changed and the file needs writing."""
-        if self.beat_default_upgraded:
-            return False
-        self.beat_default_upgraded = True
-        if self.beat_checkpoint == "final0":
-            self.beat_checkpoint = AppConfig.beat_checkpoint
-        return True
+        """Move installs made before these defaults changed onto the new
+        ones, exactly once each. Returns True when something changed and
+        the file needs writing.
+
+        A default that only applies to fresh installs never reaches anyone
+        who already has a config, which is everyone it was changed for.
+        Both of these were the old default rather than a choice anybody
+        made, so they are moved across once and then left alone.
+        """
+        changed = False
+        if not self.beat_default_upgraded:
+            self.beat_default_upgraded = True
+            changed = True
+            if self.beat_checkpoint == "final0":
+                self.beat_checkpoint = AppConfig.beat_checkpoint
+        if not self.player_default_upgraded:
+            self.player_default_upgraded = True
+            changed = True
+            # Playing the 4K/60 pool copy is five times more expensive to
+            # decode than the converted one and is what made playback
+            # stutter and drift. The player's 4K button still switches it
+            # per clip.
+            self.player_prefer_premium = AppConfig.player_prefer_premium
+        return changed
 
     def _read(self, path: str) -> None:
         try:

@@ -66,12 +66,23 @@ def test_deleting_a_few_clips_is_still_allowed():
     assert tab._refuse_mass_delete(gone, known, on_disk) is None
 
 
-def test_a_small_library_is_not_second_guessed():
-    """Below the floor a wrong answer costs minutes, and the check would
-    only get in the way while folders are still being set up."""
+def test_a_small_library_is_still_protected_from_finding_nothing():
+    """An indexed library does not go to zero files on its own, whatever
+    its size."""
     known = library(10)
     tab = FakeTab(dirs=["P:/clips"])
-    assert tab._refuse_mass_delete(list(known), known, {}) is None
+    reason = tab._refuse_mass_delete(list(known), known, {})
+    assert reason and "no matching files at all" in reason
+
+
+def test_a_small_library_is_not_second_guessed_proportionally():
+    """The share check does need a floor: while folders are still being
+    set up, losing most of a handful of clips is expected."""
+    known = library(10)
+    on_disk = {p: sig for p, sig in list(known.items())[:2]}
+    gone = [p for p in known if p not in on_disk]
+    tab = FakeTab(dirs=["P:/clips"])
+    assert tab._refuse_mass_delete(gone, known, on_disk) is None
 
 
 def test_an_empty_index_is_not_second_guessed():
