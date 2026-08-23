@@ -126,135 +126,182 @@ class LibraryTab(ctk.CTkFrame):
         self._build_details()
 
     SEARCH_H = 38
+    SEARCH_REST = 340        # width of the resting search field, unscaled
 
     def _build_topbar(self):
         """
-        Two rows instead of one long one: browsing up top (the search field
-        leading, then rating/sort), a separate action toolbar underneath
-        (sync + maintenance on the left, configuration on the right). The
-        standalone Folders button is gone - Settings > Library > "Change
-        folders..." and Ctrl+O both still reach it, so it doesn't need its
-        own slot in an already busy row.
+        One row: search, sort, and everything else behind a single menu.
+
+        This used to be two rows carrying eleven controls. Ten of them were
+        things you reach for occasionally - sync, fix, fetch, settings,
+        help, random, ratio - sitting permanently next to the one control
+        this tab is built around. They are all one click away in the menu
+        now, and the row reads as a search bar rather than a toolbar.
+
+        The rating filter is gone entirely. `rating:e` in the search box
+        does the same job, and the four-button segment was four permanent
+        controls for something most searches never touch.
         """
         bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0)
         bar.grid(row=0, column=0, columnspan=3, sticky="ew")
+        bar.grid_columnconfigure(1, weight=1)
 
-        # ── row 1: browse ────────────────────────────────────────────────
-        row1 = ctk.CTkFrame(bar, fg_color="transparent")
-        row1.pack(fill="x")
-        row1.grid_columnconfigure(0, weight=1)
-
-        # Search leads the row. The suite's identity is in the header strip
-        # and which tab you're on is in the tab strip right above this, so a
-        # third "PAZ Library" lockup here was only pushing the one control
-        # this tab is actually built around into the middle of the row.
-        box = ctk.CTkFrame(row1, fg_color=T.INPUT, corner_radius=10,
-                           border_width=1, border_color=T.ACCENT2_DEEP,
-                           height=self.SEARCH_H)
-        box.grid(row=0, column=0, sticky="ew", padx=(18, 12), pady=(11, 7))
+        # The search field rests small and takes the row when you use it -
+        # see _search_focus. Column 1 is the slack it grows into.
+        box = ctk.CTkFrame(bar, fg_color=T.INPUT, corner_radius=10,
+                           border_width=1, border_color=T.LINE,
+                           height=px(self.SEARCH_H), width=px(self.SEARCH_REST))
+        box.grid(row=0, column=0, sticky="w", padx=(px(18), 0), pady=px(11))
         box.pack_propagate(False)
+        self.search_box = box
 
-        self._lens = lens_photo(15, T.ACCENT2)
+        self._lens = lens_photo(px(15), T.ACCENT2)
         tk.Label(box, image=self._lens, bg=T.INPUT, bd=0
-                 ).pack(side="left", padx=(13, 0))
+                 ).pack(side="left", padx=(px(13), 0))
 
-        # The ↺/✕ pair rides inside the field rather than beside it, so the
-        # row reads as one control instead of three parked next to each other.
         def boxbtn(text, cmd, size=13):
-            ctk.CTkButton(box, text=text, width=28, height=self.SEARCH_H - 12,
-                          corner_radius=7, font=font(size),
-                          fg_color="transparent", hover_color=T.BTN_HOV,
-                          text_color=T.DIM, command=cmd
-                          ).pack(side="right", padx=(0, 5))
+            button = ctk.CTkButton(
+                box, text=text, width=px(28), height=px(self.SEARCH_H - 12),
+                corner_radius=7, font=font(size), fg_color="transparent",
+                hover_color=T.BTN_HOV, text_color=T.DIM, command=cmd)
+            button.pack(side="right", padx=(0, px(5)))
+            return button
 
-        boxbtn("✕", self._clear_search, 12)
-        boxbtn("↺", self._show_history)
+        self.clear_btn = boxbtn("✕", self._clear_search, 12)
+        self.history_btn = boxbtn("↺", self._show_history)
 
         self.search = ctk.CTkEntry(
-            box, placeholder_text="wolf -mlp  artist:name  rating:e  "
-                                  "folder:Furry      ( / to focus )",
-            height=self.SEARCH_H - 8, font=font(13), corner_radius=0,
+            box, placeholder_text="Search",
+            height=px(self.SEARCH_H - 8), font=font(13), corner_radius=0,
             fg_color="transparent", border_width=0, text_color=T.TEXT,
             placeholder_text_color=T.FAINT)
-        self.search.pack(side="left", fill="both", expand=True, padx=(8, 4))
+        self.search.pack(side="left", fill="both", expand=True,
+                         padx=(px(8), px(4)))
         self.search.bind("<KeyRelease>", self._on_search_key)
         self.search.bind("<Return>", self._commit_search)
         self.search.bind("<Up>", lambda e: self._history_step(-1))
         self.search.bind("<Down>", lambda e: self._history_step(1))
-        self.search.bind("<Escape>", lambda e: self._clear_search())
+        self.search.bind("<Escape>", lambda e: self._search_escape())
+        self.search.bind("<FocusIn>", lambda e: self._search_focus(True))
+        self.search.bind("<FocusOut>", lambda e: self._search_focus(False))
         self._history_pos = -1
+        self._search_open = False
+        self._search_anim = None
 
-        right1 = ctk.CTkFrame(row1, fg_color="transparent")
-        right1.grid(row=0, column=1, sticky="e", padx=(0, 16), pady=(11, 7))
-
-        self.rating_seg = ctk.CTkSegmentedButton(
-            right1, values=["All", "S", "Q", "E"], command=lambda _v: self.run_search(),
-            font=font(11), height=self.SEARCH_H, corner_radius=9, fg_color=T.INPUT,
-            selected_color=T.ACCENT2_DEEP, selected_hover_color=T.ACCENT2_DEEP,
-            unselected_color=T.INPUT, unselected_hover_color=T.BTN_HOV,
-            text_color=T.DIM, border_width=2)
-        self.rating_seg.set("All")
-        self.rating_seg.pack(side="left", padx=(0, 8))
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=2, sticky="e", padx=(px(12), px(16)),
+                   pady=px(11))
 
         self.sort_menu = ctk.CTkOptionMenu(
-            right1, values=list(SORTS), width=118, height=self.SEARCH_H,
+            right, values=list(SORTS), width=px(120), height=px(self.SEARCH_H),
             font=font(12), corner_radius=9, fg_color=T.INPUT, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
             dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, command=lambda _v: self.run_search())
         self.sort_menu.set(self.cfg.sort if self.cfg.sort in SORTS else "Newest")
-        self.sort_menu.pack(side="left", padx=(0, 8))
+        self.sort_menu.pack(side="left", padx=(0, px(8)))
 
-        ctk.CTkButton(right1, text="▲ Top", width=62, height=self.SEARCH_H,
-                      corner_radius=9, font=font(11), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.ACCENT2,
-                      command=lambda: self.add_token("sort:score")
-                      ).pack(side="left")
+        self.more_btn = ctk.CTkButton(
+            right, text="⋯", width=px(40), height=px(self.SEARCH_H),
+            corner_radius=9, font=font(15, "bold"), fg_color=T.BTN,
+            hover_color=T.BTN_HOV, text_color=T.ACCENT2, command=self._more_menu)
+        self.more_btn.pack(side="left")
 
-        # ── row 2: act ───────────────────────────────────────────────────
-        row2 = ctk.CTkFrame(bar, fg_color="transparent")
-        row2.pack(fill="x")
-        row2.grid_columnconfigure(1, weight=1)
+    # ── the search field's two sizes ────────────────────────────────────
 
-        actions = ctk.CTkFrame(row2, fg_color="transparent")
-        actions.grid(row=0, column=0, sticky="w", padx=18, pady=(0, 10))
+    def _search_width(self, opening: bool) -> int:
+        if not opening:
+            return px(self.SEARCH_REST)
+        try:
+            room = self.search_box.master.winfo_width()
+        except tk.TclError:
+            room = px(self.SEARCH_REST)
+        reserved = px(self.SEARCH_REST) + px(240)
+        return max(px(self.SEARCH_REST), min(room - reserved, px(1100)))
 
-        self.sync_btn = ctk.CTkButton(
-            actions, text="Sync library", width=110, height=30, corner_radius=7,
-            font=font(11, "bold"), fg_color=T.ACCENT2_DEEP, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT2, command=self._sync_clicked)
-        self.sync_btn.pack(side="left", padx=(0, 8))
+    def _search_focus(self, opening: bool) -> None:
+        """Grow into the row while you are typing, shrink back when you are
+        not. Search is the one thing on this row that wants space only
+        some of the time, and a permanently wide field was most of what
+        made the row read as a toolbar."""
+        if opening == self._search_open:
+            return
+        self._search_open = opening
+        self._animate_search(self._search_width(opening))
 
-        self.fix_btn = ctk.CTkButton(
-            actions, text="Fix missing", width=190, height=30, corner_radius=7,
-            font=font(11, "bold"), fg_color=T.ACCENT_DEEP, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT, command=self._fill_missing)
-        self.fix_btn.pack(side="left", padx=(0, 8))
-        # Right-click for the expensive, occasional check: a full decode
-        # pass looking for corrupt files, not just missing tags/thumbs.
-        self.fix_btn.bind("<Button-3>", self._verify_menu)
+    def _animate_search(self, target: int, step: int = 0) -> None:
+        """Eight frames from here to there. Instant resizing reads as the
+        layout glitching; a slow one gets in the way of typing."""
+        if self._search_anim is not None:
+            try:
+                self.after_cancel(self._search_anim)
+            except ValueError:
+                pass
+            self._search_anim = None
+        try:
+            current = self.search_box.winfo_width()
+        except tk.TclError:
+            return
+        if step >= 8 or abs(target - current) <= 2:
+            try:
+                self.search_box.configure(width=target)
+            except tk.TclError:
+                pass
+            return
+        eased = current + (target - current) * 0.42
+        try:
+            self.search_box.configure(width=int(eased))
+        except tk.TclError:
+            return
+        self._search_anim = self.after(
+            16, lambda: self._animate_search(target, step + 1))
 
-        self.fetch_btn = ctk.CTkButton(
-            actions, text="Fetch e621 tags", width=124, height=30, corner_radius=7,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT, command=lambda: self._fetch_tags(full=True))
-        self.fetch_btn.pack(side="left")
+    def _search_escape(self):
+        self._clear_search()
+        try:
+            self.gallery.focus_set()
+        except tk.TclError:
+            pass
+        return "break"
 
-        config = ctk.CTkFrame(row2, fg_color="transparent")
-        config.grid(row=0, column=2, sticky="e", padx=16, pady=(0, 10))
+    # ── everything that isn't search ────────────────────────────────────
 
-        self.settings_btn = ctk.CTkButton(
-            config, text="Settings", width=80, height=30, corner_radius=7,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, command=self._open_settings)
-        self.settings_btn.pack(side="left", padx=(0, 8))
-
-        self.help_btn = ctk.CTkButton(
-            config, text="?", width=30, height=30, corner_radius=7,
-            font=font(12, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.FAINT, command=lambda: HelpWindow(self.root))
-        self.help_btn.pack(side="left")
+    def _more_menu(self, _event=None) -> None:
+        """One menu for the whole toolbar that used to be a second row."""
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        menu.add_command(label=self.F("sync"), command=self._sync_clicked)
+        menu.add_command(label="Rebuild everything (full sync)",
+                         command=self.key_full_rebuild)
+        menu_rule(menu)
+        menu.add_command(label=self._fix_label(), command=self._fill_missing,
+                         state="normal" if self._fix_breakdown else "disabled")
+        menu.add_command(label=self.F("fetch"),
+                         command=lambda: self._fetch_tags(full=True))
+        menu.add_command(label="Check for corrupt files…",
+                         command=self._verify_library)
+        menu_rule(menu)
+        menu.add_command(label="Random clip", command=self._random)
+        ratio = popup_menu(menu, activebackground=T.ACCENT2_DEEP,
+                           activeforeground=T.ACCENT2)
+        for token, label in (("is:portrait", "Portrait"),
+                             ("is:widescreen", "Widescreen"),
+                             ("is:square", "Square")):
+            ratio.add_command(label=label, command=lambda t=token: self.add_token(t))
+        menu.add_cascade(label="Shape", menu=ratio)
+        menu.add_command(label="Highest scoring first",
+                         command=lambda: self.add_token("sort:score"))
+        menu_rule(menu)
+        menu.add_command(label="Change folders…", command=self._open_folders)
+        menu.add_command(label="Settings…", command=self._open_settings)
+        menu.add_command(label="Keyboard shortcuts…",
+                         command=lambda: HelpWindow(self.root))
+        try:
+            menu.tk_popup(self.more_btn.winfo_rootx(),
+                          self.more_btn.winfo_rooty() + self.more_btn.winfo_height())
+        finally:
+            menu.grab_release()
 
     # Everything this app sends lands in one bin, so a Resolve project
     # doesn't end up with library clips scattered through its root.
@@ -362,23 +409,13 @@ class LibraryTab(ctk.CTkFrame):
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
                                  text_color=T.DIM,
                                  command=lambda t=token: self.add_token(t))
-            chip.pack(side="left", padx=(0, 6))
+            chip.pack(side="left", padx=(0, px(6)))
             self.quick_chips[key] = (chip, text)
 
         pager = ctk.CTkFrame(info, fg_color="transparent")
         pager.grid(row=0, column=2, sticky="e", padx=(14, 0))
         self._info_pager = pager
         info.bind("<Configure>", self._fit_info_row)
-
-        ctk.CTkButton(pager, text="🎲 Random", height=22, width=84,
-                      corner_radius=11, font=font(9), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.ACCENT2,
-                      command=self._random).pack(side="left", padx=(0, 6))
-        self.ratio_btn = ctk.CTkButton(
-            pager, text="Ratio ▾", height=22, width=76, corner_radius=11,
-            font=font(9), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT2, command=self._ratio_menu)
-        self.ratio_btn.pack(side="left", padx=(0, 14))
 
         def pbtn(text, cmd):
             return ctk.CTkButton(pager, text=text, width=34, height=24,
@@ -461,19 +498,6 @@ class LibraryTab(ctk.CTkFrame):
 
     def _on_scroll(self, first, last):
         self.gallery_bar.set(first, last)
-
-    def _ratio_menu(self):
-        menu = popup_menu(self.root)
-        menu.add_command(label="All ratios", command=lambda: self._set_ratio(None))
-        menu.add_command(label="📱 Portrait", command=lambda: self._set_ratio("is:portrait"))
-        menu.add_command(label="🖥 Widescreen", command=lambda: self._set_ratio("is:widescreen"))
-        menu.add_command(label="◻ Square", command=lambda: self._set_ratio("is:square"))
-        try:
-            x = self.ratio_btn.winfo_rootx()
-            y = self.ratio_btn.winfo_rooty() + self.ratio_btn.winfo_height()
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
 
     def _set_ratio(self, token: str | None):
         tokens = [t for t in self.search.get().split() if t not in RATIO_TOKENS]
@@ -595,11 +619,10 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_tags.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
         self.detail_tags.grid_columnconfigure(0, weight=1)
 
-    # ── brand ────────────────────────────────────────────────────────────
-
     def _apply_brand(self):
-        self.sync_btn.configure(text=self.F("sync"))
-        self.fetch_btn.configure(text=self.F("fetch"))
+        """Nothing to relabel any more: the actions live in the ⋯ menu,
+        which is rebuilt from self.F() every time it opens. Kept because
+        the app shell calls it on every tab after a settings change."""
 
     def _bind_local_keys(self):
         """Bindings that only ever make sense inside this tab's own widgets
@@ -777,13 +800,16 @@ class LibraryTab(ctk.CTkFrame):
             if n_thumb:
                 parts.append(f"{n_thumb} thumb{'s' if n_thumb != 1 else ''}")
             self._fix_breakdown = " · ".join(parts)
-            label = self._fix_breakdown if len(parts) == 1 else f"{outstanding} missing"
-            self.fix_btn.configure(text=f"Fix missing: {label}",
-                                    fg_color=T.ACCENT_DEEP, text_color=T.ACCENT)
         else:
-            self.fix_btn.configure(text="Nothing missing", fg_color=T.BTN, text_color=T.FAINT)
             self._fix_breakdown = ""
         self._refresh_quick_counts()
+
+    def _fix_label(self) -> str:
+        """What the menu offers to do about missing tags/details/thumbs.
+        This used to live on a permanently visible button whose text was
+        the only place the breakdown appeared."""
+        return (f"Fix missing: {self._fix_breakdown}" if self._fix_breakdown
+                else "Nothing missing")
 
     def _refresh_quick_counts(self):
         if not getattr(self, "quick_chips", None) or not self.records:
@@ -804,13 +830,18 @@ class LibraryTab(ctk.CTkFrame):
             # Sized to the text, not to a fixed 92px: "Non-4K (4)" is
             # wider than "4K ✓ (2)" and a shared width clipped the longest
             # label's closing bracket.
+            # A chip reading "Untagged 0" is a filter that would return
+            # nothing, taking up room next to ones that would. Hidden
+            # rather than greyed out - a disabled control still reads as
+            # something you are being denied.
+            if not count:
+                chip.pack_forget()
+                continue
             text = f"{label}  {count}"
-            chip.configure(text=text,
-                           width=self._quick_font.measure(text) + 26)
-            if key in ("untagged", "noid", "portrait", "widescreen", "square") and count == 0:
-                chip.configure(text_color=T.FAINT, state="disabled")
-            else:
-                chip.configure(text_color=T.DIM, state="normal")
+            chip.configure(text=text, text_color=T.DIM, state="normal",
+                           width=self._quick_font.measure(text) + px(26))
+            if not chip.winfo_ismapped():
+                chip.pack(side="left", padx=(0, px(6)))
 
     def _load_library(self):
         conn = db_connect()
@@ -865,7 +896,7 @@ class LibraryTab(ctk.CTkFrame):
                 rec.used_color = marks[0][1]   # most-recent mark, per vault_marks_by_path
             self.records.append(rec)
             self.by_path[rec.path] = rec
-        if hasattr(self, "fix_btn"):
+        if hasattr(self, "quick_chips"):
             self._refresh_missing_badge()
         # The identity bar carries one live number for the whole suite, so
         # the size of the library is visible from any tab, not just this one.
@@ -941,8 +972,6 @@ class LibraryTab(ctk.CTkFrame):
     def _restore_state(self):
         if self.cfg.last_sort in SORTS:
             self.sort_menu.set(self.cfg.last_sort)
-        if self.cfg.last_rating in ("All", "S", "Q", "E"):
-            self.rating_seg.set(self.cfg.last_rating)
         if self.cfg.last_search:
             self.search.delete(0, tk.END)
             self.search.insert(0, self.cfg.last_search)
@@ -950,22 +979,16 @@ class LibraryTab(ctk.CTkFrame):
     def _remember_state(self):
         query = self.search.get().strip()
         sort = self.sort_menu.get()
-        rating = self.rating_seg.get()
-        if (query, sort, rating) == (self.cfg.last_search, self.cfg.last_sort,
-                                     self.cfg.last_rating):
+        if (query, sort) == (self.cfg.last_search, self.cfg.last_sort):
             return
         self.cfg.last_search = query
         self.cfg.last_sort = sort
-        self.cfg.last_rating = rating
         self.cfg.save()
 
     def run_search(self):
         self._search_after = None
         query = self.search.get().strip()
         includes, excludes = parse_query(query)
-        rating = self.rating_seg.get()
-        if rating in ("S", "Q", "E"):
-            includes.append(("rating", rating.lower()))
         self.filtered = [r for r in self.records if rec_matches(r, includes, excludes)]
         key = SORTS.get(self.sort_menu.get(), SORTS["Newest"])
         self.filtered.sort(key=key)
@@ -2024,7 +2047,7 @@ class LibraryTab(ctk.CTkFrame):
             self._open_folders()
             return
         self.busy = True
-        self.sync_btn.configure(state="disabled")
+        self.more_btn.configure(state="disabled")
         self.set_status(self.F("scanning"), T.ACCENT2)
         self.progress.set(0)
         threading.Thread(target=self._sync_work, args=(full,), daemon=True).start()
@@ -2125,7 +2148,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def _sync_done(self, removed: int):
         self.busy = False
-        self.sync_btn.configure(state="normal")
+        self.more_btn.configure(state="normal")
         self.progress.set(1.0)
         self._load_library()
         self.run_search()
@@ -2168,14 +2191,6 @@ class LibraryTab(ctk.CTkFrame):
         return {"tags": no_tags, "probe": no_probe, "thumbs": no_thumb, "no_id": no_id}
 
     # ── integrity check (full decode, catches what probing can't) ──────────
-
-    def _verify_menu(self, event):
-        menu = popup_menu(self.root)
-        menu.add_command(label="Verify library integrity…", command=self._verify_library)
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
 
     def _verify_library(self):
         if not self.records:
@@ -2222,8 +2237,7 @@ class LibraryTab(ctk.CTkFrame):
         self.set_status("Fixing: " + ", ".join(bits), T.ACCENT2)
 
         self.busy = True
-        self.fix_btn.configure(state="disabled")
-        self.fetch_btn.configure(state="disabled")
+        self.more_btn.configure(state="disabled")
         self.progress.set(0)
         self.set_status(f"Rebuilding {len(media)} missing thumbnails/details", T.ACCENT2)
 
@@ -2257,8 +2271,7 @@ class LibraryTab(ctk.CTkFrame):
         threading.Thread(target=work, daemon=True).start()
 
     def _media_fixed(self, done: int, more_tags: bool, failed: int = 0):
-        self.fix_btn.configure(state="normal")
-        self.fetch_btn.configure(state="normal")
+        self.more_btn.configure(state="normal")
         self._load_library()
         self.run_search()
         message = f"Rebuilt {done - failed}/{done} thumbnails/details"
@@ -2350,8 +2363,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def _run_fetch(self, todo: list, refreshing: int, note: str = "") -> None:
         self.busy = True
-        self.fetch_btn.configure(state="disabled")
-        self.fix_btn.configure(state="disabled")
+        self.more_btn.configure(state="disabled")
         delay = max(float(self.cfg.e621_fetch_delay), 0.5)
         status = f"{self.F('fetching')} · {note or f'{len(todo)} posts'}"
         if refreshing:
@@ -2384,8 +2396,7 @@ class LibraryTab(ctk.CTkFrame):
             finally:
                 self.emeta.save()
                 self.busy = False
-                self.ui(self.fetch_btn.configure, state="normal")
-                self.ui(self.fix_btn.configure, state="normal")
+                self.ui(self.more_btn.configure, state="normal")
                 self.ui(self._fetch_done, hits, missing, failed, last_error, refreshing)
 
         threading.Thread(target=work, daemon=True).start()

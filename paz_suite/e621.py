@@ -22,7 +22,10 @@ from datetime import datetime
 from .config import CONFIG_DIR, E621_META_PATH
 
 APP_NAME = "PAZ Suite"
-APP_VERSION = "1.0"
+# Still finding its edges - Resolve, the beat models and the
+# 4K paths all landed recently. 1.0 when those have been lived
+# with for a while.
+APP_VERSION = "0.8 beta"
 
 E621_API = "https://e621.net/posts/{pid}.json"
 E621_POST = "https://e621.net/posts/{pid}"
