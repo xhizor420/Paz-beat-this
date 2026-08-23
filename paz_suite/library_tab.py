@@ -54,6 +54,7 @@ class LibraryTab(ctk.CTkFrame):
         self.peek = app.peek
 
         self.records: list[Rec] = []
+        self._tagpanel_after = None
         self.by_path: dict = {}
         self.tag_universe: set = set()
         self.filtered: list[Rec] = []
@@ -776,6 +777,35 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── library loading ─────────────────────────────────────────────────────
 
+    def _apply_meta(self, rec: Rec) -> None:
+        """Fold this clip's cached e621 record into it. Split out of the
+        load so a fetch can update the handful of clips it touched instead
+        of re-reading the whole library, which is over a second once the
+        library runs into five figures."""
+        meta = self.emeta.get(rec.pid) if rec.pid else None
+        if not meta or meta.get("missing"):
+            return
+        rec.artists = list(meta.get("artist") or [])
+        rec.characters = list(meta.get("character") or [])
+        rec.species = list(meta.get("species") or [])
+        rec.copyrights = list(meta.get("copyright") or [])
+        rec.lore = list(meta.get("lore") or [])
+        rec.rating = meta.get("rating") or ""
+        rec.score = meta.get("score") or 0
+        rec.tags = set((meta.get("tags") or "").split())
+        rec.url = meta.get("url") or ""
+        self.tag_universe |= rec.tags
+        rec.compute_named()
+
+    def refresh_meta_for(self, pids) -> None:
+        """Re-apply cached tags to just these post IDs, in place."""
+        wanted = set(pids or ())
+        if not wanted:
+            return
+        for rec in self.records:
+            if rec.pid in wanted:
+                self._apply_meta(rec)
+
     def _refresh_missing_badge(self):
         """
         The badge used to just show a bare total, e.g. "(2)" - a number
@@ -874,19 +904,7 @@ class LibraryTab(ctk.CTkFrame):
 
         for row in rows:
             rec = Rec(*row)
-            meta = self.emeta.get(rec.pid) if rec.pid else None
-            if meta and not meta.get("missing"):
-                rec.artists = list(meta.get("artist") or [])
-                rec.characters = list(meta.get("character") or [])
-                rec.species = list(meta.get("species") or [])
-                rec.copyrights = list(meta.get("copyright") or [])
-                rec.lore = list(meta.get("lore") or [])
-                rec.rating = meta.get("rating") or ""
-                rec.score = meta.get("score") or 0
-                rec.tags = set((meta.get("tags") or "").split())
-                rec.url = meta.get("url") or ""
-                self.tag_universe |= rec.tags
-                rec.compute_named()
+            self._apply_meta(rec)
             alt_path = premium.get(rec.folder, {}).get(rec.name)
             rec.premium = rec.height >= 2000 or alt_path is not None
             rec.premium_path = alt_path or ""
@@ -995,7 +1013,7 @@ class LibraryTab(ctk.CTkFrame):
         self.page = 0
         self._remember_state()
         self._render_chips(query)
-        self._render_tagpanel()
+        self.queue_tagpanel()
         self.render_page()
 
     def _render_chips(self, query: str):
@@ -1125,7 +1143,28 @@ class LibraryTab(ctk.CTkFrame):
             used += width + 4
         return row
 
+    TAGPANEL_DELAY_MS = 240
+
+    def queue_tagpanel(self) -> None:
+        """Rebuild the tag sidebar shortly, not right now.
+
+        Counting every tag across the whole result set and then throwing
+        away and rebuilding a hundred widgets costs about 600ms on a
+        library of ten thousand clips - and it was happening inside every
+        search, so every keystroke froze for over half a second whatever
+        the results were. Results are what you are waiting for; the
+        sidebar is a summary of them and can arrive a moment later.
+        """
+        if self._tagpanel_after is not None:
+            try:
+                self.after_cancel(self._tagpanel_after)
+            except ValueError:
+                pass
+        self._tagpanel_after = self.after(self.TAGPANEL_DELAY_MS,
+                                          self._render_tagpanel)
+
     def _render_tagpanel(self):
+        self._tagpanel_after = None
         for child in self.tagpanel.winfo_children():
             child.destroy()
         artists = collections.Counter()
@@ -2397,13 +2436,25 @@ class LibraryTab(ctk.CTkFrame):
                 self.emeta.save()
                 self.busy = False
                 self.ui(self.more_btn.configure, state="normal")
-                self.ui(self._fetch_done, hits, missing, failed, last_error, refreshing)
+                self.ui(self._fetch_done, hits, missing, failed, last_error,
+                        refreshing, list(todo))
 
         threading.Thread(target=work, daemon=True).start()
 
     def _fetch_done(self, hits: int, missing: int, failed: int = 0,
-                    last_error: str = "", refreshed: int = 0) -> None:
-        self._reload_and_keep_place()
+                    last_error: str = "", refreshed: int = 0,
+                    pids=None) -> None:
+        # Only the posts that were fetched can have changed, so re-reading
+        # the whole library here costs over a second on a big one for no
+        # reason. Nothing on disk moved; only the tag cache did.
+        if pids:
+            self.refresh_meta_for(pids)
+            self._restyle_cards()
+            self._render_details()
+            self.queue_tagpanel()
+            self._refresh_missing_badge()
+        else:
+            self._reload_and_keep_place()
         # "missing" (post deleted/hidden on e621, cached so it's never
         # retried) and "failed" (a transient network error, not cached, so
         # it's retried the next time Fix missing / Fetch tags runs) look the
