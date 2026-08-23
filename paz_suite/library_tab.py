@@ -54,12 +54,18 @@ class LibraryTab(ctk.CTkFrame):
         self.peek = app.peek
 
         self.records: list[Rec] = []
+        self._tagpanel_after = None
         self.by_path: dict = {}
         self.tag_universe: set = set()
         self.filtered: list[Rec] = []
         self._project_colors: dict = {}
         self.page = 0
         self.selected: Rec | None = None
+        # Paths rather than records: the record objects are rebuilt on
+        # every library load, so holding them would silently orphan a
+        # selection the moment tags were fetched.
+        self.marked: set = set()
+        self._mark_anchor: int | None = None
 
         self.busy = False
         self._page_token = 0
@@ -126,135 +132,182 @@ class LibraryTab(ctk.CTkFrame):
         self._build_details()
 
     SEARCH_H = 38
+    SEARCH_REST = 340        # width of the resting search field, unscaled
 
     def _build_topbar(self):
         """
-        Two rows instead of one long one: browsing up top (the search field
-        leading, then rating/sort), a separate action toolbar underneath
-        (sync + maintenance on the left, configuration on the right). The
-        standalone Folders button is gone - Settings > Library > "Change
-        folders..." and Ctrl+O both still reach it, so it doesn't need its
-        own slot in an already busy row.
+        One row: search, sort, and everything else behind a single menu.
+
+        This used to be two rows carrying eleven controls. Ten of them were
+        things you reach for occasionally - sync, fix, fetch, settings,
+        help, random, ratio - sitting permanently next to the one control
+        this tab is built around. They are all one click away in the menu
+        now, and the row reads as a search bar rather than a toolbar.
+
+        The rating filter is gone entirely. `rating:e` in the search box
+        does the same job, and the four-button segment was four permanent
+        controls for something most searches never touch.
         """
         bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0)
         bar.grid(row=0, column=0, columnspan=3, sticky="ew")
+        bar.grid_columnconfigure(1, weight=1)
 
-        # ── row 1: browse ────────────────────────────────────────────────
-        row1 = ctk.CTkFrame(bar, fg_color="transparent")
-        row1.pack(fill="x")
-        row1.grid_columnconfigure(0, weight=1)
-
-        # Search leads the row. The suite's identity is in the header strip
-        # and which tab you're on is in the tab strip right above this, so a
-        # third "PAZ Library" lockup here was only pushing the one control
-        # this tab is actually built around into the middle of the row.
-        box = ctk.CTkFrame(row1, fg_color=T.INPUT, corner_radius=10,
-                           border_width=1, border_color=T.ACCENT2_DEEP,
-                           height=self.SEARCH_H)
-        box.grid(row=0, column=0, sticky="ew", padx=(18, 12), pady=(11, 7))
+        # The search field rests small and takes the row when you use it -
+        # see _search_focus. Column 1 is the slack it grows into.
+        box = ctk.CTkFrame(bar, fg_color=T.INPUT, corner_radius=10,
+                           border_width=1, border_color=T.LINE,
+                           height=px(self.SEARCH_H), width=px(self.SEARCH_REST))
+        box.grid(row=0, column=0, sticky="w", padx=(px(18), 0), pady=px(11))
         box.pack_propagate(False)
+        self.search_box = box
 
-        self._lens = lens_photo(15, T.ACCENT2)
+        self._lens = lens_photo(px(15), T.ACCENT2)
         tk.Label(box, image=self._lens, bg=T.INPUT, bd=0
-                 ).pack(side="left", padx=(13, 0))
+                 ).pack(side="left", padx=(px(13), 0))
 
-        # The ↺/✕ pair rides inside the field rather than beside it, so the
-        # row reads as one control instead of three parked next to each other.
         def boxbtn(text, cmd, size=13):
-            ctk.CTkButton(box, text=text, width=28, height=self.SEARCH_H - 12,
-                          corner_radius=7, font=font(size),
-                          fg_color="transparent", hover_color=T.BTN_HOV,
-                          text_color=T.DIM, command=cmd
-                          ).pack(side="right", padx=(0, 5))
+            button = ctk.CTkButton(
+                box, text=text, width=px(28), height=px(self.SEARCH_H - 12),
+                corner_radius=7, font=font(size), fg_color="transparent",
+                hover_color=T.BTN_HOV, text_color=T.DIM, command=cmd)
+            button.pack(side="right", padx=(0, px(5)))
+            return button
 
-        boxbtn("✕", self._clear_search, 12)
-        boxbtn("↺", self._show_history)
+        self.clear_btn = boxbtn("✕", self._clear_search, 12)
+        self.history_btn = boxbtn("↺", self._show_history)
 
         self.search = ctk.CTkEntry(
-            box, placeholder_text="wolf -mlp  artist:name  rating:e  "
-                                  "folder:Furry      ( / to focus )",
-            height=self.SEARCH_H - 8, font=font(13), corner_radius=0,
+            box, placeholder_text="Search",
+            height=px(self.SEARCH_H - 8), font=font(13), corner_radius=0,
             fg_color="transparent", border_width=0, text_color=T.TEXT,
             placeholder_text_color=T.FAINT)
-        self.search.pack(side="left", fill="both", expand=True, padx=(8, 4))
+        self.search.pack(side="left", fill="both", expand=True,
+                         padx=(px(8), px(4)))
         self.search.bind("<KeyRelease>", self._on_search_key)
         self.search.bind("<Return>", self._commit_search)
         self.search.bind("<Up>", lambda e: self._history_step(-1))
         self.search.bind("<Down>", lambda e: self._history_step(1))
-        self.search.bind("<Escape>", lambda e: self._clear_search())
+        self.search.bind("<Escape>", lambda e: self._search_escape())
+        self.search.bind("<FocusIn>", lambda e: self._search_focus(True))
+        self.search.bind("<FocusOut>", lambda e: self._search_focus(False))
         self._history_pos = -1
+        self._search_open = False
+        self._search_anim = None
 
-        right1 = ctk.CTkFrame(row1, fg_color="transparent")
-        right1.grid(row=0, column=1, sticky="e", padx=(0, 16), pady=(11, 7))
-
-        self.rating_seg = ctk.CTkSegmentedButton(
-            right1, values=["All", "S", "Q", "E"], command=lambda _v: self.run_search(),
-            font=font(11), height=self.SEARCH_H, corner_radius=9, fg_color=T.INPUT,
-            selected_color=T.ACCENT2_DEEP, selected_hover_color=T.ACCENT2_DEEP,
-            unselected_color=T.INPUT, unselected_hover_color=T.BTN_HOV,
-            text_color=T.DIM, border_width=2)
-        self.rating_seg.set("All")
-        self.rating_seg.pack(side="left", padx=(0, 8))
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=2, sticky="e", padx=(px(12), px(16)),
+                   pady=px(11))
 
         self.sort_menu = ctk.CTkOptionMenu(
-            right1, values=list(SORTS), width=118, height=self.SEARCH_H,
+            right, values=list(SORTS), width=px(120), height=px(self.SEARCH_H),
             font=font(12), corner_radius=9, fg_color=T.INPUT, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
             dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, command=lambda _v: self.run_search())
         self.sort_menu.set(self.cfg.sort if self.cfg.sort in SORTS else "Newest")
-        self.sort_menu.pack(side="left", padx=(0, 8))
+        self.sort_menu.pack(side="left", padx=(0, px(8)))
 
-        ctk.CTkButton(right1, text="▲ Top", width=62, height=self.SEARCH_H,
-                      corner_radius=9, font=font(11), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.ACCENT2,
-                      command=lambda: self.add_token("sort:score")
-                      ).pack(side="left")
+        self.more_btn = ctk.CTkButton(
+            right, text="⋯", width=px(40), height=px(self.SEARCH_H),
+            corner_radius=9, font=font(15, "bold"), fg_color=T.BTN,
+            hover_color=T.BTN_HOV, text_color=T.ACCENT2, command=self._more_menu)
+        self.more_btn.pack(side="left")
 
-        # ── row 2: act ───────────────────────────────────────────────────
-        row2 = ctk.CTkFrame(bar, fg_color="transparent")
-        row2.pack(fill="x")
-        row2.grid_columnconfigure(1, weight=1)
+    # ── the search field's two sizes ────────────────────────────────────
 
-        actions = ctk.CTkFrame(row2, fg_color="transparent")
-        actions.grid(row=0, column=0, sticky="w", padx=18, pady=(0, 10))
+    def _search_width(self, opening: bool) -> int:
+        if not opening:
+            return px(self.SEARCH_REST)
+        try:
+            room = self.search_box.master.winfo_width()
+        except tk.TclError:
+            room = px(self.SEARCH_REST)
+        reserved = px(self.SEARCH_REST) + px(240)
+        return max(px(self.SEARCH_REST), min(room - reserved, px(1100)))
 
-        self.sync_btn = ctk.CTkButton(
-            actions, text="Sync library", width=110, height=30, corner_radius=7,
-            font=font(11, "bold"), fg_color=T.ACCENT2_DEEP, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT2, command=self._sync_clicked)
-        self.sync_btn.pack(side="left", padx=(0, 8))
+    def _search_focus(self, opening: bool) -> None:
+        """Grow into the row while you are typing, shrink back when you are
+        not. Search is the one thing on this row that wants space only
+        some of the time, and a permanently wide field was most of what
+        made the row read as a toolbar."""
+        if opening == self._search_open:
+            return
+        self._search_open = opening
+        self._animate_search(self._search_width(opening))
 
-        self.fix_btn = ctk.CTkButton(
-            actions, text="Fix missing", width=190, height=30, corner_radius=7,
-            font=font(11, "bold"), fg_color=T.ACCENT_DEEP, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT, command=self._fill_missing)
-        self.fix_btn.pack(side="left", padx=(0, 8))
-        # Right-click for the expensive, occasional check: a full decode
-        # pass looking for corrupt files, not just missing tags/thumbs.
-        self.fix_btn.bind("<Button-3>", self._verify_menu)
+    def _animate_search(self, target: int, step: int = 0) -> None:
+        """Eight frames from here to there. Instant resizing reads as the
+        layout glitching; a slow one gets in the way of typing."""
+        if self._search_anim is not None:
+            try:
+                self.after_cancel(self._search_anim)
+            except ValueError:
+                pass
+            self._search_anim = None
+        try:
+            current = self.search_box.winfo_width()
+        except tk.TclError:
+            return
+        if step >= 8 or abs(target - current) <= 2:
+            try:
+                self.search_box.configure(width=target)
+            except tk.TclError:
+                pass
+            return
+        eased = current + (target - current) * 0.42
+        try:
+            self.search_box.configure(width=int(eased))
+        except tk.TclError:
+            return
+        self._search_anim = self.after(
+            16, lambda: self._animate_search(target, step + 1))
 
-        self.fetch_btn = ctk.CTkButton(
-            actions, text="Fetch e621 tags", width=124, height=30, corner_radius=7,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT, command=lambda: self._fetch_tags(full=True))
-        self.fetch_btn.pack(side="left")
+    def _search_escape(self):
+        self._clear_search()
+        try:
+            self.gallery.focus_set()
+        except tk.TclError:
+            pass
+        return "break"
 
-        config = ctk.CTkFrame(row2, fg_color="transparent")
-        config.grid(row=0, column=2, sticky="e", padx=16, pady=(0, 10))
+    # ── everything that isn't search ────────────────────────────────────
 
-        self.settings_btn = ctk.CTkButton(
-            config, text="Settings", width=80, height=30, corner_radius=7,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, command=self._open_settings)
-        self.settings_btn.pack(side="left", padx=(0, 8))
-
-        self.help_btn = ctk.CTkButton(
-            config, text="?", width=30, height=30, corner_radius=7,
-            font=font(12, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.FAINT, command=lambda: HelpWindow(self.root))
-        self.help_btn.pack(side="left")
+    def _more_menu(self, _event=None) -> None:
+        """One menu for the whole toolbar that used to be a second row."""
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        menu.add_command(label=self.F("sync"), command=self._sync_clicked)
+        menu.add_command(label="Rebuild everything (full sync)",
+                         command=self.key_full_rebuild)
+        menu_rule(menu)
+        menu.add_command(label=self._fix_label(), command=self._fill_missing,
+                         state="normal" if self._fix_breakdown else "disabled")
+        menu.add_command(label=self.F("fetch"),
+                         command=lambda: self._fetch_tags(full=True))
+        menu.add_command(label="Check for corrupt files…",
+                         command=self._verify_library)
+        menu_rule(menu)
+        menu.add_command(label="Random clip", command=self._random)
+        ratio = popup_menu(menu, activebackground=T.ACCENT2_DEEP,
+                           activeforeground=T.ACCENT2)
+        for token, label in (("is:portrait", "Portrait"),
+                             ("is:widescreen", "Widescreen"),
+                             ("is:square", "Square")):
+            ratio.add_command(label=label, command=lambda t=token: self.add_token(t))
+        menu.add_cascade(label="Shape", menu=ratio)
+        menu.add_command(label="Highest scoring first",
+                         command=lambda: self.add_token("sort:score"))
+        menu_rule(menu)
+        menu.add_command(label="Change folders…", command=self._open_folders)
+        menu.add_command(label="Settings…", command=self._open_settings)
+        menu.add_command(label="Keyboard shortcuts…",
+                         command=lambda: HelpWindow(self.root))
+        try:
+            menu.tk_popup(self.more_btn.winfo_rootx(),
+                          self.more_btn.winfo_rooty() + self.more_btn.winfo_height())
+        finally:
+            menu.grab_release()
 
     # Everything this app sends lands in one bin, so a Resolve project
     # doesn't end up with library clips scattered through its root.
@@ -353,6 +406,9 @@ class LibraryTab(ctk.CTkFrame):
         self._info_stacked = False
         self.quick_chips = {}
         for key, text, token in (
+                # Unused leads: on a library this size the question is
+                # almost always "what haven't I already spent".
+                ("unused", "Never used", "is:unused"),
                 ("untagged", "Untagged", "is:untagged"),
                 ("noid", "No post ID", "is:noid"),
                 ("4k", "4K ✓", "is:4k"),
@@ -362,23 +418,13 @@ class LibraryTab(ctk.CTkFrame):
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
                                  text_color=T.DIM,
                                  command=lambda t=token: self.add_token(t))
-            chip.pack(side="left", padx=(0, 6))
+            chip.pack(side="left", padx=(0, px(6)))
             self.quick_chips[key] = (chip, text)
 
         pager = ctk.CTkFrame(info, fg_color="transparent")
         pager.grid(row=0, column=2, sticky="e", padx=(14, 0))
         self._info_pager = pager
         info.bind("<Configure>", self._fit_info_row)
-
-        ctk.CTkButton(pager, text="🎲 Random", height=22, width=84,
-                      corner_radius=11, font=font(9), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.ACCENT2,
-                      command=self._random).pack(side="left", padx=(0, 6))
-        self.ratio_btn = ctk.CTkButton(
-            pager, text="Ratio ▾", height=22, width=76, corner_radius=11,
-            font=font(9), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT2, command=self._ratio_menu)
-        self.ratio_btn.pack(side="left", padx=(0, 14))
 
         def pbtn(text, cmd):
             return ctk.CTkButton(pager, text=text, width=34, height=24,
@@ -462,19 +508,6 @@ class LibraryTab(ctk.CTkFrame):
     def _on_scroll(self, first, last):
         self.gallery_bar.set(first, last)
 
-    def _ratio_menu(self):
-        menu = popup_menu(self.root)
-        menu.add_command(label="All ratios", command=lambda: self._set_ratio(None))
-        menu.add_command(label="📱 Portrait", command=lambda: self._set_ratio("is:portrait"))
-        menu.add_command(label="🖥 Widescreen", command=lambda: self._set_ratio("is:widescreen"))
-        menu.add_command(label="◻ Square", command=lambda: self._set_ratio("is:square"))
-        try:
-            x = self.ratio_btn.winfo_rootx()
-            y = self.ratio_btn.winfo_rooty() + self.ratio_btn.winfo_height()
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
-
     def _set_ratio(self, token: str | None):
         tokens = [t for t in self.search.get().split() if t not in RATIO_TOKENS]
         if token:
@@ -486,10 +519,21 @@ class LibraryTab(ctk.CTkFrame):
     def _gal_background_click(self, event):
         if not self.gallery.find_withtag("current"):
             self.selected = None
+            self.marked.clear()
+            self._mark_anchor = None
             self._restyle_cards()
             self._render_details()
 
-    PANEL_MIN, PANEL_MAX = 512, 1500
+    # The inspector is a companion to the gallery, not a rival to it. It
+    # was taking a third of the window and, at 4K, that third was wider
+    # than the gallery beside it - a wall of player next to three columns
+    # of tiny cards. Capped in absolute terms so a wider screen spends its
+    # extra width on more clips, which is the point of the tab.
+    PANEL_MIN, PANEL_MAX = 430, 1500
+
+    @property
+    def panel_cap(self) -> int:
+        return px(660)
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -512,14 +556,14 @@ class LibraryTab(ctk.CTkFrame):
             total = 1680
         if total < 400:
             total = 1680
-        base = int(max(self.PANEL_MIN, min(total * 0.345, self.PANEL_MAX)))
+        base = int(max(px(self.PANEL_MIN), min(total * 0.26, self.panel_cap)))
         if not self.cfg.theater:
             return base
         theater = max(base + self.THEATER_BONUS, int(total * 0.46))
         return min(theater, self.PANEL_MAX)
 
     def _build_details(self):
-        panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0, width=self.PANEL_MIN)
+        panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0, width=px(self.PANEL_MIN))
         self.detail_panel = panel
         panel.grid(row=1, column=2, sticky="nse", padx=(0, 12), pady=(10, 0))
         panel.grid_propagate(False)
@@ -568,8 +612,8 @@ class LibraryTab(ctk.CTkFrame):
             return b
 
         dbtn("Folder", self._reveal)
-        dbtn("→ Resolve", lambda: self.send_to_resolve(
-            [self.selected] if self.selected else []), T.ACCENT3, 92)
+        dbtn("→ Resolve", lambda: self.send_to_resolve(self.targets()),
+             T.ACCENT3, 92)
         self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 58)
         dbtn("Grid", self._grid, T.ACCENT, 62)
         dbtn("Copy name", lambda: self._copy(self.selected.name)
@@ -586,11 +630,10 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_tags.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
         self.detail_tags.grid_columnconfigure(0, weight=1)
 
-    # ── brand ────────────────────────────────────────────────────────────
-
     def _apply_brand(self):
-        self.sync_btn.configure(text=self.F("sync"))
-        self.fetch_btn.configure(text=self.F("fetch"))
+        """Nothing to relabel any more: the actions live in the ⋯ menu,
+        which is rebuilt from self.F() every time it opens. Kept because
+        the app shell calls it on every tab after a settings change."""
 
     def _bind_local_keys(self):
         """Bindings that only ever make sense inside this tab's own widgets
@@ -647,7 +690,9 @@ class LibraryTab(ctk.CTkFrame):
     def key_escape(self, event):
         if self.is_typing(event):
             return
-        if self.player.playing:
+        if self.marked:
+            self.clear_marks()
+        elif self.player.playing:
             self.player.pause()
         elif self.selected:
             self.selected = None
@@ -744,6 +789,35 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── library loading ─────────────────────────────────────────────────────
 
+    def _apply_meta(self, rec: Rec) -> None:
+        """Fold this clip's cached e621 record into it. Split out of the
+        load so a fetch can update the handful of clips it touched instead
+        of re-reading the whole library, which is over a second once the
+        library runs into five figures."""
+        meta = self.emeta.get(rec.pid) if rec.pid else None
+        if not meta or meta.get("missing"):
+            return
+        rec.artists = list(meta.get("artist") or [])
+        rec.characters = list(meta.get("character") or [])
+        rec.species = list(meta.get("species") or [])
+        rec.copyrights = list(meta.get("copyright") or [])
+        rec.lore = list(meta.get("lore") or [])
+        rec.rating = meta.get("rating") or ""
+        rec.score = meta.get("score") or 0
+        rec.tags = set((meta.get("tags") or "").split())
+        rec.url = meta.get("url") or ""
+        self.tag_universe |= rec.tags
+        rec.compute_named()
+
+    def refresh_meta_for(self, pids) -> None:
+        """Re-apply cached tags to just these post IDs, in place."""
+        wanted = set(pids or ())
+        if not wanted:
+            return
+        for rec in self.records:
+            if rec.pid in wanted:
+                self._apply_meta(rec)
+
     def _refresh_missing_badge(self):
         """
         The badge used to just show a bare total, e.g. "(2)" - a number
@@ -768,18 +842,22 @@ class LibraryTab(ctk.CTkFrame):
             if n_thumb:
                 parts.append(f"{n_thumb} thumb{'s' if n_thumb != 1 else ''}")
             self._fix_breakdown = " · ".join(parts)
-            label = self._fix_breakdown if len(parts) == 1 else f"{outstanding} missing"
-            self.fix_btn.configure(text=f"Fix missing: {label}",
-                                    fg_color=T.ACCENT_DEEP, text_color=T.ACCENT)
         else:
-            self.fix_btn.configure(text="Nothing missing", fg_color=T.BTN, text_color=T.FAINT)
             self._fix_breakdown = ""
         self._refresh_quick_counts()
+
+    def _fix_label(self) -> str:
+        """What the menu offers to do about missing tags/details/thumbs.
+        This used to live on a permanently visible button whose text was
+        the only place the breakdown appeared."""
+        return (f"Fix missing: {self._fix_breakdown}" if self._fix_breakdown
+                else "Nothing missing")
 
     def _refresh_quick_counts(self):
         if not getattr(self, "quick_chips", None) or not self.records:
             return
         counts = {
+            "unused": sum(1 for r in self.records if not r.used_projects),
             "untagged": sum(1 for r in self.records if not r.tags),
             "noid": sum(1 for r in self.records if not r.pid),
             "4k": sum(1 for r in self.records if r.premium),
@@ -795,13 +873,18 @@ class LibraryTab(ctk.CTkFrame):
             # Sized to the text, not to a fixed 92px: "Non-4K (4)" is
             # wider than "4K ✓ (2)" and a shared width clipped the longest
             # label's closing bracket.
+            # A chip reading "Untagged 0" is a filter that would return
+            # nothing, taking up room next to ones that would. Hidden
+            # rather than greyed out - a disabled control still reads as
+            # something you are being denied.
+            if not count:
+                chip.pack_forget()
+                continue
             text = f"{label}  {count}"
-            chip.configure(text=text,
-                           width=self._quick_font.measure(text) + 26)
-            if key in ("untagged", "noid", "portrait", "widescreen", "square") and count == 0:
-                chip.configure(text_color=T.FAINT, state="disabled")
-            else:
-                chip.configure(text_color=T.DIM, state="normal")
+            chip.configure(text=text, text_color=T.DIM, state="normal",
+                           width=self._quick_font.measure(text) + px(26))
+            if not chip.winfo_ismapped():
+                chip.pack(side="left", padx=(0, px(6)))
 
     def _load_library(self):
         conn = db_connect()
@@ -834,19 +917,7 @@ class LibraryTab(ctk.CTkFrame):
 
         for row in rows:
             rec = Rec(*row)
-            meta = self.emeta.get(rec.pid) if rec.pid else None
-            if meta and not meta.get("missing"):
-                rec.artists = list(meta.get("artist") or [])
-                rec.characters = list(meta.get("character") or [])
-                rec.species = list(meta.get("species") or [])
-                rec.copyrights = list(meta.get("copyright") or [])
-                rec.lore = list(meta.get("lore") or [])
-                rec.rating = meta.get("rating") or ""
-                rec.score = meta.get("score") or 0
-                rec.tags = set((meta.get("tags") or "").split())
-                rec.url = meta.get("url") or ""
-                self.tag_universe |= rec.tags
-                rec.compute_named()
+            self._apply_meta(rec)
             alt_path = premium.get(rec.folder, {}).get(rec.name)
             rec.premium = rec.height >= 2000 or alt_path is not None
             rec.premium_path = alt_path or ""
@@ -856,7 +927,7 @@ class LibraryTab(ctk.CTkFrame):
                 rec.used_color = marks[0][1]   # most-recent mark, per vault_marks_by_path
             self.records.append(rec)
             self.by_path[rec.path] = rec
-        if hasattr(self, "fix_btn"):
+        if hasattr(self, "quick_chips"):
             self._refresh_missing_badge()
         # The identity bar carries one live number for the whole suite, so
         # the size of the library is visible from any tab, not just this one.
@@ -932,8 +1003,6 @@ class LibraryTab(ctk.CTkFrame):
     def _restore_state(self):
         if self.cfg.last_sort in SORTS:
             self.sort_menu.set(self.cfg.last_sort)
-        if self.cfg.last_rating in ("All", "S", "Q", "E"):
-            self.rating_seg.set(self.cfg.last_rating)
         if self.cfg.last_search:
             self.search.delete(0, tk.END)
             self.search.insert(0, self.cfg.last_search)
@@ -941,29 +1010,23 @@ class LibraryTab(ctk.CTkFrame):
     def _remember_state(self):
         query = self.search.get().strip()
         sort = self.sort_menu.get()
-        rating = self.rating_seg.get()
-        if (query, sort, rating) == (self.cfg.last_search, self.cfg.last_sort,
-                                     self.cfg.last_rating):
+        if (query, sort) == (self.cfg.last_search, self.cfg.last_sort):
             return
         self.cfg.last_search = query
         self.cfg.last_sort = sort
-        self.cfg.last_rating = rating
         self.cfg.save()
 
     def run_search(self):
         self._search_after = None
         query = self.search.get().strip()
         includes, excludes = parse_query(query)
-        rating = self.rating_seg.get()
-        if rating in ("S", "Q", "E"):
-            includes.append(("rating", rating.lower()))
         self.filtered = [r for r in self.records if rec_matches(r, includes, excludes)]
         key = SORTS.get(self.sort_menu.get(), SORTS["Newest"])
         self.filtered.sort(key=key)
         self.page = 0
         self._remember_state()
         self._render_chips(query)
-        self._render_tagpanel()
+        self.queue_tagpanel()
         self.render_page()
 
     def _render_chips(self, query: str):
@@ -1093,7 +1156,28 @@ class LibraryTab(ctk.CTkFrame):
             used += width + 4
         return row
 
+    TAGPANEL_DELAY_MS = 240
+
+    def queue_tagpanel(self) -> None:
+        """Rebuild the tag sidebar shortly, not right now.
+
+        Counting every tag across the whole result set and then throwing
+        away and rebuilding a hundred widgets costs about 600ms on a
+        library of ten thousand clips - and it was happening inside every
+        search, so every keystroke froze for over half a second whatever
+        the results were. Results are what you are waiting for; the
+        sidebar is a summary of them and can arrive a moment later.
+        """
+        if self._tagpanel_after is not None:
+            try:
+                self.after_cancel(self._tagpanel_after)
+            except ValueError:
+                pass
+        self._tagpanel_after = self.after(self.TAGPANEL_DELAY_MS,
+                                          self._render_tagpanel)
+
     def _render_tagpanel(self):
+        self._tagpanel_after = None
         for child in self.tagpanel.winfo_children():
             child.destroy()
         artists = collections.Counter()
@@ -1336,7 +1420,12 @@ class LibraryTab(ctk.CTkFrame):
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
 
-        canvas.tag_bind(tag, "<Button-1>", lambda e, r=rec: self._select(r))
+        canvas.tag_bind(tag, "<Button-1>",
+                        lambda e, r=rec, i=index: self._card_click(e, r, i))
+        canvas.tag_bind(tag, "<Control-Button-1>",
+                        lambda e, r=rec, i=index: self._card_click(e, r, i))
+        canvas.tag_bind(tag, "<Shift-Button-1>",
+                        lambda e, r=rec, i=index: self._card_click(e, r, i))
         canvas.tag_bind(tag, "<Double-Button-1>", lambda e, r=rec: self._select_and_play(r))
         canvas.tag_bind(tag, "<Button-3>", lambda e, r=rec: self._card_menu(e, r))
         canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
@@ -1346,6 +1435,13 @@ class LibraryTab(ctk.CTkFrame):
         """(colour, width) for a card's border. Selection outranks the
         project mark, which outranks hover - you need to know which card
         you are acting on before you need to know where it has been."""
+        # Selection cannot be "a coloured border": project marks are
+        # coloured borders too, and a project whose colour happens to
+        # match makes the two indistinguishable. Selected cards get the
+        # Library's own violet at a heavier weight AND a tick in the
+        # corner - see _draw_badges - so it reads even at a glance.
+        if rec.path in self.marked:
+            return T.ACCENT2, 3
         if self.selected and self.selected.path == rec.path:
             return T.ACCENT, 2
         if rec.used_projects and rec.used_color:
@@ -1359,6 +1455,7 @@ class LibraryTab(ctk.CTkFrame):
             colour, width = self._card_outline(
                 slot["rec"], hover=(index == self._hover_index))
             self.gallery.itemconfigure(f"cardline{index}", outline=colour, width=width)
+            self._draw_tick(index, slot["rec"], slot)
 
     def _set_hover(self, index):
         if index == self._hover_index:
@@ -1602,17 +1699,39 @@ class LibraryTab(ctk.CTkFrame):
         canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
                            font=(T.MONO, pt(8)), anchor="w", tags=(tag,))
 
+    def _draw_tick(self, index: int, rec: Rec, slot: dict) -> None:
+        """The selection tick, on its own tag so selection can be repainted
+        in place. Redrawing the whole page instead would send the gallery
+        back to the top, which is no way to build a selection."""
+        canvas = self.gallery
+        canvas.delete(f"tick{index}")
+        if rec.path not in self.marked:
+            return
+        x, y = slot["x"], slot["y"]
+        size = px(24)
+        tags = (slot["tag"], f"tick{index}")
+        canvas.create_oval(x + px(6), y + px(6), x + px(6) + size,
+                           y + px(6) + size, fill=T.ACCENT2, outline=T.BG,
+                           width=2, tags=tags)
+        canvas.create_text(x + px(6) + size // 2, y + px(6) + size // 2 + 1,
+                           text="✓", fill=T.BG, font=(T.UI, pt(12), "bold"),
+                           tags=tags)
+
     def _draw_badges(self, index: int, rec: Rec, slot: dict) -> None:
         canvas = self.gallery
         tag = slot["tag"]
         x, y = slot["x"], slot["y"]
 
+        self._draw_tick(index, rec, slot)
+
         # Top left: what the pipeline cares about. Green once a clip is
-        # edit-pool quality, dim while it still needs an upscale.
+        # edit-pool quality, dim while it still needs an upscale. Sits
+        # below the top edge so the selection tick owns that corner.
         spec = f"{rec.height}p" if rec.height else "--"
         if rec.fps:
             spec += f"·{rec.fps:.0f}"
-        self._pill(tag, x + 5, y + 5, spec, T.OK if rec.premium else T.DIM)
+        self._pill(tag, x + px(5), y + self.IMG_H - px(38), spec,
+                   T.OK if rec.premium else T.DIM)
 
         # Top right: the rating, as its own colour. Explicit is the loudest
         # of the three because that is what gets scanned for.
@@ -1651,10 +1770,71 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── selection & details ─────────────────────────────────────────────────
 
+    # ── picking clips out ───────────────────────────────────────────────
+    #
+    # One click still selects one clip and fills the inspector - that is
+    # what the tab is for most of the time. Ctrl and Shift build a set on
+    # top of that, and every tool that used to act on "the selected clip"
+    # or "everything on this page" acts on the set when there is one.
+
+    def _card_click(self, event, rec: Rec, index: int):
+        ctrl = bool(event.state & 0x0004)
+        shift = bool(event.state & 0x0001)
+        if ctrl:
+            if rec.path in self.marked:
+                self.marked.discard(rec.path)
+            else:
+                self.marked.add(rec.path)
+            self._mark_anchor = index
+        elif shift and self._mark_anchor is not None:
+            low, high = sorted((self._mark_anchor, index))
+            for slot in self._layout[low:high + 1]:
+                self.marked.add(slot["rec"].path)
+        else:
+            self.marked.clear()
+            self._mark_anchor = index
+        self._select(rec)
+
+    def targets(self, fallback: Rec | None = None) -> list:
+        """What an action should act on: the marked set if there is one,
+        otherwise the single clip in hand."""
+        if self.marked:
+            picked = [self.by_path[p] for p in self.marked if p in self.by_path]
+            if picked:
+                return picked
+        rec = fallback or self.selected
+        return [rec] if rec else []
+
+    def mark_all_on_page(self, event=None):
+        # Ctrl+A inside a text field means "select all this text", and the
+        # binding that brings us here is on the window, not the gallery.
+        if event is not None and self.is_typing(event):
+            return
+        self.marked = {slot["rec"].path for slot in self._layout}
+        self._mark_anchor = 0
+        self._restyle_cards()
+        self._report_marks()
+        return "break"
+
+    def clear_marks(self) -> None:
+        if not self.marked:
+            return
+        self.marked.clear()
+        self._mark_anchor = None
+        self._restyle_cards()
+        self.set_status(self.F("idle"), T.FAINT)
+
+    def _report_marks(self) -> None:
+        count = len(self.marked)
+        if count:
+            self.set_status(f"{count} clip{'s' if count != 1 else ''} selected "
+                            "· right-click for what to do with them", T.ACCENT2)
+
     def _select(self, rec: Rec):
         self.selected = rec
         self._restyle_cards()
         self._render_details()
+        self._report_marks()
 
     def _select_and_play(self, rec: Rec):
         self._select(rec)
@@ -1792,8 +1972,20 @@ class LibraryTab(ctk.CTkFrame):
             menu.grab_release()
 
     def _card_menu(self, event, rec: Rec):
-        self._select(rec)
+        # Right-clicking inside a selection acts on the selection; right-
+        # clicking outside one moves to that clip first, which is what a
+        # file manager does and what people expect.
+        if rec.path not in self.marked:
+            self.marked.clear()
+            self._select(rec)
+        picked = self.targets(rec)
+        many = len(picked) > 1
+        what = f"{len(picked)} clips" if many else rec.name
+
         menu = popup_menu(self.root)
+        if many:
+            menu.add_command(label=f"{len(picked)} clips selected", state="disabled")
+            menu_rule(menu)
         menu.add_command(label="Play here", command=lambda: self._select_and_play(rec))
         menu.add_command(label="Open externally", command=lambda: open_file(rec.path))
         menu.add_command(label="Show in folder", command=lambda: open_in_explorer(rec.path))
@@ -1802,27 +1994,34 @@ class LibraryTab(ctk.CTkFrame):
                              command=lambda: self._open_url(rec))
         menu_rule(menu)
         page = self.page_recs()
-        if rec.pid:
+        if many or rec.pid:
             menu.add_command(
-                label="Fetch e621 tags for this clip",
-                command=lambda: self.fetch_for([rec], rec.name))
+                label=f"Fetch e621 tags for {what}",
+                command=lambda: self.fetch_for(picked, what))
         else:
             menu.add_command(label="No post ID - nothing to fetch",
                              state="disabled")
         untagged = [r for r in page if r.pid and not r.tags]
-        if untagged:
+        if untagged and not many:
             menu.add_command(
                 label=f"Fetch tags for the {len(untagged)} untagged here",
                 command=lambda: self.fetch_for(untagged,
                                                f"{len(untagged)} untagged"))
-        menu.add_command(label=f"Fetch tags for all {len(page)} results",
-                         command=lambda: self.fetch_for(page,
-                                                        f"{len(page)} results"))
+        if not many:
+            menu.add_command(label=f"Fetch tags for all {len(page)} results",
+                             command=lambda: self.fetch_for(page,
+                                                            f"{len(page)} results"))
         menu_rule(menu)
-        menu.add_command(label="Add to Resolve",
-                         command=lambda: self.send_to_resolve([rec]))
-        menu.add_command(label=f"Add these {len(page)} results to Resolve",
-                         command=lambda: self.send_to_resolve(page))
+        menu.add_command(label=f"Add {what} to Resolve",
+                         command=lambda: self.send_to_resolve(picked))
+        if not many:
+            menu.add_command(label=f"Add these {len(page)} results to Resolve",
+                             command=lambda: self.send_to_resolve(page))
+        menu_rule(menu)
+        menu.add_command(label="Select everything on this page",
+                         command=self.mark_all_on_page)
+        if self.marked:
+            menu.add_command(label="Clear selection", command=self.clear_marks)
         menu_rule(menu)
 
         used_menu = popup_menu(menu)
@@ -1832,11 +2031,13 @@ class LibraryTab(ctk.CTkFrame):
         finally:
             conn.close()
         for name, _color, _count, _created in projects:
-            if name in rec.used_projects:
+            if not many and name in rec.used_projects:
                 continue
-            used_menu.add_command(label=name, command=lambda n=name: self._mark_used(rec, n))
-        used_menu.add_command(label="New project…", command=lambda: self._mark_used_new(rec))
-        menu.add_cascade(label="Mark as used…", menu=used_menu)
+            used_menu.add_command(label=name,
+                                  command=lambda n=name: self._mark_used(picked, n))
+        used_menu.add_command(label="New project…",
+                              command=lambda: self._mark_used_new(picked))
+        menu.add_cascade(label=f"Mark {what} as used…", menu=used_menu)
         for name in rec.used_projects:
             menu.add_command(label=f"Remove from '{name}'",
                              command=lambda n=name: self._unmark_used(rec, n))
@@ -1960,17 +2161,32 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── Vault marks (right-click "used in a project") ───────────────────
 
-    def _mark_used(self, rec: Rec, project: str) -> None:
+    def _mark_used(self, recs, project: str) -> None:
+        recs = recs if isinstance(recs, list) else [recs]
+        paths = [r.path for r in recs if r]
+        if not paths:
+            return
         conn = db_connect()
         try:
-            vault_mark(conn, [rec.path], project)
+            vault_mark(conn, paths, project)
         finally:
             conn.close()
-        self._resync_after_vault_change(rec.path)
-        self.set_status(f"Marked as used in '{project}'.", T.OK)
+        for path in paths:
+            self._resync_after_vault_change(path)
+        count = len(paths)
+        self.set_status(f"Marked {count} clip{'s' if count != 1 else ''} as used "
+                        f"in '{project}'.", T.OK)
 
-    def _mark_used_new(self, rec: Rec) -> None:
-        dialog = ctk.CTkInputDialog(text="Name this project:", title="Mark as used")
+    def _mark_used_new(self, recs) -> None:
+        recs = recs if isinstance(recs, list) else [recs]
+        count = len(recs)
+        dialog = ctk.CTkInputDialog(
+            title="Mark as used",
+            text=f"Name a project for {count} clip{'s' if count != 1 else ''}:",
+            fg_color=T.SURFACE, text_color=T.TEXT,
+            button_fg_color=T.ACCENT2_DEEP, button_hover_color=T.BTN_HOV,
+            button_text_color=T.ACCENT2, entry_fg_color=T.INPUT,
+            entry_border_color=T.LINE, entry_text_color=T.TEXT)
         name = (dialog.get_input() or "").strip()
         if not name:
             return
@@ -1980,7 +2196,7 @@ class LibraryTab(ctk.CTkFrame):
             vault_ensure_project(conn, name, T.PROJECT_PALETTE[existing % len(T.PROJECT_PALETTE)])
         finally:
             conn.close()
-        self._mark_used(rec, name)
+        self._mark_used(recs, name)
 
     def _unmark_used(self, rec: Rec, project: str) -> None:
         conn = db_connect()
@@ -2015,7 +2231,7 @@ class LibraryTab(ctk.CTkFrame):
             self._open_folders()
             return
         self.busy = True
-        self.sync_btn.configure(state="disabled")
+        self.more_btn.configure(state="disabled")
         self.set_status(self.F("scanning"), T.ACCENT2)
         self.progress.set(0)
         threading.Thread(target=self._sync_work, args=(full,), daemon=True).start()
@@ -2116,7 +2332,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def _sync_done(self, removed: int):
         self.busy = False
-        self.sync_btn.configure(state="normal")
+        self.more_btn.configure(state="normal")
         self.progress.set(1.0)
         self._load_library()
         self.run_search()
@@ -2159,14 +2375,6 @@ class LibraryTab(ctk.CTkFrame):
         return {"tags": no_tags, "probe": no_probe, "thumbs": no_thumb, "no_id": no_id}
 
     # ── integrity check (full decode, catches what probing can't) ──────────
-
-    def _verify_menu(self, event):
-        menu = popup_menu(self.root)
-        menu.add_command(label="Verify library integrity…", command=self._verify_library)
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
 
     def _verify_library(self):
         if not self.records:
@@ -2213,8 +2421,7 @@ class LibraryTab(ctk.CTkFrame):
         self.set_status("Fixing: " + ", ".join(bits), T.ACCENT2)
 
         self.busy = True
-        self.fix_btn.configure(state="disabled")
-        self.fetch_btn.configure(state="disabled")
+        self.more_btn.configure(state="disabled")
         self.progress.set(0)
         self.set_status(f"Rebuilding {len(media)} missing thumbnails/details", T.ACCENT2)
 
@@ -2248,8 +2455,7 @@ class LibraryTab(ctk.CTkFrame):
         threading.Thread(target=work, daemon=True).start()
 
     def _media_fixed(self, done: int, more_tags: bool, failed: int = 0):
-        self.fix_btn.configure(state="normal")
-        self.fetch_btn.configure(state="normal")
+        self.more_btn.configure(state="normal")
         self._load_library()
         self.run_search()
         message = f"Rebuilt {done - failed}/{done} thumbnails/details"
@@ -2341,8 +2547,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def _run_fetch(self, todo: list, refreshing: int, note: str = "") -> None:
         self.busy = True
-        self.fetch_btn.configure(state="disabled")
-        self.fix_btn.configure(state="disabled")
+        self.more_btn.configure(state="disabled")
         delay = max(float(self.cfg.e621_fetch_delay), 0.5)
         status = f"{self.F('fetching')} · {note or f'{len(todo)} posts'}"
         if refreshing:
@@ -2375,15 +2580,26 @@ class LibraryTab(ctk.CTkFrame):
             finally:
                 self.emeta.save()
                 self.busy = False
-                self.ui(self.fetch_btn.configure, state="normal")
-                self.ui(self.fix_btn.configure, state="normal")
-                self.ui(self._fetch_done, hits, missing, failed, last_error, refreshing)
+                self.ui(self.more_btn.configure, state="normal")
+                self.ui(self._fetch_done, hits, missing, failed, last_error,
+                        refreshing, list(todo))
 
         threading.Thread(target=work, daemon=True).start()
 
     def _fetch_done(self, hits: int, missing: int, failed: int = 0,
-                    last_error: str = "", refreshed: int = 0) -> None:
-        self._reload_and_keep_place()
+                    last_error: str = "", refreshed: int = 0,
+                    pids=None) -> None:
+        # Only the posts that were fetched can have changed, so re-reading
+        # the whole library here costs over a second on a big one for no
+        # reason. Nothing on disk moved; only the tag cache did.
+        if pids:
+            self.refresh_meta_for(pids)
+            self._restyle_cards()
+            self._render_details()
+            self.queue_tagpanel()
+            self._refresh_missing_badge()
+        else:
+            self._reload_and_keep_place()
         # "missing" (post deleted/hidden on e621, cached so it's never
         # retried) and "failed" (a transient network error, not cached, so
         # it's retried the next time Fix missing / Fetch tags runs) look the

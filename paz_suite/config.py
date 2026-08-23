@@ -88,7 +88,7 @@ class AppConfig:
     page_size: int = 48
     thumb_width: int = 480
     thumb_fit: str = "contain"
-    card_width: int = 224              # gallery tile width in px (Settings)
+    card_width: int = 264              # gallery tile width in px (Settings)
     sidebar_open: bool = True
     search_history: list = field(default_factory=list)
     theater: bool = False
@@ -105,10 +105,14 @@ class AppConfig:
     player_loop: bool = True
     player_volume: int = 80
     player_muted: bool = False
-    # Prefer the matching 4K/60+ edit-pool copy over the indexed original
-    # when one exists - that's the point of the pool, so playback should
-    # default to it instead of the source file.
-    player_prefer_premium: bool = True
+    # Play the converted copy, not the 4K/60 one, unless asked.
+    #
+    # The pool copy exists so renders come off the big file - it is not
+    # what you want to watch. Decoding 4K/60 through a pipe is the one
+    # thing this player cannot reliably do in real time, and the converted
+    # copy of the same clip plays perfectly. The player's 4K button
+    # switches per clip when detail actually matters.
+    player_prefer_premium: bool = False
 
     # ── e621 lookup (shared cache, shared credentials) ──────────────────
     e621_enabled: bool = True
