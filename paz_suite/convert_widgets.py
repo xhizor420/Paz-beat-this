@@ -14,7 +14,7 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font
+from .theme import T, font, px
 from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
@@ -1046,12 +1046,20 @@ class ScrubPreview(ctk.CTkFrame):
 
 class ContactSheet(ctk.CTkToplevel):
     """
-    Twelve frames of one clip in a single window - the whole story at a
-    glance. Click any cell to jump the inspector to that moment.
+    One clip laid out as a grid of frames - the whole story at a glance.
+    Click any cell to jump the inspector to that moment.
+
+    The grid used to be a fixed 4x3. Twelve frames of a four-minute clip
+    is one every twenty seconds, which tells you almost nothing, and on a
+    4K screen it left most of the desktop empty. It now fills the space
+    available: as many cells as fit at a readable size, so a big screen
+    gets a genuinely useful sheet and a small one still gets a sensible
+    twelve.
     """
 
-    COLS, ROWS = 4, 3
-    CELL_W = 300
+    CELL_W = 300           # unscaled; the real width is worked out below
+    MIN_COLS, MAX_COLS = 4, 8
+    MIN_ROWS, MAX_ROWS = 3, 6
 
     def __init__(self, parent, cache: ThumbCache, path: str, title: str,
                  on_jump=None):
@@ -1064,9 +1072,21 @@ class ContactSheet(ctk.CTkToplevel):
         self._marks: list = []
         self._token = 0
 
+        cap = px(16)
+        gap = px(6)
+        self.CELL_W = px(self.CELL_W)
         self.cell_h = int(self.CELL_W * 9 / 16)
-        cap = 16
-        gap = 6
+        try:
+            room_w = int(parent.winfo_screenwidth() * 0.86)
+            room_h = int(parent.winfo_screenheight() * 0.84)
+        except tk.TclError:
+            room_w, room_h = 1500, 900
+        self.COLS = max(self.MIN_COLS,
+                        min((room_w - gap) // (self.CELL_W + gap), self.MAX_COLS))
+        self.ROWS = max(self.MIN_ROWS,
+                        min((room_h - gap - px(90)) // (self.cell_h + cap + gap),
+                            self.MAX_ROWS))
+
         cw = self.COLS * self.CELL_W + (self.COLS + 1) * gap
         chh = self.ROWS * (self.cell_h + cap) + (self.ROWS + 1) * gap
         self.gap, self.cap = gap, cap
@@ -1083,7 +1103,9 @@ class ContactSheet(ctk.CTkToplevel):
         head.pack(fill="x", padx=14, pady=(12, 6))
         ctk.CTkLabel(head, text=title, font=font(12, "bold"),
                      text_color=T.TEXT, anchor="w").pack(side="left")
-        ctk.CTkLabel(head, text="click a frame to jump the inspector · Esc closes",
+        ctk.CTkLabel(head,
+                     text=f"{self.COLS * self.ROWS} frames · click one to jump "
+                          "the inspector · Esc closes",
                      font=font(10), text_color=T.FAINT).pack(side="right")
 
         self.canvas = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0,

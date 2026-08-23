@@ -128,6 +128,11 @@ class ClipPlayer:
         self._clock_t0 = None
         self._wants_audio = False
         self._waiting_since = 0.0
+        # Turned off for the rest of the session the first time a hardware
+        # decode produces nothing, rather than per file - a build without
+        # it will fail for every file, and retrying each one costs a
+        # visible stall apiece.
+        self._hwaccel = True
         self._clock_pos = 0.0       # source position that _clock_t0 corresponds to
         self._frames_shown = 0      # frames consumed since _clock_t0 (incl. dropped)
         self._starved_at = 0.0      # when the queue first came up empty
@@ -173,7 +178,12 @@ class ClipPlayer:
         if not os.path.exists(self.path):
             self._fail("That file is no longer on disk.")
             return
-        if self.proc is None:
+        # A finished decoder leaves self.proc set but with nothing left to
+        # read, so play() used to arm a clock against an empty queue and
+        # sit there - which is "I press play and nothing happens", or
+        # "nothing happens until I seek". poll() is non-blocking.
+        spent = self.proc is not None and self.proc.poll() is not None
+        if self.proc is None or spent:
             if self._spawn(self.position) is False:
                 return
         elif self.audio_proc is None and self._clock_t0 is not None:
@@ -281,6 +291,13 @@ class ClipPlayer:
               f"pad={self.view_w}:{self.view_h}:(ow-iw)/2:(oh-ih)/2,"
               f"fps={rate:.3f}")
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
+        # Decoding 4K on the CPU and pushing it through a pipe is the one
+        # thing here that cannot keep up with 60fps on most machines - the
+        # picture starves while the audio, which costs nothing, runs on.
+        # That is the stutter and the drift. Ask for hardware decode and
+        # fall back if this build or file can't do it (see _handle_eof).
+        if self._hwaccel:
+            cmd += ["-hwaccel", "auto"]
         if position > 0.05:
             cmd += ["-ss", f"{position:.3f}"]
         cmd += ["-i", self.path, "-an", "-sn", "-vf", vf,
@@ -496,6 +513,16 @@ class ClipPlayer:
 
     def _handle_eof(self):
         if self._decoded == 0:
+            if self._hwaccel:
+                # Nothing came out at all. Far more likely to be hardware
+                # decoding this build can't actually do than a broken file,
+                # so drop it and try again in software before giving up.
+                self._hwaccel = False
+                position = self.position
+                if self._spawn(position, with_audio=self._wants_audio) is not False:
+                    self._arm_clock(position)
+                    self._schedule()
+                    return
             self._fail("No video stream could be decoded from this file")
             return
         if self.loop and self.path is not None:

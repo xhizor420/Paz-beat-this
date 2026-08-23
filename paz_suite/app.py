@@ -48,15 +48,19 @@ class PazApp:
 
         self._apply_scaling()
 
-        # Clamped to the screen: a scaled-up window on a small display,
-        # or a remembered size from a larger monitor, should still open
-        # somewhere you can reach its title bar.
+        # Sized to the display rather than to a fixed number. 1760x1020 is
+        # a good window on a 1080p screen and a postage stamp on a 4K one -
+        # opening at a fixed size there left the gallery three narrow
+        # columns wide with two thirds of the desktop unused. Still clamped
+        # to what the screen can hold, so the title bar stays reachable.
         try:
             room_w = max(int(root.winfo_screenwidth()) - 80, 900)
             room_h = max(int(root.winfo_screenheight()) - 120, 620)
         except tk.TclError:
             room_w, room_h = 1760, 1020
-        root.geometry(f"{min(1760, room_w)}x{min(1020, room_h)}")
+        width = min(max(1760, int((room_w + 80) * 0.78)), room_w)
+        height = min(max(1020, int((room_h + 120) * 0.82)), room_h)
+        root.geometry(f"{width}x{height}")
         # Every panel below (gallery columns, the inspector/player, the
         # queue table) already recalculates its own layout on resize, so
         # this is a floor for legibility, not a hard requirement - the
@@ -131,21 +135,31 @@ class PazApp:
             pass
 
     def _detect_scale(self) -> float:
-        """What the desktop says it is doing, as a multiple of 96 DPI.
+        """A sensible scale for this display.
 
         Tk reports the DPI the window manager hands it, which on Windows
-        already reflects the display-scaling setting - so a 4K screen at
-        150% comes back as 144. A 4K screen left at 100% reports 96 and
-        gets 1.0, which is correct: everything really is that small, and
-        the fix there is to pick a scale by hand.
+        already reflects the display-scaling setting - a 4K screen at 150%
+        comes back as 144 and needs nothing further. But a 4K screen left
+        at 100% reports a flat 96, and "the desktop isn't scaling" is not
+        the same as "nothing needs scaling": every pixel really is half
+        the size it would be on a 1080p panel, which is why the gallery
+        captions were unreadable. So when the desktop asks for nothing,
+        fall back to the panel's own width, which is what actually decides
+        how big a pixel is.
         """
         try:
             dpi = float(self.root.winfo_fpixels("1i"))
+            width = int(self.root.winfo_screenwidth())
         except (tk.TclError, ValueError):
             return 1.0
-        if dpi <= 0:
-            return 1.0
-        return round(dpi / 96.0, 2)
+        from_dpi = round(dpi / 96.0, 2) if dpi > 0 else 1.0
+        if from_dpi >= 1.2:
+            return from_dpi              # the desktop is already scaling
+        if width >= 3400:                # 4K and wider
+            return 1.5
+        if width >= 2500:                # 1440p / ultrawide
+            return 1.25
+        return max(from_dpi, 1.0)
 
     # ── header (shared identity, above the tab strip) ──────────────────────
     #

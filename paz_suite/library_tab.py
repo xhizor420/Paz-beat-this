@@ -489,7 +489,16 @@ class LibraryTab(ctk.CTkFrame):
             self._restyle_cards()
             self._render_details()
 
-    PANEL_MIN, PANEL_MAX = 512, 1500
+    # The inspector is a companion to the gallery, not a rival to it. It
+    # was taking a third of the window and, at 4K, that third was wider
+    # than the gallery beside it - a wall of player next to three columns
+    # of tiny cards. Capped in absolute terms so a wider screen spends its
+    # extra width on more clips, which is the point of the tab.
+    PANEL_MIN, PANEL_MAX = 430, 1500
+
+    @property
+    def panel_cap(self) -> int:
+        return px(660)
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -512,14 +521,14 @@ class LibraryTab(ctk.CTkFrame):
             total = 1680
         if total < 400:
             total = 1680
-        base = int(max(self.PANEL_MIN, min(total * 0.345, self.PANEL_MAX)))
+        base = int(max(px(self.PANEL_MIN), min(total * 0.26, self.panel_cap)))
         if not self.cfg.theater:
             return base
         theater = max(base + self.THEATER_BONUS, int(total * 0.46))
         return min(theater, self.PANEL_MAX)
 
     def _build_details(self):
-        panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0, width=self.PANEL_MIN)
+        panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0, width=px(self.PANEL_MIN))
         self.detail_panel = panel
         panel.grid(row=1, column=2, sticky="nse", padx=(0, 12), pady=(10, 0))
         panel.grid_propagate(False)
