@@ -111,6 +111,13 @@ class AppConfig:
     # copy of the same clip plays perfectly. The player's 4K button
     # switches per clip when detail actually matters.
     player_prefer_premium: bool = False
+    # Which engine plays clips. "auto" uses mpv when it is installed and
+    # falls back to the built-in ffmpeg-pipe player otherwise; "builtin"
+    # never uses mpv. mpv decodes on the GPU and keeps picture locked to
+    # sound, which the built-in player cannot do - it drives a separate
+    # ffplay with no clock between them.
+    player_backend: str = "auto"      # auto | builtin
+    player_mpv_vo: str = ""           # mpv --vo override; empty = let it choose
 
     # ── e621 lookup (shared cache, shared credentials) ──────────────────
     e621_enabled: bool = True

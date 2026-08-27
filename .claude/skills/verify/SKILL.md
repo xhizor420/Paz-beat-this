@@ -164,3 +164,26 @@ Sync deletes rows and thumbnail files. To check the guard, point
 press F5, and confirm the clip count is unchanged and a red toast
 explains why. A root that does not exist at all is caught earlier, by
 `_sync`, which opens the Folders dialog instead.
+
+## The player has two backends
+
+`player_backend` in the config picks: `auto` uses mpv when installed,
+`builtin` forces the ffmpeg-pipe engine. Test both — they are separate
+code paths and the app has to work with no mpv at all.
+
+```bash
+apt-get install -y mpv          # not present by default in this container
+```
+
+**Xvfb has no OpenGL**, so mpv's default `gpu` output comes up as a black
+rectangle that still reports a running clock — playback looks broken and
+the stall detector will not catch it, because the clock *is* moving. Set
+`"player_mpv_vo": "x11"` in the config when testing here. On a real
+desktop leave it empty.
+
+mpv attaches to a Tk widget's `winfo_id()`, so that widget must already
+have real geometry before the engine is built, and must never be
+unmapped afterwards — `place_forget()` on it takes the drawable out from
+under mpv. Stack the surfaces with `lift()` instead. Note that
+`Canvas.lift` is `tag_raise` (it raises canvas *items*); use
+`tk.Misc.lift(widget)` to restack the widget itself.

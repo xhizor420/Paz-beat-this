@@ -732,6 +732,14 @@ class LibraryTab(ctk.CTkFrame):
         self.turn_page(delta)
 
     def on_app_close(self) -> bool:
+        # mpv is a separate process embedded in our window. Killing the
+        # window usually takes it with it, but "usually" is not a shutdown.
+        shutdown = getattr(self.player.engine, "shutdown", None)
+        if shutdown is not None:
+            try:
+                shutdown()
+            except Exception:
+                pass
         self._remember_state()
         self.cfg.sort = self.sort_menu.get()
         self.cfg.save()

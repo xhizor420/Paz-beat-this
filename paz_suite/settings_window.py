@@ -414,6 +414,23 @@ class SettingsWindow(ctk.CTkToplevel):
                             "PAZ mark. Wide pictures suit it best - it is a "
                             "76px band, cropped to fill from just above centre.")
 
+        self._section(tab, "Playback", 25)
+        self._choice(tab, 26, "player_backend", "Player", ["auto", "builtin"])
+        self._hint(tab, 27, "auto uses mpv when it is installed, which decodes "
+                            "on the GPU and keeps picture locked to sound. The "
+                            "built-in player drives a separate ffplay with no "
+                            "clock between them, so sound leads picture by "
+                            "however long it took to start. builtin forces it.")
+        self._entry(tab, 28, "player_mpv_vo", "mpv video output", width=140)
+        self._hint(tab, 29, "Leave empty unless mpv plays sound with a black "
+                            "picture - then try gpu, x11 or direct3d.")
+        self._switch(tab, 30, "player_prefer_premium",
+                     "Play the 4K copy instead of the converted one")
+        self._hint(tab, 31, "Off is right: the 4K pool copy exists so renders "
+                            "come off it, and it is about five times more "
+                            "expensive to decode. The player's 4K button "
+                            "switches per clip.")
+
         # The Beat This tab deliberately has no model picker - there is one
         # right answer and putting it in the way of pressing Analyze only
         # invites picking something worse. These are the escape hatches for
