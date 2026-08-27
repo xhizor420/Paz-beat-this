@@ -50,15 +50,49 @@ IS_WINDOWS = os.name == "nt"
 
 
 def mpv_path() -> str:
-    """Where mpv is, or "". Looks beside the app first so it can be
-    shipped alongside without touching PATH."""
+    """Where mpv is, or "".
+
+    Beside the app first, so dropping mpv.exe next to it works without
+    touching PATH, then PATH, then the handful of places Windows package
+    managers put it. `winget` in particular installs to a versioned
+    folder under Program Files that never reaches PATH.
+    """
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for candidate in (os.path.join(here, "mpv", "mpv.exe"),
-                      os.path.join(here, "mpv", "mpv"),
-                      os.path.join(here, "mpv.exe")):
+    beside = (os.path.join(here, "mpv", "mpv.exe"),
+              os.path.join(here, "mpv", "mpv"),
+              os.path.join(here, "mpv.exe"),
+              os.path.join(here, "mpv"))
+    for candidate in beside:
         if os.path.isfile(candidate):
             return candidate
-    return shutil.which("mpv") or ""
+
+    found = shutil.which("mpv")
+    if found:
+        return found
+
+    if IS_WINDOWS:
+        roots = [os.environ.get("LOCALAPPDATA", ""),
+                 os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+                 os.environ.get("PROGRAMFILES(X86)", ""),
+                 os.path.join(os.environ.get("USERPROFILE", ""), "scoop", "apps")]
+        for root in filter(None, roots):
+            for sub in ("mpv", "mpv.net", os.path.join("Microsoft", "WinGet", "Packages")):
+                base = os.path.join(root, sub)
+                if not os.path.isdir(base):
+                    continue
+                direct = os.path.join(base, "mpv.exe")
+                if os.path.isfile(direct):
+                    return direct
+                # winget nests one versioned folder deep; don't walk the
+                # whole tree, just look one level down.
+                try:
+                    for name in os.listdir(base):
+                        nested = os.path.join(base, name, "mpv.exe")
+                        if os.path.isfile(nested):
+                            return nested
+                except OSError:
+                    pass
+    return ""
 
 
 def available() -> bool:
@@ -101,6 +135,11 @@ class MpvPlayer:
         self._alive = False
         self._pending: dict = {}
         self._failed = False
+        self._starting = False
+        self._queued: list = []
+        # Called when mpv turns out not to be usable, so the caller can
+        # go back to the built-in engine. Set by whoever builds this.
+        self.on_unavailable = None
         self._vo = ""
         self.vo = ""            # override; empty lets mpv choose
         self._played_from = 0.0
@@ -114,17 +153,53 @@ class MpvPlayer:
             return r"\\.\pipe\paz-mpv-" + token
         return os.path.join(tempfile.gettempdir(), f"paz-mpv-{token}.sock")
 
-    def _start(self, vo: str = None) -> bool:
-        """Bring mpv up, idle, parented to our widget.
+    # How long to wait for mpv to come up before giving up on it. Nothing
+    # waits on this from the UI thread, so it is a patience limit rather
+    # than a freeze budget.
+    START_TIMEOUT = 6.0
 
-        `vo` overrides the video output. Left empty, mpv picks - which is
-        right on any real desktop. It is a setting rather than a guessing
-        ladder because "started successfully" and "is actually showing a
-        picture" are different things, and only the second one matters:
-        a machine with broken OpenGL gets a black rectangle from a
-        perfectly healthy process. When that happens playback stalls, and
-        _check_progress says so rather than leaving you staring at it.
+    def _start(self, vo: str = None) -> bool:
+        """Ask for mpv, and return immediately.
+
+        Starting a process and waiting for its IPC endpoint takes a moment
+        on a good day and forever on a bad one - a named pipe that never
+        appears used to freeze the whole window for ten seconds every time
+        a clip was clicked. None of it happens on the calling thread now.
+        Commands issued in the meantime queue up and are flushed once the
+        connection is live; if it never comes, `on_unavailable` fires and
+        the caller goes back to the engine that needs nothing installed.
         """
+        if self._starting or self._proc is not None:
+            return True
+        if not mpv_path():
+            return False
+        self._starting = True
+        threading.Thread(target=self._start_blocking, args=(vo,),
+                         daemon=True).start()
+        return True
+
+    def _start_blocking(self, vo: str = None) -> None:
+        ok = False
+        try:
+            ok = self._spawn(vo)
+        except Exception:
+            ok = False
+        finally:
+            self._starting = False
+        if ok:
+            self._alive = True
+            threading.Thread(target=self._reader, daemon=True).start()
+            for name, ident in _OBSERVED:
+                self._send("observe_property", ident, name)
+            self._flush_pending()
+        else:
+            self.shutdown()
+            if self.on_unavailable:
+                self._post(self.on_unavailable,
+                           "mpv wouldn't start, or wouldn't accept a "
+                           "connection. Falling back to the built-in player.")
+
+    def _spawn(self, vo: str = None) -> bool:
         binary = mpv_path()
         if not binary:
             return False
@@ -174,16 +249,9 @@ class MpvPlayer:
             self._proc = None
             return False
 
-        if not self._connect():
-            self.shutdown()
-            return False
-        self._alive = True
-        threading.Thread(target=self._reader, daemon=True).start()
-        for name, ident in _OBSERVED:
-            self._send("observe_property", ident, name)
-        return True
+        return self._connect(self.START_TIMEOUT)
 
-    def _connect(self, timeout: float = 10.0) -> bool:
+    def _connect(self, timeout: float = 6.0) -> bool:
         """Wait for the IPC endpoint to exist, then attach to it."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -205,6 +273,9 @@ class MpvPlayer:
 
     def shutdown(self) -> None:
         self._alive = False
+        self._starting = False
+        with self._lock:
+            self._queued = []
         try:
             self._send("quit")
         except Exception:
@@ -235,9 +306,22 @@ class MpvPlayer:
 
     # ── talking to it ───────────────────────────────────────────────────
 
+    def _flush_pending(self) -> None:
+        with self._lock:
+            queued, self._queued = self._queued, []
+        for args in queued:
+            self._send(*args)
+
     def _send(self, *args) -> None:
         sock = self._sock
         if sock is None:
+            # Still coming up. Hold the command rather than dropping it,
+            # so "click a clip, press play" works even when both happen
+            # before mpv has finished starting.
+            if self._starting:
+                with self._lock:
+                    self._queued.append(args)
+                    del self._queued[:-32]
             return
         with self._lock:
             self._request += 1
@@ -316,7 +400,7 @@ class MpvPlayer:
     # ── the ClipPlayer interface ────────────────────────────────────────
 
     def load(self, path: str, duration: float, fps: float) -> None:
-        if self._proc is None and not self._start():
+        if not self._start():
             self._fail("mpv wouldn't start.")
             return
         self.path = path or ""
@@ -340,7 +424,7 @@ class MpvPlayer:
     def play(self) -> None:
         if not self.path:
             return
-        if self._proc is None and not self._start():
+        if not self._start():
             return
         self._set("pause", False)
         self.playing = True

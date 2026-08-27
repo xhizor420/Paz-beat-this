@@ -75,6 +75,7 @@ class InlinePlayer:
         self.engine.loop = tab.cfg.player_loop
         self.engine.volume = max(0, min(int(tab.cfg.player_volume), 100))
         self.engine.muted = bool(tab.cfg.player_muted) or not HAS_FFPLAY
+        self._apply_av_offset()
 
         self.bar = tk.Canvas(self.frame, height=20, bg=T.SURFACE,
                               highlightthickness=0, bd=0,
@@ -114,6 +115,10 @@ class InlinePlayer:
             command=lambda v: self._set_speed(float(v.rstrip("x"))))
         self.speed_menu.set("1x")
         self.speed_menu.pack(side="left", padx=(0, 5))
+        # Sync nudge, built-in engine only. Tuning this is a by-ear job,
+        # so it belongs next to the sound rather than three clicks away in
+        # a settings window.
+        self.sync_btn = cbtn("sync", self._sync_menu, 46, T.DIM)
         self.clock = ctk.CTkLabel(controls, text="", font=font(9, mono=True),
                                    text_color=T.DIM)
         self.clock.pack(side="left", padx=(4, 0))
@@ -138,6 +143,9 @@ class InlinePlayer:
 
         self._volume_job = None
         self._progress_job = None
+        saved = int(getattr(tab.cfg, "player_av_offset_ms", 0))
+        if saved:
+            self.sync_btn.configure(text=f"{-saved:+d}", text_color=T.ACCENT2)
         self._show_idle_text("Select a clip")
 
     # ── which engine ────────────────────────────────────────────────────
@@ -155,6 +163,7 @@ class InlinePlayer:
                 on_fail=self._on_fail, on_eof=None,
                 post=lambda fn, *a: uithread.post(fn, *a))
             engine.vo = getattr(self.tab.cfg, "player_mpv_vo", "") or ""
+            engine.on_unavailable = self.fall_back_to_builtin
             self.using_mpv = True
             return engine
         self.using_mpv = False
@@ -162,6 +171,65 @@ class InlinePlayer:
             self.canvas, self.VIEW_W, self.VIEW_H,
             on_tick=self._on_tick, on_state=self._on_state,
             on_fail=self._on_fail)
+
+    AV_STEPS = (-400, -300, -200, -150, -100, -50, 0, 50, 100, 150, 200, 300, 400)
+
+    def _sync_menu(self) -> None:
+        """Shift the sound against the picture, in milliseconds.
+
+        Only the built-in engine needs it: it drives a separate ffplay with
+        no clock between the two, so sound sits a fixed distance from the
+        picture and the distance depends on the machine. mpv has a real
+        clock and this does nothing there."""
+        from .widgets import popup_menu, menu_rule
+        menu = popup_menu(self.tab.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        if self.using_mpv:
+            menu.add_command(label="mpv keeps its own sync - nothing to set",
+                             state="disabled")
+        else:
+            current = int(getattr(self.tab.cfg, "player_av_offset_ms", 0))
+            menu.add_command(label="Sound against picture", state="disabled")
+            menu_rule(menu)
+            for ms in self.AV_STEPS:
+                mark = " ✓" if ms == current else ""
+                if ms == 0:
+                    label = "in step" + mark
+                elif ms > 0:
+                    label = f"sound {ms} ms earlier{mark}"
+                else:
+                    label = f"sound {-ms} ms later{mark}"
+                menu.add_command(label=label,
+                                 command=lambda v=ms: self._set_av_offset(v))
+        try:
+            menu.tk_popup(self.sync_btn.winfo_rootx(),
+                          self.sync_btn.winfo_rooty() + self.sync_btn.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def _set_av_offset(self, ms: int) -> None:
+        self.tab.cfg.player_av_offset_ms = int(ms)
+        self.tab.cfg.save()
+        self._apply_av_offset()
+        # The button reads the way the menu does: later is +, earlier is -.
+        self.sync_btn.configure(text="sync" if ms == 0 else f"{-ms:+d}",
+                                text_color=T.DIM if ms == 0 else T.ACCENT2)
+        # Restart the sound at the new offset so the change is audible now
+        # rather than at the next clip.
+        if self.engine.playing:
+            position = self.engine.position
+            self.engine.pause()
+            self.engine.seek(position)
+            self.engine.play()
+        self.tab.set_status(
+            "Sound and picture in step." if ms == 0 else
+            f"Sound shifted {abs(ms)} ms {'earlier' if ms > 0 else 'later'}.", T.OK)
+
+    def _apply_av_offset(self) -> None:
+        """Only the built-in engine needs this; mpv keeps its own sync."""
+        if hasattr(self.engine, "av_offset"):
+            self.engine.av_offset = (
+                int(getattr(self.tab.cfg, "player_av_offset_ms", 0)) / 1000.0)
 
     def _show_stage(self, on: bool) -> None:
         """Raise mpv's surface over the thumbnail canvas, or drop it back."""
@@ -187,6 +255,7 @@ class InlinePlayer:
         self.engine.loop = self.tab.cfg.player_loop
         self.engine.volume = max(0, min(int(self.tab.cfg.player_volume), 100))
         self.engine.muted = bool(self.tab.cfg.player_muted) or not HAS_FFPLAY
+        self._apply_av_offset()
         self.tab.set_status(why, T.WARN)
         if self.rec is not None:
             path, duration, fps = self._resolve_source(self.rec)

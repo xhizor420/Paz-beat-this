@@ -133,6 +133,7 @@ class ClipPlayer:
         # it will fail for every file, and retrying each one costs a
         # visible stall apiece.
         self._hwaccel = True
+        self.av_offset = 0.0     # seconds; see _spawn_audio
         self._clock_pos = 0.0       # source position that _clock_t0 corresponds to
         self._frames_shown = 0      # frames consumed since _clock_t0 (incl. dropped)
         self._starved_at = 0.0      # when the queue first came up empty
@@ -349,10 +350,19 @@ class ClipPlayer:
         self._kill_audio()
         if not HAS_FFPLAY or self.muted or self.volume <= 0 or not self.path:
             return
+        # ffplay is a separate process with its own start-up cost, and
+        # there is no clock between it and the video - so it produces its
+        # first sound some hundreds of milliseconds after being asked,
+        # by which time the picture has moved on. Nothing here can measure
+        # that gap, but it is near enough constant on a given machine, so
+        # it can be dialled out: `av_offset` is how much further into the
+        # file to start the audio, in seconds. Positive if sound lags the
+        # picture, negative if it runs ahead.
+        start = max(position + self.av_offset, 0.0)
         cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error",
                "-vn", "-volume", str(self.volume)]
-        if position > 0.05:
-            cmd += ["-ss", f"{position:.3f}"]
+        if start > 0.05:
+            cmd += ["-ss", f"{start:.3f}"]
         cmd += ["-i", self.path]
         try:
             self.audio_proc = subprocess.Popen(
