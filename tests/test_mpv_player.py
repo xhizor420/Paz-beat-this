@@ -61,7 +61,7 @@ def test_the_command_line_never_asks_for_low_latency(player, monkeypatch):
     monkeypatch.setattr(mp, "mpv_path", lambda: "/usr/bin/mpv")
     monkeypatch.setattr(mp.MpvPlayer, "_connect", lambda self, timeout=10.0: False)
     player.widget = FakeWidget()
-    player._start()
+    player._spawn()               # the synchronous half of _start
 
     cmd = seen["cmd"]
     assert not any("low-latency" in part for part in cmd)
@@ -88,7 +88,7 @@ def test_the_video_output_override_is_passed_through(player, monkeypatch):
         def winfo_id(self): return 1
     player.widget = FakeWidget()
     player.vo = "x11"
-    player._start()                       # no argument, as load() calls it
+    player._spawn()                       # no argument, as load() leads to
     assert "--vo=x11" in seen["cmd"]
 
 
@@ -159,3 +159,61 @@ def test_it_matches_the_interface_the_player_holds():
     for name in used:
         assert hasattr(mp.MpvPlayer, name) or name in mp.MpvPlayer.__init__.__code__.co_names, name
         assert hasattr(ClipPlayer, name) or name in ClipPlayer.__init__.__code__.co_names, name
+
+
+# ── the freeze ──────────────────────────────────────────────────────────
+#
+# _connect used to sleep on the calling thread for up to ten seconds
+# waiting for an IPC endpoint. That thread is the UI thread, so a named
+# pipe that never appeared froze the whole window every time a clip was
+# clicked. Nothing about starting mpv may block the caller now.
+
+def test_starting_mpv_never_blocks_the_caller(player, monkeypatch):
+    import time as _t
+
+    class NeverReadyProc:
+        def poll(self): return None
+
+    monkeypatch.setattr(mp, "mpv_path", lambda: "/usr/bin/mpv")
+    monkeypatch.setattr(mp.subprocess, "Popen", lambda *a, **k: NeverReadyProc())
+    # A connect that never succeeds - the exact case that used to hang.
+    monkeypatch.setattr(mp.MpvPlayer, "_connect",
+                        lambda self, timeout=6.0: (_t.sleep(1.0), False)[1])
+
+    class FakeWidget:
+        def winfo_id(self): return 1
+    player.widget = FakeWidget()
+    player._sock = None
+
+    started = _t.monotonic()
+    player._start()
+    assert (_t.monotonic() - started) < 0.1, "start() blocked the caller"
+
+
+def test_a_failed_start_reports_back_instead_of_hanging(player, monkeypatch):
+    import time as _t
+    told = []
+    player.on_unavailable = told.append
+    player._post = lambda fn, *a: fn(*a)
+
+    monkeypatch.setattr(mp, "mpv_path", lambda: "/usr/bin/mpv")
+    monkeypatch.setattr(mp.MpvPlayer, "_spawn", lambda self, vo=None: False)
+    player._start_blocking()
+    assert told and "built-in" in told[0]
+
+
+def test_commands_issued_before_it_is_up_are_not_lost(player):
+    player._sock = None
+    player._starting = True
+    player._send("set_property", "pause", False)
+    player._send("seek", 3.0, "absolute+exact")
+    assert len(player._queued) == 2
+
+    sock = FakeSocket()
+    player._sock = sock
+    player._starting = False
+    player._flush_pending()
+    sent = [json.loads(line)["command"] for line in sock.sent]
+    assert ["set_property", "pause", False] in sent
+    assert ["seek", 3.0, "absolute+exact"] in sent
+    assert player._queued == []
