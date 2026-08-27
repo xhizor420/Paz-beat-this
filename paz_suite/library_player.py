@@ -23,6 +23,7 @@ from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
 from .player_engine import ClipPlayer, HAS_FFPLAY
 from .mpv_player import MpvPlayer, available as mpv_available
+from .vlc_player import VlcPlayer, available as vlc_available
 from . import uithread
 
 
@@ -71,6 +72,11 @@ class InlinePlayer:
         # tag_raise, which raises canvas *items*, not the widget.
         tk.Misc.lift(self.canvas)
 
+        # 4K pool lengths we have already paid an ffprobe for, so the
+        # question is asked once per file per session rather than on every
+        # click. None means "asked, still waiting".
+        self._premium_probe: dict = {}
+        self.backend = "builtin"
         self.engine = self._build_engine()
         self.engine.loop = tab.cfg.player_loop
         self.engine.volume = max(0, min(int(tab.cfg.player_volume), 100))
@@ -150,42 +156,146 @@ class InlinePlayer:
 
     # ── which engine ────────────────────────────────────────────────────
     #
-    # mpv when it is there and wanted, the built-in pipe player otherwise.
-    # They present the same interface, so nothing below this asks which
-    # one it is holding.
+    # The best one installed, with the next one down ready to take over if
+    # it turns out not to work. All three present the same interface, so
+    # nothing below this asks which one it is holding.
 
-    def _build_engine(self):
+    # Best first. Each one that can't be used steps aside for the next, so
+    # there is always something that plays.
+    #
+    #   vlc      libVLC in-process. Real A/V sync, hardware decode, and no
+    #            channel between us and it that can fail to open - which is
+    #            what made the mpv path fragile on Windows.
+    #   mpv      mpv as a separate process, spoken to over a socket. Same
+    #            quality; more ways to not come up.
+    #   builtin  ffmpeg pipe plus a separate ffplay. Needs nothing beyond
+    #            ffmpeg, but has no clock joining sound to picture.
+    CHAIN = ("vlc", "mpv", "builtin")
+    BACKEND_NAMES = {"vlc": "VLC", "mpv": "mpv", "builtin": "the built-in player"}
+
+    def which_backends(self) -> dict:
+        """What each backend would do if asked right now. Drives both the
+        chain and the diagnostics report."""
+        from . import vlc_player
+        has_mpv = mpv_available()
+        return {
+            "vlc": (vlc_available(), vlc_player.why_not()),
+            "mpv": (has_mpv,
+                    "" if has_mpv else "mpv isn't installed, or isn't on PATH"),
+            "builtin": (True, ""),
+        }
+
+    def _build_engine(self, start_at: str = ""):
         want = getattr(self.tab.cfg, "player_backend", "auto")
-        if want != "builtin" and mpv_available():
-            engine = MpvPlayer(
-                self.stage, self.VIEW_W, self.VIEW_H,
+        chain = list(self.CHAIN)
+        if want in chain:
+            # An explicit pick is a floor, not a suggestion: start there
+            # and only ever fall further down.
+            chain = chain[chain.index(want):]
+        if start_at in chain:
+            chain = chain[chain.index(start_at) + 1:]
+        ready = self.which_backends()
+        for name in chain:
+            if not ready[name][0]:
+                continue
+            self.backend = name
+            if name == "vlc":
+                engine = VlcPlayer(
+                    self.stage, self.VIEW_W, self.VIEW_H,
+                    on_tick=self._on_tick, on_state=self._on_state,
+                    on_fail=self._on_fail, on_eof=None,
+                    post=lambda fn, *a: uithread.post(fn, *a))
+                engine.on_unavailable = self._step_down
+                return engine
+            if name == "mpv":
+                engine = MpvPlayer(
+                    self.stage, self.VIEW_W, self.VIEW_H,
+                    on_tick=self._on_tick, on_state=self._on_state,
+                    on_fail=self._on_fail, on_eof=None,
+                    post=lambda fn, *a: uithread.post(fn, *a))
+                engine.vo = getattr(self.tab.cfg, "player_mpv_vo", "") or ""
+                engine.on_unavailable = self._step_down
+                return engine
+            return ClipPlayer(
+                self.canvas, self.VIEW_W, self.VIEW_H,
                 on_tick=self._on_tick, on_state=self._on_state,
-                on_fail=self._on_fail, on_eof=None,
-                post=lambda fn, *a: uithread.post(fn, *a))
-            engine.vo = getattr(self.tab.cfg, "player_mpv_vo", "") or ""
-            engine.on_unavailable = self.fall_back_to_builtin
-            self.using_mpv = True
-            return engine
-        self.using_mpv = False
+                on_fail=self._on_fail)
+        self.backend = "builtin"
         return ClipPlayer(
             self.canvas, self.VIEW_W, self.VIEW_H,
             on_tick=self._on_tick, on_state=self._on_state,
             on_fail=self._on_fail)
 
+    @property
+    def holds_own_still(self) -> bool:
+        """True when the engine parks on the clip's first frame by itself,
+        so there is nothing for us to draw while it sits unplayed. mpv
+        does. VLC would have to open the file to manage it, which is work
+        we would be waiting on for a picture we already have cached - so
+        for VLC we show our own thumbnail and let its window up only once
+        it is actually playing."""
+        return self.backend == "mpv"
+
+    @property
+    def embedded(self) -> bool:
+        """True when the engine draws into its own window rather than our
+        canvas - vlc and mpv do, the built-in engine doesn't."""
+        return self.backend in ("vlc", "mpv")
+
     AV_STEPS = (-400, -300, -200, -150, -100, -50, 0, 50, 100, 150, 200, 300, 400)
 
-    def _sync_menu(self) -> None:
-        """Shift the sound against the picture, in milliseconds.
+    def playback_report(self) -> str:
+        """Which player is running and what the others would do. When
+        something is wrong with playback this is the answer, and it is one
+        click away rather than a round of guessing."""
+        ready = self.which_backends()
+        lines = [f"Playing through: {self.BACKEND_NAMES[self.backend]}",
+                 f"Setting: player = {getattr(self.tab.cfg, 'player_backend', 'auto')}",
+                 ""]
+        for name in self.CHAIN:
+            usable, reason = ready[name]
+            mark = "live" if name == self.backend else ("ready" if usable else "no")
+            line = f"  {self.BACKEND_NAMES[name]:<20} {mark}"
+            if reason and not usable:
+                line += f" - {reason}"
+            lines.append(line)
+        from . import vlc_player
+        found = vlc_player.library_path()
+        if found:
+            lines.append(f"\n  libVLC: {found}")
+        from .mpv_player import mpv_path
+        found = mpv_path()
+        if found:
+            lines.append(f"  mpv: {found}")
+        offset = int(getattr(self.tab.cfg, "player_av_offset_ms", 0))
+        if offset:
+            lines.append(f"  sound shifted {abs(offset)} ms "
+                         f"{'earlier' if offset > 0 else 'later'}")
+        return "\n".join(lines)
 
-        Only the built-in engine needs it: it drives a separate ffplay with
-        no clock between the two, so sound sits a fixed distance from the
-        picture and the distance depends on the machine. mpv has a real
-        clock and this does nothing there."""
+    def _copy_report(self) -> None:
+        text = self.playback_report()
+        self.tab.root.clipboard_clear()
+        self.tab.root.clipboard_append(text)
+        self.tab.set_status("Playback report copied to the clipboard.", T.OK)
+
+    def _sync_menu(self) -> None:
+        """Which player is running, and - on the built-in one - how far to
+        shift the sound against the picture.
+
+        Only the built-in engine needs the shift: it drives a separate
+        ffplay with no clock between the two, so sound sits a fixed
+        distance from the picture and the distance depends on the machine.
+        VLC and mpv have real clocks and there is nothing to set."""
         from .widgets import popup_menu, menu_rule
         menu = popup_menu(self.tab.root, activebackground=T.ACCENT2_DEEP,
                           activeforeground=T.ACCENT2)
-        if self.using_mpv:
-            menu.add_command(label="mpv keeps its own sync - nothing to set",
+        menu.add_command(
+            label=f"Playing through {self.BACKEND_NAMES[self.backend]}",
+            state="disabled")
+        menu_rule(menu)
+        if self.embedded:
+            menu.add_command(label="It keeps its own sync - nothing to set",
                              state="disabled")
         else:
             current = int(getattr(self.tab.cfg, "player_av_offset_ms", 0))
@@ -201,6 +311,9 @@ class InlinePlayer:
                     label = f"sound {-ms} ms later{mark}"
                 menu.add_command(label=label,
                                  command=lambda v=ms: self._set_av_offset(v))
+        menu_rule(menu)
+        menu.add_command(label="Copy playback report",
+                         command=self._copy_report)
         try:
             menu.tk_popup(self.sync_btn.winfo_rootx(),
                           self.sync_btn.winfo_rooty() + self.sync_btn.winfo_height())
@@ -233,34 +346,43 @@ class InlinePlayer:
 
     def _show_stage(self, on: bool) -> None:
         """Raise mpv's surface over the thumbnail canvas, or drop it back."""
-        if not self.using_mpv:
+        if not self.embedded:
             return
         self.stage.lift() if on else tk.Misc.lift(self.canvas)
 
-    def fall_back_to_builtin(self, why: str) -> None:
-        """Give up on mpv for the rest of the session and carry on with the
-        engine that needs nothing installed."""
-        if not self.using_mpv:
+    def _step_down(self, why: str) -> None:
+        """This backend can't do the job. Take the next one down the chain
+        for the rest of the session, keeping the clip and the settings."""
+        if self.backend == "builtin":
             return
+        was = self.backend
+        playing = bool(getattr(self.engine, "playing", False))
+        position = float(getattr(self.engine, "position", 0.0) or 0.0)
         try:
             self.engine.shutdown()
         except Exception:
             pass
-        self._show_stage(False)
-        self.engine = ClipPlayer(
-            self.canvas, self.VIEW_W, self.VIEW_H,
-            on_tick=self._on_tick, on_state=self._on_state,
-            on_fail=self._on_fail)
-        self.using_mpv = False
+        self.engine = self._build_engine(start_at=was)
+        self._show_stage(self.embedded)
         self.engine.loop = self.tab.cfg.player_loop
         self.engine.volume = max(0, min(int(self.tab.cfg.player_volume), 100))
         self.engine.muted = bool(self.tab.cfg.player_muted) or not HAS_FFPLAY
         self._apply_av_offset()
-        self.tab.set_status(why, T.WARN)
+        # Name first: the reason can be a long sentence and the status bar
+        # is one line, so the part that must survive truncation goes at the
+        # front.
+        self.tab.set_status(
+            f"Switched to {self.BACKEND_NAMES[self.backend]}. {why}", T.WARN)
         if self.rec is not None:
             path, duration, fps = self._resolve_source(self.rec)
             self.engine.load(path, duration, fps)
             self._show_thumb(self.rec)
+            # If they had pressed Play, they still want it playing - being
+            # handed a stopped picture and told to press it again is the
+            # thing this whole chain exists to avoid.
+            if playing:
+                self.engine.seek(position)
+                self.engine.play()
 
     # ── sizing ──────────────────────────────────────────────────────────
 
@@ -270,7 +392,7 @@ class InlinePlayer:
         height = max(height, 135)
         self.bar.configure(width=width)
         self.stack.configure(width=width, height=height)
-        if self.rec is None or self.using_mpv:
+        if self.rec is None or self.holds_own_still:
             self.canvas.configure(width=width, height=height)
         self.engine.set_size(width, height)
         if self.rec is not None and not self.engine.playing:
@@ -298,6 +420,7 @@ class InlinePlayer:
         self._draw_bar()
         self._show_thumb(rec)
         self._update_quality_btn()
+        self._offer_premium(rec)
         # Warm the hover-scrub sheet now, while the user is still just
         # looking at the thumbnail - by the time they reach for the seek
         # bar it's usually already built, instead of the first several
@@ -305,17 +428,54 @@ class InlinePlayer:
         self.tab.frames.prime_hover(path, duration)
 
     def _resolve_source(self, rec):
-        """(path, duration, fps) to actually load for `rec` - the matching
-        4K/60+ edit-pool copy when one exists and is preferred, else the
-        indexed file itself. The pool copy isn't in the DB (it lives in a
-        separate folder tree from the library scan), so its duration/fps
-        come from a probe - cheap after the first look since probe() caches
-        by path+mtime+size."""
-        if rec.premium_path and self.tab.cfg.player_prefer_premium:
-            info = probe(rec.premium_path)
-            if info and info.duration:
-                return rec.premium_path, info.duration, info.fps or 60.0
+        """(path, duration, fps) to load for `rec`, without touching the
+        disk. The indexed file already has its length and frame rate in
+        the database, so this answer costs nothing.
+
+        The 4K pool copy does not: it lives outside the library scan, so
+        its length comes from an ffprobe. That is a subprocess against a
+        large file on a big drive, and it used to run right here, on the
+        thread drawing the window - which is a multi-second freeze on
+        every click of a clip whose pool copy hasn't been looked at yet.
+        It happens in :meth:`_offer_premium` instead, and swaps in when it
+        has an answer."""
+        cached = self._premium_probe.get(rec.premium_path or "")
+        if rec.premium_path and self.tab.cfg.player_prefer_premium and cached:
+            return rec.premium_path, cached[0], cached[1]
         return rec.path, rec.duration, rec.fps or 30.0
+
+    def _offer_premium(self, rec) -> None:
+        """Look up the 4K copy's length off to the side, and switch the
+        loaded clip over to it once we know. Nothing waits on this."""
+        path = rec.premium_path
+        if not path or not self.tab.cfg.player_prefer_premium:
+            return
+        if path in self._premium_probe:
+            return
+        self._premium_probe[path] = None        # claim it, once
+
+        def work():
+            info = probe(path)
+            answer = ((info.duration, info.fps or 60.0)
+                      if info and info.duration else None)
+            uithread.post(self._premium_ready, rec, path, answer)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _premium_ready(self, rec, path: str, answer) -> None:
+        if answer is None:
+            self._premium_probe.pop(path, None)
+            return
+        self._premium_probe[path] = answer
+        # The user may have moved on, or started playing the small copy;
+        # either way, don't yank the picture out from under them.
+        if self.rec is not rec or self.engine.playing:
+            return
+        if not self.tab.cfg.player_prefer_premium:
+            return
+        self.engine.load(path, answer[0], answer[1])
+        self._draw_bar()
+        self.clock.configure(text=f"0:00.0 / {fmt_len(self.engine.duration)}")
 
     def toggle_quality(self) -> None:
         if self.rec is None or not self.rec.premium_path:
@@ -334,6 +494,7 @@ class InlinePlayer:
         if was_playing:
             self.engine.play()
         self._update_quality_btn()
+        self._offer_premium(self.rec)
         self.tab.frames.prime_hover(path, duration)
 
     def _update_quality_btn(self) -> None:
@@ -352,11 +513,13 @@ class InlinePlayer:
                                 text=text, fill=T.FAINT, font=(T.UI, 11))
 
     def _show_thumb(self, rec):
-        if self.using_mpv:
+        if self.holds_own_still:
             # mpv holds the first frame of the loaded clip, which is a
             # better still than our cached thumbnail and needs no work.
             self._show_stage(True)
             return
+        # Anything else: our cached thumbnail, on our canvas, on top.
+        self._show_stage(False)
         try:
             with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
                 image = Image.open(io.BytesIO(fh.read()))
@@ -439,10 +602,11 @@ class InlinePlayer:
             self.engine.speed = value
 
     def _watch_progress(self) -> None:
-        """While mpv says it is playing, check the clock is really moving.
+        """While the engine says it is playing, check the clock is really
+        moving.
         A video output that cannot draw leaves it running with nothing on
         screen; better to say so than to let you stare at a black panel."""
-        if not self.using_mpv:
+        if not self.embedded:
             return
         if self._progress_job is not None:
             try:
@@ -455,7 +619,7 @@ class InlinePlayer:
             return
         problem = check()
         if problem:
-            self.fall_back_to_builtin(problem)
+            self._step_down(problem)
             return
         if self.engine.playing:
             self._progress_job = self.canvas.after(1000, self._watch_progress)

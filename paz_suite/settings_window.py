@@ -415,12 +415,19 @@ class SettingsWindow(ctk.CTkToplevel):
                             "76px band, cropped to fill from just above centre.")
 
         self._section(tab, "Playback", 25)
-        self._choice(tab, 26, "player_backend", "Player", ["auto", "builtin"])
-        self._hint(tab, 27, "auto uses mpv when it is installed, which decodes "
-                            "on the GPU and keeps picture locked to sound. The "
-                            "built-in player drives a separate ffplay with no "
-                            "clock between them, so sound leads picture by "
-                            "however long it took to start. builtin forces it.")
+        self._choice(tab, 26, "player_backend", "Player",
+                     ["auto", "vlc", "mpv", "builtin"])
+        self._hint(tab, 27, "auto takes the best one installed: VLC first, then "
+                            "mpv, then the built-in player. VLC and mpv both "
+                            "decode on the GPU and lock picture to sound. VLC "
+                            "is loaded into this program rather than run beside "
+                            "it, so there is no connection between the two that "
+                            "can fail - it is the one to prefer. The built-in "
+                            "player needs nothing installed but drives a "
+                            "separate ffplay with no clock between them, so "
+                            "sound sits a fixed distance from the picture. "
+                            "Naming one here starts there instead; if it is not "
+                            "usable the next one down still takes over.")
         self._entry(tab, 28, "player_mpv_vo", "mpv video output", width=140)
         self._hint(tab, 29, "Leave empty unless mpv plays sound with a black "
                             "picture - then try gpu, x11 or direct3d.")
