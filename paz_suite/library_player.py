@@ -22,6 +22,7 @@ from .format import fmt_clock, fmt_len
 from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
 from .player_engine import ClipPlayer, HAS_FFPLAY
+from .mpv_player import MpvPlayer, available as mpv_available
 from . import uithread
 
 
@@ -43,14 +44,34 @@ class InlinePlayer:
         self._last_seek_pos = None
 
         self.frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.canvas = tk.Canvas(self.frame, width=self.VIEW_W, height=self.VIEW_H,
-                                 bg=T.INPUT, highlightthickness=0, bd=0)
-        self.canvas.pack()
-        self.canvas.bind("<Button-1>", lambda e: self.toggle())
 
-        self.engine = ClipPlayer(
-            self.canvas, self.VIEW_W, self.VIEW_H,
-            on_tick=self._on_tick, on_state=self._on_state, on_fail=self._on_fail)
+        # Two surfaces stacked in one place. The canvas is what the
+        # built-in engine draws on, and what shows a thumbnail or a line
+        # of text when nothing is playing. `stage` is a plain frame whose
+        # window id gets handed to mpv, which then draws into it directly.
+        # Whichever one is in use is raised over the other.
+        self.stack = tk.Frame(self.frame, width=self.VIEW_W, height=self.VIEW_H,
+                              bg=T.INPUT, bd=0, highlightthickness=0)
+        self.stack.pack()
+        self.stack.pack_propagate(False)
+        self.canvas = tk.Canvas(self.stack, width=self.VIEW_W, height=self.VIEW_H,
+                                 bg=T.INPUT, highlightthickness=0, bd=0)
+        self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self.canvas.bind("<Button-1>", lambda e: self.toggle())
+        self.stage = tk.Frame(self.stack, bg="black", bd=0, highlightthickness=0)
+        self.stage.bind("<Button-1>", lambda e: self.toggle())
+        # Placed once and left placed. mpv attaches to this window's id, so
+        # it has to exist with real geometry before the engine is built,
+        # and it must never be unmapped afterwards - taking the drawable
+        # out from under mpv leaves it rendering into nothing. Visibility
+        # is a matter of which surface is on top, not which one exists.
+        self.stage.place(x=0, y=0, relwidth=1, relheight=1)
+        self.frame.update_idletasks()
+        # tk.Misc.lift, not self.canvas.lift: Canvas overrides lift() with
+        # tag_raise, which raises canvas *items*, not the widget.
+        tk.Misc.lift(self.canvas)
+
+        self.engine = self._build_engine()
         self.engine.loop = tab.cfg.player_loop
         self.engine.volume = max(0, min(int(tab.cfg.player_volume), 100))
         self.engine.muted = bool(tab.cfg.player_muted) or not HAS_FFPLAY
@@ -90,7 +111,7 @@ class InlinePlayer:
             button_color=T.LINE, button_hover_color=T.BTN_HOV,
             dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT,
-            command=lambda v: setattr(self.engine, "speed", float(v.rstrip("x"))))
+            command=lambda v: self._set_speed(float(v.rstrip("x"))))
         self.speed_menu.set("1x")
         self.speed_menu.pack(side="left", padx=(0, 5))
         self.clock = ctk.CTkLabel(controls, text="", font=font(9, mono=True),
@@ -116,7 +137,61 @@ class InlinePlayer:
             self.volume_slider.configure(state="disabled")
 
         self._volume_job = None
+        self._progress_job = None
         self._show_idle_text("Select a clip")
+
+    # ── which engine ────────────────────────────────────────────────────
+    #
+    # mpv when it is there and wanted, the built-in pipe player otherwise.
+    # They present the same interface, so nothing below this asks which
+    # one it is holding.
+
+    def _build_engine(self):
+        want = getattr(self.tab.cfg, "player_backend", "auto")
+        if want != "builtin" and mpv_available():
+            engine = MpvPlayer(
+                self.stage, self.VIEW_W, self.VIEW_H,
+                on_tick=self._on_tick, on_state=self._on_state,
+                on_fail=self._on_fail, on_eof=None,
+                post=lambda fn, *a: uithread.post(fn, *a))
+            engine.vo = getattr(self.tab.cfg, "player_mpv_vo", "") or ""
+            self.using_mpv = True
+            return engine
+        self.using_mpv = False
+        return ClipPlayer(
+            self.canvas, self.VIEW_W, self.VIEW_H,
+            on_tick=self._on_tick, on_state=self._on_state,
+            on_fail=self._on_fail)
+
+    def _show_stage(self, on: bool) -> None:
+        """Raise mpv's surface over the thumbnail canvas, or drop it back."""
+        if not self.using_mpv:
+            return
+        self.stage.lift() if on else tk.Misc.lift(self.canvas)
+
+    def fall_back_to_builtin(self, why: str) -> None:
+        """Give up on mpv for the rest of the session and carry on with the
+        engine that needs nothing installed."""
+        if not self.using_mpv:
+            return
+        try:
+            self.engine.shutdown()
+        except Exception:
+            pass
+        self._show_stage(False)
+        self.engine = ClipPlayer(
+            self.canvas, self.VIEW_W, self.VIEW_H,
+            on_tick=self._on_tick, on_state=self._on_state,
+            on_fail=self._on_fail)
+        self.using_mpv = False
+        self.engine.loop = self.tab.cfg.player_loop
+        self.engine.volume = max(0, min(int(self.tab.cfg.player_volume), 100))
+        self.engine.muted = bool(self.tab.cfg.player_muted) or not HAS_FFPLAY
+        self.tab.set_status(why, T.WARN)
+        if self.rec is not None:
+            path, duration, fps = self._resolve_source(self.rec)
+            self.engine.load(path, duration, fps)
+            self._show_thumb(self.rec)
 
     # ── sizing ──────────────────────────────────────────────────────────
 
@@ -125,7 +200,8 @@ class InlinePlayer:
         height = int(height) if height else int(width * 9 / 16) // 2 * 2
         height = max(height, 135)
         self.bar.configure(width=width)
-        if self.rec is None:
+        self.stack.configure(width=width, height=height)
+        if self.rec is None or self.using_mpv:
             self.canvas.configure(width=width, height=height)
         self.engine.set_size(width, height)
         if self.rec is not None and not self.engine.playing:
@@ -201,11 +277,17 @@ class InlinePlayer:
             text_color=T.ACCENT if prefer else T.DIM)
 
     def _show_idle_text(self, text: str):
+        self._show_stage(False)
         self.canvas.delete("all")
         self.canvas.create_text(self.engine.view_w // 2, self.engine.view_h // 2,
                                 text=text, fill=T.FAINT, font=(T.UI, 11))
 
     def _show_thumb(self, rec):
+        if self.using_mpv:
+            # mpv holds the first frame of the loaded clip, which is a
+            # better still than our cached thumbnail and needs no work.
+            self._show_stage(True)
+            return
         try:
             with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
                 image = Image.open(io.BytesIO(fh.read()))
@@ -280,9 +362,41 @@ class InlinePlayer:
         self.tab.cfg.player_muted = self.engine.muted
         self.tab.cfg.save()
 
+    def _set_speed(self, value: float) -> None:
+        setter = getattr(self.engine, "set_speed", None)
+        if setter is not None:
+            setter(value)
+        else:
+            self.engine.speed = value
+
+    def _watch_progress(self) -> None:
+        """While mpv says it is playing, check the clock is really moving.
+        A video output that cannot draw leaves it running with nothing on
+        screen; better to say so than to let you stare at a black panel."""
+        if not self.using_mpv:
+            return
+        if self._progress_job is not None:
+            try:
+                self.canvas.after_cancel(self._progress_job)
+            except ValueError:
+                pass
+            self._progress_job = None
+        check = getattr(self.engine, "check_progress", None)
+        if check is None:
+            return
+        problem = check()
+        if problem:
+            self.fall_back_to_builtin(problem)
+            return
+        if self.engine.playing:
+            self._progress_job = self.canvas.after(1000, self._watch_progress)
+
     # ── engine callbacks ────────────────────────────────────────────────
 
     def _on_state(self, playing: bool) -> None:
+        if playing:
+            self._show_stage(True)
+            self._watch_progress()
         self.play_btn.configure(text="⏸ Pause" if playing else "▶ Play")
 
     def _on_tick(self, position: float) -> None:
