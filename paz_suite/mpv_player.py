@@ -443,6 +443,13 @@ class MpvPlayer:
         """
         if not self.playing or self._played_at is None:
             return ""
+        if self._sock is None:
+            # Still coming up. Starting mpv does not block the UI any more,
+            # which means the clock can legitimately sit at zero for a few
+            # seconds here - counting that as a stall drops a perfectly
+            # good player before it has drawn its first frame.
+            self._played_at = time.monotonic()
+            return ""
         if self.position > self._played_from + 0.2:
             self._played_at = None          # moving; stop watching
             return ""

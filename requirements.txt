@@ -1,2 +1,7 @@
 customtkinter>=5.2
 Pillow>=10.0
+
+# Playback. Needs VLC itself installed too - see the Setup section.
+# The player falls back to mpv, then to a built-in ffmpeg pipe, so this
+# is strongly recommended rather than required.
+python-vlc>=3.0

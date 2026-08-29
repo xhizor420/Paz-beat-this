@@ -26,6 +26,28 @@ pip install -r requirements.txt
 python main.py
 ```
 
+**For playback, install VLC.** The player uses the best backend it finds,
+in this order:
+
+| | needs | sound against picture |
+|---|---|---|
+| VLC | [VLC](https://videolan.org) + `python-vlc` | locked - VLC keeps one clock |
+| mpv | `mpv` on PATH | locked |
+| built-in | nothing beyond ffmpeg | drifts; adjustable by hand |
+
+VLC is the one to have. It is loaded into the program rather than run
+beside it, so unlike mpv there is no connection between the two that can
+fail to open - which is what makes it dependable on Windows. `python-vlc`
+comes with `requirements.txt`; VLC itself is a normal install.
+
+The built-in player needs nothing, but it decodes video with ffmpeg and
+plays sound with a separate ffplay, and nothing joins the two - so sound
+sits a fixed distance from the picture. The player's **sync** button
+shifts it by ear, 50 to 400 ms either way, and remembers the setting.
+
+Which one is live, and why the others aren't, is under the player's
+**sync** button → *Copy playback report*.
+
 First launch: **Settings → Convert Folders** to point Source / Converted /
 4K 60+ / Needs work at your real folders. Library indexes Convert's
 "Converted" folder by default — change that under **Settings → Library**
@@ -114,6 +136,8 @@ paz_suite/
   e621.py                   e621 tag lookup + cache
   media.py                  ffprobe, thumbnailing, frame/storyboard cache, dhash
   player_engine.py          shared ffmpeg-decode + ffplay-audio playback engine
+  vlc_player.py             libVLC playback, in-process, same surface as above
+  mpv_player.py             mpv playback over a socket, same surface as above
   widgets.py                Card/Bar/StatTile/PeekWindow/Toaster/JobPanel/LogView
   convert_engine.py         encode planning + ffmpeg command/run/verify (no UI)
   convert_widgets.py        queue table, scrub/play preview, contact sheet, dupe finder

@@ -116,7 +116,7 @@ class AppConfig:
     # never uses mpv. mpv decodes on the GPU and keeps picture locked to
     # sound, which the built-in player cannot do - it drives a separate
     # ffplay with no clock between them.
-    player_backend: str = "auto"      # auto | builtin
+    player_backend: str = "auto"      # auto | vlc | mpv | builtin
     # Built-in player only: how far ahead to start the audio, to cancel
     # ffplay's start-up delay. Positive if sound lags the picture. mpv
     # needs none of this - it has a real clock between the two.
