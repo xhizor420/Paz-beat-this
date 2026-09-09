@@ -254,6 +254,43 @@ class ClipPlayer:
         else:
             self._preview_frame(self._token)
 
+    def step(self, frames: int = 1) -> None:
+        """Move by whole frames, for finding the exact one a beat lands on.
+
+        Forward by one is the common case, and it does not need a
+        re-decode: pausing leaves the decoder open with its next frames
+        already queued, and the next one is precisely what is being asked
+        for. Taking it off the queue puts it on screen in a few
+        milliseconds instead of the ~70 a respawn costs, which is the
+        difference between walking through a clip and waiting on it.
+
+        Backwards, or any longer jump, has to seek. A pipe cannot be
+        rewound.
+        """
+        if not self.path or not frames:
+            return
+        if frames == 1 and not self.playing and self._step_from_queue():
+            return
+        self.seek(self.position + frames / max(self.stream_fps, 1.0))
+
+    def _step_from_queue(self) -> bool:
+        """Take the next decoded frame if one is waiting. False means the
+        caller has to seek after all."""
+        if self.proc is None or self.proc.poll() is not None:
+            return False
+        try:
+            item = self._queue.get_nowait()
+        except queue.Empty:
+            return False
+        if item is None:            # end of the clip; let seek deal with it
+            return False
+        self._blit(item)
+        forward = self.position + 1.0 / max(self.stream_fps, 1.0)
+        self.position = min(forward, self.duration) if self.duration else forward
+        if self.on_tick:
+            self.on_tick(self.position)
+        return True
+
     def toggle_mute(self) -> bool:
         self.muted = not self.muted
         self._apply_gain()

@@ -11,7 +11,10 @@ github.com/CPJKU/beat_this) rather than pip-installed, so this module adds
 that folder to sys.path before importing it. Its own dependencies (torch,
 torchaudio, einops, rotary-embedding-torch, soxr) are heavy and optional -
 nothing here is imported at module load time, so the rest of the suite
-works fine without them installed. Call import_error() first to check.
+works fine without them installed. dependency_status() reports what is
+present without committing to it; note that anything which does reach for
+torch pays half a gigabyte of resident memory for the privilege, so the
+Beat This tab holds off until someone actually opens it.
 """
 
 from __future__ import annotations
@@ -113,17 +116,6 @@ def checkpoint_parts(name: str) -> tuple:
 DEVICE_CHOICES = ("Auto", "CPU", "GPU")
 MARKER_COLORS = ("Blue", "Cyan", "Green", "Yellow", "Red", "Pink", "Purple")
 FRAME_RATES = (23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0)
-
-
-def import_error() -> str | None:
-    """None if the beat tracker and its dependencies are importable, else a
-    short human-readable reason. Call before touching anything else here."""
-    try:
-        import torch  # noqa: F401
-        import beat_this.inference  # noqa: F401
-    except Exception as exc:
-        return str(exc)
-    return None
 
 
 # ── dependencies ────────────────────────────────────────────────────────

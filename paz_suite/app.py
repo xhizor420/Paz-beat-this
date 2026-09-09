@@ -101,6 +101,10 @@ class PazApp:
 
         if self.cfg.last_tab in TAB_NAMES:
             self.tabview.set(self.cfg.last_tab)
+        # set() does not run the change callback, so the tab we open on
+        # would never get its first-look call. Give it one, after the
+        # window is up rather than in the middle of building it.
+        self.root.after(200, self._first_look)
 
         self._apply_chrome()
         self._style_tabs()
@@ -352,10 +356,26 @@ class PazApp:
             dot.configure(fg_color=bright if selected else mix(bright, T.BG, 0.55))
             label.configure(text_color=bright if selected else T.DIM)
 
+    def _first_look(self) -> None:
+        tab = self._tab_object(self.tabview.get())
+        shown = getattr(tab, "on_shown", None)
+        if shown is not None:
+            shown()
+
+    def _tab_object(self, name: str):
+        return {"Convert": self.convert, "Library": self.library,
+                "Vault": self.vault, "Beat This": self.beat}.get(name)
+
     def _on_tab_changed(self) -> None:
-        self.cfg.last_tab = self.tabview.get()
+        name = self.tabview.get()
+        self.cfg.last_tab = name
         self.cfg.save()
         self._style_tabs()
+        # Tabs get to do their first-look work when they are first looked
+        # at, rather than all of it during startup.
+        shown = getattr(self._tab_object(name), "on_shown", None)
+        if shown is not None:
+            shown()
 
     def _on_root_configure(self, event) -> None:
         if event.widget is not self.root:

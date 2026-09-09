@@ -614,7 +614,11 @@ class InlinePlayer:
         if self.engine.playing:
             self.engine.pause()
         fps = max(float(getattr(self.engine, "fps", 0) or 0) or 30.0, 1.0)
-        self.engine.seek(self.engine.position + count / fps)
+        stepper = getattr(self.engine, "step", None)
+        if stepper is not None:
+            stepper(count)
+        else:
+            self.engine.seek(self.engine.position + count / fps)
         self._refresh_readout()
         self.tab.set_status(
             f"Frame {round(self.engine.position * fps):,} "

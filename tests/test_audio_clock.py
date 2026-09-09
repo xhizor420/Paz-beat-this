@@ -171,3 +171,96 @@ def test_stopping_returns_immediately(tmp_path):
     start = time.monotonic()
     track.stop()
     assert time.monotonic() - start < 0.1
+
+
+# ── frame stepping ──────────────────────────────────────────────────────
+
+class FakeProc:
+    def __init__(self, alive=True):
+        self._alive = alive
+
+    def poll(self):
+        return None if self._alive else 0
+
+
+def _stepper(monkeypatch):
+    """A paused engine with a live decoder and frames waiting, which is
+    exactly the state pausing leaves behind."""
+    import queue as _queue
+    p = ClipPlayer.__new__(ClipPlayer)
+    p.path = "/clips/a.mp4"
+    p.playing = False
+    p.duration = 30.0
+    p.position = 4.0
+    p.stream_fps = 25.0
+    p.proc = FakeProc()
+    p._queue = _queue.Queue()
+    p.on_tick = None
+    p.blitted = []
+    p.seeks = []
+    p._blit = p.blitted.append
+    p.seek = p.seeks.append
+    return p
+
+
+def test_stepping_forward_takes_the_frame_already_decoded(monkeypatch):
+    p = _stepper(monkeypatch)
+    p._queue.put(b"next-frame")
+    p.step(1)
+    assert p.blitted == [b"next-frame"], "should have come off the queue"
+    assert p.seeks == [], "no respawn needed to go forward one frame"
+    assert p.position == pytest.approx(4.04)
+
+
+def test_stepping_backwards_has_to_seek(monkeypatch):
+    p = _stepper(monkeypatch)
+    p._queue.put(b"next-frame")
+    p.step(-1)
+    assert p.seeks == [pytest.approx(3.96)]
+    assert p.blitted == [], "a pipe cannot be rewound"
+
+
+def test_stepping_seeks_when_nothing_is_decoded_yet(monkeypatch):
+    p = _stepper(monkeypatch)          # empty queue
+    p.step(1)
+    assert p.seeks == [pytest.approx(4.04)]
+
+
+def test_stepping_seeks_when_the_decoder_has_gone(monkeypatch):
+    p = _stepper(monkeypatch)
+    p.proc = FakeProc(alive=False)
+    p._queue.put(b"stale")
+    p.step(1)
+    assert p.seeks == [pytest.approx(4.04)]
+
+
+def test_the_end_of_the_clip_is_not_stepped_into(monkeypatch):
+    p = _stepper(monkeypatch)
+    p._queue.put(None)                 # the decoder's end marker
+    p.step(1)
+    assert p.blitted == []
+    assert p.seeks == [pytest.approx(4.04)]
+
+
+def test_stepping_while_playing_seeks(monkeypatch):
+    """Taking a frame off the queue under the pacing loop would steal it."""
+    p = _stepper(monkeypatch)
+    p.playing = True
+    p._queue.put(b"next-frame")
+    p.step(1)
+    assert p.seeks == [pytest.approx(4.04)]
+    assert p.blitted == []
+
+
+def test_stepping_stays_inside_the_clip(monkeypatch):
+    p = _stepper(monkeypatch)
+    p.position = 29.99
+    p._queue.put(b"last")
+    p.step(1)
+    assert p.position == pytest.approx(30.0)
+
+
+def test_a_step_of_nothing_does_nothing(monkeypatch):
+    p = _stepper(monkeypatch)
+    p.step(0)
+    assert p.seeks == [] and p.blitted == []

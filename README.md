@@ -63,6 +63,15 @@ nothing to set.
 Which one is live, and why the others aren't, is under the player's
 **sync** button → *Copy playback report*.
 
+### Playing keys
+
+`,` and `.` step one frame - that is how you find the frame a beat lands
+on, and it comes off the decoder already running, so holding it walks
+through a clip rather than waiting on one. Space or Enter plays, arrows
+seek five seconds, Shift+arrows one, Home and End are the ends of the
+clip, a digit jumps that tenth of the way in, `M` mutes. All of them
+defer to the search box, so typing a post ID still types.
+
 First launch: **Settings → Convert Folders** to point Source / Converted /
 4K 60+ / Needs work at your real folders. Library indexes Convert's
 "Converted" folder by default — change that under **Settings → Library**

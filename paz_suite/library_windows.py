@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .theme import T, font
+from .theme import T, font, px
 from .files import is_ignored_dir, open_in_explorer
 from .convert_engine import verify
 from . import uithread
@@ -103,10 +103,11 @@ class HelpWindow(ctk.CTkToplevel):
          "runs a full pass instead, catching up every post that's due for "
          "a refresh, not just a small batch. Add an API key in Settings "
          "for fewer unavailable posts."),
-        ("Score, 4K ✓, Ratio", "▲ is the e621 upvote score - sort by it or "
-         "use the Top rated button. 4K ✓ means a 4K/60+ copy exists. Ratio "
-         "(next to Random) is a one-click Portrait / Widescreen / Square "
-         "filter, since aspect ratio isn't usually a tag."),
+        ("Score, 4K ✓, Shape", "▲ is the e621 upvote score - sort by it or "
+         "use Highest scoring first. 4K ✓ means a 4K/60+ copy exists. Shape, "
+         "in the ⋯ menu next to Random clip, is a one-click Portrait / "
+         "Widescreen / Square filter, since aspect ratio isn't usually a "
+         "tag."),
         ("Grid", "A contact sheet of twelve evenly-spaced frames from the "
          "selected clip. Click any frame to jump the player there."),
         ("Search", "Terms AND together, -term excludes. Prefixes: artist: "
@@ -124,22 +125,33 @@ class HelpWindow(ctk.CTkToplevel):
          "already been spent. The PROJECTS group in the sidebar lists every "
          "project; click one to jump straight to its clips."),
         ("Player", "Scales with the window; Theater mode (Ctrl+T) gives it "
-         "about half the window and collapses the tag rail. When a clip has "
-         "a matching 4K/60+ copy in the edit pool, playback defaults to "
-         "that instead of the original - the 4K button next to Loop "
-         "switches back and remembers your choice."),
+         "about half the window and collapses the tag rail. Playback uses "
+         "the converted copy, which is far cheaper to decode; when a clip "
+         "also has a 4K/60+ copy in the edit pool, the 4K button next to "
+         "Loop switches to it and remembers the choice."),
+        ("Sound", "It uses the best player installed - VLC, then mpv, then "
+         "its own - and all three keep picture locked to sound. The sync "
+         "button says which one is running, and Copy playback report there "
+         "spells out what each would do if something looks wrong."),
         ("Copying", "Right-click any clip > Copy for name, path, post ID, "
          "e621 URL, artist or all tags. Ctrl+C copies the name, "
          "Ctrl+Shift+C the full path."),
-        ("Keys", "/ search · Enter or Space play/pause · ←→ seek 5s · "
-         "R random · PgUp/PgDn pages · Ctrl+L collapse tags · Ctrl+C copy "
-         "name · Ctrl+F search · F5 sync · Ctrl+O folders · Ctrl+T theater"),
+        ("Keys - playing", "Enter or Space play/pause · ←→ seek 5s · "
+         "Shift+←→ seek 1s · , and . step one frame · Home/End ends of the "
+         "clip · 0-9 jump that tenth of the way in · M mute"),
+        ("Keys - everything else", "/ search · R random · G grid · "
+         "PgUp/PgDn pages · Ctrl+A select all on page · Ctrl+L collapse "
+         "tags · Ctrl+C copy name · Ctrl+Shift+C copy path · Ctrl+F search "
+         "· F5 sync · Ctrl+O folders · Ctrl+T theater · Esc clear"),
     )
 
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Help")
-        self.geometry("560x640")
+        # Scaled, like every other window. A fixed pixel size here is a
+        # postage stamp on a 4K screen.
+        self.geometry(f"{px(560)}x{px(640)}")
+        self.minsize(px(360), px(320))
         self.configure(fg_color=T.BG)
         self.transient(parent)
         self.after(120, self.lift)
@@ -152,17 +164,33 @@ class HelpWindow(ctk.CTkToplevel):
         body.grid(row=0, column=0, sticky="nsew", padx=14, pady=14)
         body.grid_columnconfigure(0, weight=1)
         row = 0
+        self._paragraphs = []
         for title, text in self.SECTIONS:
             ctk.CTkLabel(body, text=title, font=font(12, "bold"),
                          text_color=T.ACCENT, anchor="w"
                          ).grid(row=row, column=0, sticky="ew", padx=14,
                                 pady=(14 if row else 12, 2))
             row += 1
-            ctk.CTkLabel(body, text=text, font=font(10), text_color=T.DIM,
-                         wraplength=480, justify="left", anchor="w"
-                         ).grid(row=row, column=0, sticky="ew", padx=14)
+            label = ctk.CTkLabel(body, text=text, font=font(10),
+                                 text_color=T.DIM, justify="left", anchor="w")
+            label.grid(row=row, column=0, sticky="ew", padx=14)
+            self._paragraphs.append(label)
             row += 1
+        # Wrap to the width there actually is, and re-wrap when that
+        # changes. A fixed wraplength was a guess at the window's inside
+        # width, and CustomTkinter scales the two differently - so on
+        # anything but the display it was guessed on, every paragraph ran
+        # off the right-hand edge with its last few words cut off.
+        body.bind("<Configure>", self._rewrap)
         self.bind("<Escape>", lambda e: self.destroy())
+
+    def _rewrap(self, event) -> None:
+        width = max(event.width - px(52), px(220))
+        if width == getattr(self, "_wrapped_at", None):
+            return
+        self._wrapped_at = width
+        for label in self._paragraphs:
+            label.configure(wraplength=width)
 
 
 class FoldersWindow(ctk.CTkToplevel):
