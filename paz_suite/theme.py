@@ -93,6 +93,28 @@ class T:
     # e is the loudest of the three on purpose — see the module docstring.
     RATING = {"e": "#FF2D5A", "q": "#FFC24D", "s": "#53E0AE"}
 
+    # ── tag categories ───────────────────────────────────────────────────
+    #
+    # e621's own category colours, lifted to sit on a near-black ground.
+    # These are not decoration and not a free choice: anyone who has spent
+    # time on e621 reads tags by colour without looking at the heading -
+    # orange is an artist, green is a character, red-orange is a species.
+    # That is years of muscle memory, and a library keyed on e621 post IDs
+    # should speak the same language.
+    #
+    # The site's values are tuned for a light-grey page, so they are
+    # brightened here rather than copied: #f2ac08 artist, #0a0 character,
+    # #ed5d1f species, #d0d copyright, #282 lore, #b4c7d9 general.
+    TAG = {
+        "artist":    "#FFBB2E",   # e621 #f2ac08
+        "character": "#3FD96B",   # e621 #0a0
+        "species":   "#FF7A45",   # e621 #ed5d1f
+        "copyright": "#F062F0",   # e621 #d0d
+        "lore":      "#59C97A",   # e621 #282
+        "general":   "#B4C7D9",   # e621 #b4c7d9
+        "meta":      "#C3B2DB",
+    }
+
     # ── type ─────────────────────────────────────────────────────────────
     # Placeholders. resolve_fonts() replaces these with whatever is
     # actually installed once a Tk root exists; the values here are the
@@ -326,7 +348,8 @@ def _default_banner(width: int, height: int) -> "Image.Image":
     return base
 
 
-def banner_image(path: str, width: int, height: int = BANNER_H) -> "Image.Image":
+def banner_image(path: str, width: int, height: int = BANNER_H,
+                 zoom: float = 1.0, fx: float = 0.5, fy: float = 0.34) -> "Image.Image":
     """Render the header strip: the user's own picture (or the default
     sweep) cropped to fill, scrimmed, and capped with an accent hairline.
 
@@ -347,13 +370,14 @@ def banner_image(path: str, width: int, height: int = BANNER_H) -> "Image.Image"
     if picture is None:
         base = _default_banner(width, height)
     else:
-        scale = max(width / picture.width, height / picture.height)
-        size = (max(int(picture.width * scale), width),
-                max(int(picture.height * scale), height))
-        picture = picture.resize(size, Image.LANCZOS)
-        top = int((picture.height - height) * 0.34)
-        left = (picture.width - width) // 2
-        base = picture.crop((left, top, left + width, top + height))
+        # The crop is the slot's, not a fixed anchor a third of the way
+        # down - see paz_suite/artwork.py. Recomputed at this width, so
+        # the strip re-crops as the window resizes instead of stretching.
+        from .artwork import crop_box
+        box = crop_box(picture.size, (width, height), zoom, fx, fy)
+        base = picture.crop(box)
+        if base.size != (width, height):
+            base = base.resize((width, height), Image.LANCZOS)
 
     if picture is not None:
         ground = Image.new("RGB", (width, height), _rgb(T.BG))
@@ -367,8 +391,10 @@ def banner_image(path: str, width: int, height: int = BANNER_H) -> "Image.Image"
     return base
 
 
-def banner_photo(path: str, width: int, height: int = BANNER_H) -> "ImageTk.PhotoImage":
-    return ImageTk.PhotoImage(banner_image(path, width, height))
+def banner_photo(path: str, width: int, height: int = BANNER_H,
+                 zoom: float = 1.0, fx: float = 0.5,
+                 fy: float = 0.34) -> "ImageTk.PhotoImage":
+    return ImageTk.PhotoImage(banner_image(path, width, height, zoom, fx, fy))
 
 
 def is_image_path(path: str) -> bool:

@@ -36,10 +36,11 @@ from .media import fit_frame, round_corners, thumb_key
 from .library_db import (
     db_connect, vault_ensure_project, vault_mark,
     vault_clear_project, vault_rename_project, vault_projects_list,
+    vault_cover, vault_set_cover, vault_covers,
 )
 from .library_windows import HelpWindow
 from .widgets import popup_menu, menu_rule
-from . import uithread
+from . import artwork, uithread
 
 _SPLIT_RE = re.compile(r"[,\n\r\t;]+|\s+")
 
@@ -71,6 +72,11 @@ class VaultTab(ctk.CTkFrame):
         self._results: dict = {}   # tree iid -> Rec
         self._unmatched: list = []
 
+        # Project covers, and the scaled thumbnails made from them.
+        # The list is rebuilt on every mark and every rename, so the
+        # scaling is cached rather than redone each time.
+        self._covers: dict = {}
+        self._cover_cache: dict = {}
         self._selected_project: str | None = None
         self._project_clips: list = []
         self._project_rows: dict = {}   # tree iid -> Rec, for the clip list
@@ -429,6 +435,7 @@ class VaultTab(ctk.CTkFrame):
         conn = db_connect()
         try:
             projects = vault_projects_list(conn)
+            self._covers = vault_covers(conn)
         finally:
             conn.close()
 
@@ -449,8 +456,18 @@ class VaultTab(ctk.CTkFrame):
             line.grid_columnconfigure(1, weight=1)
             line.grid_propagate(False)
 
-            swatch = ctk.CTkFrame(line, width=6, height=16, fg_color=color, corner_radius=3)
-            swatch.grid(row=0, column=0, padx=(8, 8), pady=6)
+            # The cover if there is one, the colour bar if there isn't.
+            # A project you have made a thumbnail for is easier to pick out
+            # of a list by that thumbnail than by a coloured line.
+            cover = self._cover_photo(name)
+            if cover is not None:
+                swatch = tk.Label(line, image=cover, bd=0,
+                                  bg=T.ELEVATED if selected else T.BG)
+                swatch.image = cover
+            else:
+                swatch = ctk.CTkFrame(line, width=6, height=16,
+                                      fg_color=color, corner_radius=3)
+            swatch.grid(row=0, column=0, padx=(8, 8), pady=4)
 
             label = ctk.CTkButton(
                 line, text=f"{name}   ·   {count}", font=font(11), anchor="w", height=26,
@@ -459,6 +476,50 @@ class VaultTab(ctk.CTkFrame):
                 command=lambda n=name: self._select_project(n))
             label.grid(row=0, column=1, sticky="ew", padx=(0, 6))
             label.bind("<Button-3>", lambda e, n=name: self._project_menu(e, n))
+
+    COVER_W, COVER_H = 48, 27          # 16:9, sized to the row
+
+    def _cover_photo(self, name: str):
+        """The project's cover, scaled into the list row. Cached, because
+        the list is rebuilt on every mark and every rename."""
+        crop = self._covers.get(name)
+        if not crop or not crop.get("path"):
+            return None
+        key = (name, crop["path"], crop["zoom"], crop["fx"], crop["fy"])
+        hit = self._cover_cache.get(key)
+        if hit is not None:
+            return hit
+        picture = artwork.render(crop["path"], (self.COVER_W, self.COVER_H),
+                                 crop["zoom"], crop["fx"], crop["fy"])
+        if picture is None:
+            return None
+        photo = ImageTk.PhotoImage(picture)
+        self._cover_cache[key] = photo
+        return photo
+
+    def _pick_cover(self, name: str) -> None:
+        from .artwork_window import ArtworkWindow
+        conn = db_connect()
+        try:
+            saved = vault_cover(conn, name)
+        finally:
+            conn.close()
+
+        def keep(crop):
+            inner = db_connect()
+            try:
+                vault_set_cover(inner, name, crop["path"], crop["zoom"],
+                                crop["fx"], crop["fy"])
+            finally:
+                inner.close()
+            self._cover_cache.clear()
+            self.refresh()
+            self.set_status(
+                f"Cover {'set' if crop['path'] else 'cleared'} for “{name}”.",
+                T.OK)
+
+        ArtworkWindow(self.root, self.app, artwork.PROJECT_COVER,
+                      saved=saved, on_save=keep)
 
     def _project_menu(self, event, name: str) -> None:
         menu = popup_menu(self.root, activebackground=T.ACCENT3_DEEP,
@@ -469,6 +530,9 @@ class VaultTab(ctk.CTkFrame):
         menu.add_command(label="Add all clips to Resolve",
                          command=lambda: self._send_project_to_resolve(name))
         menu_rule(menu)
+        has_cover = bool(self._covers.get(name, {}).get("path"))
+        menu.add_command(label=f"Cover picture…{'  ✓' if has_cover else ''}",
+                         command=lambda: self._pick_cover(name))
         menu.add_command(label="Rename…", command=lambda: self._rename_project(name))
         menu.add_command(label="Clear", command=lambda: self._clear_project(name))
         try:

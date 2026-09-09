@@ -31,7 +31,7 @@ from .library_db import (
     vault_marks_by_path, vault_unmark, vault_projects_list, vault_ensure_project, vault_mark,
 )
 from .library_player import InlinePlayer
-from . import uithread
+from . import artwork, uithread
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
 from .widgets import popup_menu, menu_rule
@@ -600,6 +600,51 @@ class LibraryTab(ctk.CTkFrame):
 
     def _on_scroll(self, first, last):
         self.gallery_bar.set(first, last)
+        # Held against the viewport rather than the content, so it behaves
+        # like a wallpaper instead of a very large card that scrolls away.
+        self._park_wallpaper()
+
+    def _park_wallpaper(self) -> None:
+        if not self.gallery.find_withtag("wallpaper"):
+            return
+        try:
+            self.gallery.coords("wallpaper", 0, self.gallery.canvasy(0))
+        except tk.TclError:
+            pass
+
+    def _draw_wallpaper(self) -> None:
+        """The user's own backdrop, under the grid.
+
+        Deliberately only here. Behind the player it would be covered by a
+        thumbnail two seconds after the app opens, and behind the cards
+        themselves it would be fighting the artwork - this is the one large
+        area that is genuinely empty most of the time. Blurred and dimmed
+        on the way in, so it stays underneath what it is behind.
+        """
+        canvas = self.gallery
+        width = max(canvas.winfo_width(), 1)
+        height = max(canvas.winfo_height(), 1)
+        if width < 8 or height < 8:
+            return
+        want = (width, height, self.cfg.art_wallpaper_path,
+                self.cfg.art_wallpaper_zoom, self.cfg.art_wallpaper_fx,
+                self.cfg.art_wallpaper_fy, self.cfg.art_wallpaper_blur,
+                self.cfg.art_wallpaper_dim)
+        if want != getattr(self, "_wallpaper_key", None):
+            picture = artwork.render_backdrop(self.cfg, "wallpaper",
+                                              (width, height), T.SURFACE)
+            self._wallpaper_key = want
+            self._wallpaper_photo = (ImageTk.PhotoImage(picture)
+                                     if picture is not None else None)
+        if self._wallpaper_photo is None:
+            return
+        canvas.create_image(0, canvas.canvasy(0), image=self._wallpaper_photo,
+                            anchor="nw", tags=("wallpaper",))
+        canvas.tag_lower("wallpaper")
+
+    def refresh_wallpaper(self) -> None:
+        self._wallpaper_key = None
+        self.render_page()
 
     def _gal_background_click(self, event):
         if not self.gallery.find_withtag("current"):
@@ -1516,20 +1561,22 @@ class LibraryTab(ctk.CTkFrame):
 
         hidden = set(self.cfg.hidden_tags)
         row = 0
-        # One treatment for every tag, whatever kind it is. Colour used to
-        # say which category a pill belonged to - violet artists, pink
-        # characters, mint species, amber series - which meant the rail
-        # painted with all four tab identities at once, and mint in
-        # particular was simultaneously "species", "has a 4K copy" and
-        # "scored over a thousand". The headers already say which group is
-        # which. Colour is kept for state: what is selected, what is
-        # marked, what is rated. Everything else is quiet.
-        groups = (("ARTISTS", artists, "artist:", T.DIM),
-                 ("CHARACTERS", characters, "character:", T.DIM),
-                 ("SPECIES", species, "species:", T.DIM),
-                 ("SERIES", series, "copyright:", T.DIM),
-                 ("LORE", lore, "lore:", T.DIM),
-                 ("TAGS", other, "", T.DIM))
+        # e621's category colours, because that is what a tag rail on a
+        # library of e621 posts should look like. These briefly went
+        # neutral on the grounds that colour ought to carry state rather
+        # than category - which is a sound rule in general and the wrong
+        # rule here: to anyone who uses the site, orange *is* an artist
+        # and green *is* a character, without reading the heading. Taking
+        # that away made the rail less readable, not calmer. What was
+        # actually wrong before was that the colours were arbitrary and
+        # disagreed between the rail and the inspector; now they are the
+        # site's own, and the same in both.
+        groups = (("ARTISTS", artists, "artist:", T.TAG["artist"]),
+                 ("CHARACTERS", characters, "character:", T.TAG["character"]),
+                 ("SPECIES", species, "species:", T.TAG["species"]),
+                 ("SERIES", series, "copyright:", T.TAG["copyright"]),
+                 ("LORE", lore, "lore:", T.TAG["lore"]),
+                 ("TAGS", other, "", T.TAG["general"]))
         for title, counter, prefix, colour in groups:
             visible = [(n, c) for n, c in counter.most_common(60) if n not in hidden][:24]
             if not visible:
@@ -1656,6 +1703,7 @@ class LibraryTab(ctk.CTkFrame):
         canvas = self.gallery
         canvas.delete("all")
         canvas.yview_moveto(0)
+        self._draw_wallpaper()
 
         total = len(self.filtered)
         pages = max((total + self.cfg.page_size - 1) // self.cfg.page_size, 1)
@@ -1738,7 +1786,8 @@ class LibraryTab(ctk.CTkFrame):
             canvas.create_text(x + px(8), y + self.IMG_H + px(31),
                                text=self._ellipsize(rec.artists[0],
                                                     x + self.CARD_W - score_w - 12),
-                               fill=T.ACCENT2, font=(T.UI, pt(10)), anchor="w", tags=(tag,))
+                               fill=T.TAG["artist"], font=(T.UI, pt(10)),
+                               anchor="w", tags=(tag,))
         if score:
             canvas.create_text(x + self.CARD_W - px(8), y + self.IMG_H + px(31), text=f"▲{score}",
                                fill=T.TEXT if rec.score >= 1000 else T.FAINT,
@@ -2239,12 +2288,12 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_meta.configure(text="  ·  ".join(bits))
 
         groups = [
-            ("Artists", "artist:", rec.artists, T.DIM),
-            ("Characters", "character:", rec.characters, T.DIM),
-            ("Species", "species:", rec.species, T.DIM),
-            ("Series", "copyright:", rec.copyrights, T.DIM),
-            ("Lore", "lore:", rec.lore, T.DIM),
-            ("Tags", "", sorted(rec.tags - rec.named), T.DIM),
+            ("Artists", "artist:", rec.artists, T.TAG["artist"]),
+            ("Characters", "character:", rec.characters, T.TAG["character"]),
+            ("Species", "species:", rec.species, T.TAG["species"]),
+            ("Series", "copyright:", rec.copyrights, T.TAG["copyright"]),
+            ("Lore", "lore:", rec.lore, T.TAG["lore"]),
+            ("Tags", "", sorted(rec.tags - rec.named), T.TAG["general"]),
         ]
 
         row = 0

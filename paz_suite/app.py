@@ -7,14 +7,11 @@ tab and must only fire for whichever one is currently visible.
 
 from __future__ import annotations
 
-import os
 import tkinter as tk
-from tkinter import filedialog
 
 import customtkinter as ctk
 
-from .theme import (T, BANNER_H, banner_photo, font, is_image_path,
-                    mark_photo, mix, resolve_fonts)
+from .theme import (T, BANNER_H, banner_photo, font, mark_photo, mix, resolve_fonts)
 from .config import AppConfig
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
@@ -24,7 +21,7 @@ from .library_tab import LibraryTab
 from .vault_tab import VaultTab
 from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
-from . import uithread
+from . import artwork, uithread
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
 
@@ -213,7 +210,10 @@ class PazApp:
         width = max(int(width), 320)
         self._banner_job = None
         try:
-            self._banner_photo = banner_photo(self.cfg.banner_path, width, BANNER_H)
+            art = artwork.read_slot(self.cfg, "banner")
+            self._banner_photo = banner_photo(
+                art["path"], width, BANNER_H,
+                art["zoom"], art["fx"], art["fy"])
             self.header.delete("all")
             self.header.create_image(0, 0, image=self._banner_photo, anchor="nw")
 
@@ -259,9 +259,11 @@ class PazApp:
 
     def _banner_menu(self, event) -> None:
         menu = popup_menu(self.root)
-        menu.add_command(label="Set header picture…", command=self.pick_banner)
-        if self.cfg.banner_path:
-            menu.add_command(label="Clear header picture", command=self.clear_banner)
+        for slot in artwork.SLOTS:
+            has = bool(artwork.read_slot(self.cfg, slot.key)["path"])
+            menu.add_command(
+                label=f"{slot.title}…{'  ✓' if has else ''}",
+                command=lambda s=slot: self.open_artwork(s))
         menu_rule(menu)
         menu.add_command(label="Settings…", command=self.open_settings)
         try:
@@ -269,31 +271,27 @@ class PazApp:
         finally:
             menu.grab_release()
 
-    def pick_banner(self) -> None:
-        path = filedialog.askopenfilename(
-            parent=self.root, title="Pick a picture for the header",
-            initialdir=self.cfg.banner_dir or os.path.expanduser("~"),
-            filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
-                       ("All files", "*.*")])
-        if not path:
-            return
-        self.set_banner(path)
+    def open_artwork(self, slot) -> None:
+        """The picker for one artwork slot. It says what size the slot
+        wants, what was actually handed over, and lets the crop be placed
+        rather than guessed at."""
+        from .artwork_window import ArtworkWindow
+        if isinstance(slot, str):
+            slot = artwork.SLOTS_BY_KEY[slot]
+        ArtworkWindow(self.root, self, slot)
 
-    def set_banner(self, path: str) -> None:
-        if not is_image_path(path):
-            self.toaster.show("That file isn't a picture the header can use.", "warn")
-            return
-        self.cfg.banner_path = path
-        self.cfg.banner_dir = os.path.dirname(path)
-        self.cfg.save()
-        self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
-        self.toaster.show(f"Header picture set from {os.path.basename(path)}")
-
-    def clear_banner(self) -> None:
-        self.cfg.banner_path = ""
-        self.cfg.save()
-        self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
-        self.toaster.show("Header picture cleared")
+    def artwork_changed(self, key: str) -> None:
+        """A slot was just set or cleared. Redraw whatever uses it."""
+        if key == "banner":
+            self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
+        elif key == "wallpaper":
+            self.library.refresh_wallpaper()
+        elif key == "icon":
+            self._icon = None
+            self._apply_chrome()
+        name = artwork.SLOTS_BY_KEY[key].title
+        set_ = artwork.read_slot(self.cfg, key)["path"]
+        self.toaster.show(f"{name} picture {'set' if set_ else 'cleared'}")
 
     # ── chrome (window title / taskbar icon) ────────────────────────────────
 
@@ -301,10 +299,22 @@ class PazApp:
         self.root.title(f"{APP_NAME}  {APP_VERSION}")
         try:
             if self._icon is None:
-                self._icon = mark_photo(32, T.ACCENT)
+                self._icon = self._window_icon()
             self.root.iconphoto(False, self._icon)
         except tk.TclError:
             pass
+
+    def _window_icon(self):
+        """The taskbar icon: the user's own square if they set one, the
+        drawn PAZ mark otherwise."""
+        from PIL import ImageTk
+        picture = artwork.render_slot(self.cfg, "icon", (64, 64))
+        if picture is not None:
+            try:
+                return ImageTk.PhotoImage(picture)
+            except Exception:
+                pass
+        return mark_photo(32, T.ACCENT)
 
     # Each tab has its own identity colour (pink for Convert, violet for
     # Library, teal for Vault, amber for Beat This) used throughout its own

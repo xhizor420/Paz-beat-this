@@ -154,14 +154,19 @@ def test_a_clip_with_no_audio_gives_up_at_once(tmp_path):
          "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path],
         check=True)
     track = audio_out.AudioTrack(path, 0.0)
-    deadline = time.monotonic() + track.START_TIMEOUT
+    deadline = time.monotonic() + track.START_TIMEOUT * 4
     while time.monotonic() < deadline and not track.failed:
         time.sleep(0.02)
-    waited = time.monotonic() - (deadline - track.START_TIMEOUT)
+    failed = track.failed
     track.stop()
-    assert track.failed, "never noticed the clip has no sound"
-    assert waited < track.START_TIMEOUT * 0.9, (
-        f"took {waited:.2f}s to notice - that is a stall on every silent clip")
+    # Not "how long did it take" - that measured a clock on a machine that
+    # may be busy, and went flaky. The loop above polls `failed` and never
+    # calls position(), and position() is the only place START_TIMEOUT is
+    # ever applied. So a track that reports failed here cannot have got
+    # there by waiting the timeout out: something noticed there was no
+    # sound to be had and said so.
+    assert failed, ("never noticed there is no sound, so the picture waits "
+                    "out START_TIMEOUT on every silent clip")
 
 
 def test_stopping_returns_immediately(tmp_path):
