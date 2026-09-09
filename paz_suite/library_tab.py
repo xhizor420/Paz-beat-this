@@ -18,7 +18,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, lens_photo, pt, px, LIBRARY_LABELS
+from .theme import T, font, lens_photo, mix, pt, px, LIBRARY_LABELS
 from .format import fmt_len, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
@@ -36,7 +36,79 @@ from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, Verify
 from .convert_widgets import ContactSheet
 from .widgets import popup_menu, menu_rule
 
-RATIO_TOKENS = ("is:portrait", "is:widescreen", "is:square")
+
+
+# ── saved searches ──────────────────────────────────────────────────────
+#
+# A saved search is just a name and the text you would have typed. Kept as
+# plain data and manipulated by the four functions below rather than in the
+# middle of UI code, so the awkward parts - a name reused, a rename onto a
+# name already taken, a query saved twice - have somewhere to be decided
+# and somewhere to be tested.
+
+SAVED_NAME_MAX = 40
+# A sanity limit on how many chips are ever built. How many are actually
+# *shown* is decided by the width there is - see _fit_saved_chips - since
+# that depends on the window, the display scaling and how long the names
+# are, none of which a constant can know.
+SAVED_CHIPS_MAX = 20
+
+
+def clean_saved_name(name: str) -> str:
+    return " ".join(str(name or "").split())[:SAVED_NAME_MAX]
+
+
+def find_saved(saved: list, name: str):
+    """Case-insensitively, because nobody remembers whether they
+    capitalised it."""
+    lowered = clean_saved_name(name).lower()
+    for entry in saved:
+        if str(entry.get("name", "")).lower() == lowered:
+            return entry
+    return None
+
+
+def save_search(saved: list, name: str, query: str) -> tuple:
+    """(new list, "added"|"updated"|"") - "" when there is nothing to save.
+
+    Saving under a name already in use replaces that one rather than
+    making a second chip with the same label, which would be two identical
+    buttons doing different things."""
+    name = clean_saved_name(name)
+    query = " ".join(str(query or "").split())
+    if not name or not query:
+        return list(saved), ""
+    out = list(saved)
+    existing = find_saved(out, name)
+    if existing is not None:
+        out[out.index(existing)] = {"name": existing["name"], "query": query}
+        return out, "updated"
+    out.append({"name": name, "query": query})
+    return out, "added"
+
+
+def rename_saved(saved: list, old: str, new: str) -> tuple:
+    """(new list, ok). Refuses a name already taken by a different entry -
+    silently merging them would lose one."""
+    new = clean_saved_name(new)
+    entry = find_saved(saved, old)
+    if entry is None or not new:
+        return list(saved), False
+    clash = find_saved(saved, new)
+    if clash is not None and clash is not entry:
+        return list(saved), False
+    out = list(saved)
+    out[out.index(entry)] = {"name": new, "query": entry["query"]}
+    return out, True
+
+
+def delete_saved(saved: list, name: str) -> list:
+    entry = find_saved(saved, name)
+    if entry is None:
+        return list(saved)
+    out = list(saved)
+    out.remove(entry)
+    return out
 
 
 class LibraryTab(ctk.CTkFrame):
@@ -91,15 +163,19 @@ class LibraryTab(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        self._build()
-        self._bind_local_keys()
-        self._apply_brand()
+        # Measuring fonts are a resource, not a build step, and the
+        # builders need them to size chips to their text - so they exist
+        # before anything is built rather than after.
         import tkinter.font as tkfont
         self._card_font = tkfont.Font(family=T.UI, size=10)
         self._badge_font = tkfont.Font(family=T.MONO, size=pt(8))
         self._spec_font = tkfont.Font(family=T.MONO, size=9)
         self._chip_font = tkfont.Font(family=T.UI, size=pt(11))
         self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
+
+        self._build()
+        self._bind_local_keys()
+        self._apply_brand()
         self.folders_label.configure(text=self._folders_summary())
         self._restore_state()
         self._load_library()
@@ -176,6 +252,7 @@ class LibraryTab(ctk.CTkFrame):
 
         self.clear_btn = boxbtn("✕", self._clear_search, 12)
         self.history_btn = boxbtn("↺", self._show_history)
+        self.saved_btn = boxbtn("★", self._saved_menu, 12)
 
         self.search = ctk.CTkEntry(
             box, placeholder_text="Search",
@@ -405,6 +482,21 @@ class LibraryTab(ctk.CTkFrame):
         self._info_row = info
         self._info_chips = left
         self._info_stacked = False
+        # Two rows inside one. The counted chips hide and reappear as their
+        # counts change, and pack() puts a returning chip at the end of
+        # whatever frame it is in - so if they shared a frame with the
+        # saved ones, every refresh would deal them into a different
+        # order. Separate frames, packed once.
+        self._quick_row = ctk.CTkFrame(left, fg_color="transparent")
+        self._quick_row.pack(side="left")
+        self._saved_row = ctk.CTkFrame(left, fg_color="transparent")
+        self._saved_row.pack(side="left", padx=(px(10), 0))
+        self.saved_chips = []
+        # Filled here rather than at the end of __init__: the row has to
+        # exist first, and calling it from the wrong builder just returned
+        # quietly and left the chips missing until something else happened
+        # to rebuild them.
+        self._rebuild_saved_chips()
         self.quick_chips = {}
         for key, text, token in (
                 # Unused leads: on a library this size the question is
@@ -414,7 +506,7 @@ class LibraryTab(ctk.CTkFrame):
                 ("noid", "No post ID", "is:noid"),
                 ("4k", "4K ✓", "is:4k"),
                 ("no4k", "Non-4K", "is:no4k")):
-            chip = ctk.CTkButton(left, text=text, height=22, width=92,
+            chip = ctk.CTkButton(self._quick_row, text=text, height=22, width=92,
                                  corner_radius=11, font=font(10),
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
                                  text_color=T.DIM,
@@ -508,14 +600,6 @@ class LibraryTab(ctk.CTkFrame):
 
     def _on_scroll(self, first, last):
         self.gallery_bar.set(first, last)
-
-    def _set_ratio(self, token: str | None):
-        tokens = [t for t in self.search.get().split() if t not in RATIO_TOKENS]
-        if token:
-            tokens.append(token)
-        self.search.delete(0, tk.END)
-        self.search.insert(0, " ".join(tokens))
-        self.run_search()
 
     def _gal_background_click(self, event):
         if not self.gallery.find_withtag("current"):
@@ -667,6 +751,31 @@ class LibraryTab(ctk.CTkFrame):
         if self.selected and (self.player.playing or self.player.position):
             self.player.nudge(seconds)
             return "break"
+
+    def key_frame_step(self, event, frames: int):
+        if self.is_typing(event) or not self.selected:
+            return
+        self.player.step_frames(frames)
+        return "break"
+
+    def key_edge(self, event, end: bool):
+        if self.is_typing(event) or not self.selected:
+            return
+        self.player.go_to_edge(end)
+        return "break"
+
+    def key_mute(self, event):
+        if self.is_typing(event):
+            return
+        self.player.toggle_mute()
+        return "break"
+
+    def key_jump(self, event, fraction: float):
+        """0-9 jump that proportion of the way into the clip."""
+        if self.is_typing(event) or not self.selected:
+            return
+        self.player.go_to_fraction(fraction)
+        return "break"
 
     def key_grid(self, event):
         if self.is_typing(event):
@@ -985,6 +1094,204 @@ class LibraryTab(ctk.CTkFrame):
         finally:
             menu.grab_release()
 
+    # ── saved searches ──────────────────────────────────────────────────
+
+    def _ask_name(self, title: str, text: str, initial: str = "") -> str:
+        dialog = ctk.CTkInputDialog(
+            title=title, text=text,
+            fg_color=T.SURFACE, text_color=T.TEXT,
+            button_fg_color=T.ACCENT2_DEEP, button_hover_color=T.BTN_HOV,
+            button_text_color=T.ACCENT2, entry_fg_color=T.INPUT,
+            entry_border_color=T.LINE, entry_text_color=T.TEXT)
+        if initial:
+            try:
+                dialog._entry.insert(0, initial)
+            except Exception:
+                pass
+        return clean_saved_name(dialog.get_input() or "")
+
+    def _saved_menu(self) -> None:
+        saved = list(getattr(self.cfg, "saved_searches", []))
+        query = " ".join(self.search.get().split())
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        if query:
+            existing = find_saved(saved, query)
+            menu.add_command(
+                label=f"Save this search as…{'' if existing is None else ' (replaces)'}",
+                command=self.save_current_search)
+        else:
+            menu.add_command(label="Type a search first, then save it",
+                             state="disabled")
+        if saved:
+            menu_rule(menu)
+            for entry in saved:
+                menu.add_command(
+                    label=f"{entry['name']}   ({entry['query']})",
+                    command=lambda n=entry["name"]: self.apply_saved(n))
+            menu_rule(menu)
+            forget = popup_menu(menu, activebackground=T.ACCENT2_DEEP,
+                                activeforeground=T.ACCENT2)
+            for entry in saved:
+                forget.add_command(label=entry["name"],
+                                   command=lambda n=entry["name"]: self.forget_saved(n))
+            menu.add_cascade(label="Forget", menu=forget)
+        try:
+            menu.tk_popup(self.saved_btn.winfo_rootx(),
+                          self.saved_btn.winfo_rooty() + self.saved_btn.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def save_current_search(self) -> None:
+        query = " ".join(self.search.get().split())
+        if not query:
+            self.set_status("Nothing in the search box to save.", T.WARN)
+            return
+        name = self._ask_name("Save search", f"Name for “{query}”:")
+        if not name:
+            return
+        saved, what = save_search(getattr(self.cfg, "saved_searches", []),
+                                  name, query)
+        if not what:
+            return
+        self.cfg.saved_searches = saved
+        self.cfg.save()
+        self._rebuild_saved_chips()
+        self.set_status(f"Saved “{name}”." if what == "added"
+                        else f"“{name}” now finds {query}.", T.OK)
+
+    def apply_saved(self, name: str) -> None:
+        entry = find_saved(getattr(self.cfg, "saved_searches", []), name)
+        if entry is None:
+            return
+        self._apply_search(entry["query"])
+
+    def forget_saved(self, name: str) -> None:
+        self.cfg.saved_searches = delete_saved(
+            getattr(self.cfg, "saved_searches", []), name)
+        self.cfg.save()
+        self._rebuild_saved_chips()
+        self.set_status(f"Forgot “{name}”.", T.DIM)
+
+    def rename_saved_search(self, name: str) -> None:
+        new = self._ask_name("Rename search", f"New name for “{name}”:", name)
+        if not new or new == name:
+            return
+        saved, ok = rename_saved(getattr(self.cfg, "saved_searches", []),
+                                 name, new)
+        if not ok:
+            self.set_status(f"There is already a search called “{new}”.", T.WARN)
+            return
+        self.cfg.saved_searches = saved
+        self.cfg.save()
+        self._rebuild_saved_chips()
+        self.set_status(f"Renamed to “{new}”.", T.OK)
+
+    def _saved_chip_menu(self, name: str) -> None:
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        menu.add_command(label=name, state="disabled")
+        menu_rule(menu)
+        menu.add_command(label="Rename…",
+                         command=lambda: self.rename_saved_search(name))
+        menu.add_command(label="Replace with what's in the box now",
+                         command=lambda: self._replace_saved(name))
+        menu.add_command(label="Forget", command=lambda: self.forget_saved(name))
+        try:
+            menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        finally:
+            menu.grab_release()
+
+    def _replace_saved(self, name: str) -> None:
+        query = " ".join(self.search.get().split())
+        if not query:
+            self.set_status("Nothing in the search box to save.", T.WARN)
+            return
+        saved, what = save_search(getattr(self.cfg, "saved_searches", []),
+                                  name, query)
+        if not what:
+            return
+        self.cfg.saved_searches = saved
+        self.cfg.save()
+        self._rebuild_saved_chips()
+        self.set_status(f"“{name}” now finds {query}.", T.OK)
+
+    def _rebuild_saved_chips(self) -> None:
+        row = getattr(self, "_saved_row", None)
+        if row is None:
+            return
+        for chip in self.saved_chips:
+            chip.destroy()
+        self.saved_chips = []
+        saved = list(getattr(self.cfg, "saved_searches", []))
+        self._saved_hidden = 0
+        for entry in saved[:SAVED_CHIPS_MAX]:
+            name = entry["name"]
+            # Yours, not counted: the accent tells them apart from the
+            # chips that are just reporting what's in the results.
+            chip = ctk.CTkButton(
+                row, text=f"★ {name}", height=22, corner_radius=11,
+                font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                text_color=T.ACCENT2,
+                width=self._quick_font.measure(f"★ {name}") + px(26),
+                command=lambda n=name: self.apply_saved(n))
+            chip.pack(side="left", padx=(0, px(6)))
+            chip.bind("<Button-3>", lambda e, n=name: self._saved_chip_menu(n))
+            self.saved_chips.append(chip)
+        # The rest of the list, and any of these that turn out not to fit,
+        # live behind this.
+        self._saved_more = ctk.CTkButton(
+            row, text="", height=22, width=px(40), corner_radius=11,
+            font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
+            text_color=T.FAINT, command=self._saved_menu)
+        self._saved_overflow = max(len(saved) - SAVED_CHIPS_MAX, 0)
+        self._fit_saved_chips()
+
+    def _fit_saved_chips(self) -> None:
+        """Show as many saved chips as there is room for, and put the rest
+        behind a +N button.
+
+        A fixed number was always going to be wrong: how many fit depends
+        on the window width, the display scaling and how long the names
+        are. Measured, they cannot run off the edge - which is what the
+        last three were doing."""
+        row = getattr(self, "_saved_row", None)
+        if row is None or not getattr(self, "saved_chips", None):
+            more = getattr(self, "_saved_more", None)
+            if more is not None:
+                more.pack_forget()
+            return
+        info = self._info_row
+        available = info.winfo_width()
+        if available <= 1:                      # not laid out yet
+            return
+        available -= self._quick_row.winfo_reqwidth() + px(30)
+        if not self._info_stacked:
+            available -= self._info_pager.winfo_reqwidth()
+        room_for_more = px(46)
+        shown = 0
+        used = 0
+        for chip in self.saved_chips:
+            width = chip.winfo_reqwidth() + px(6)
+            # Keep room for the +N button unless this is the last chip and
+            # nothing would be left over.
+            last = chip is self.saved_chips[-1] and not self._saved_overflow
+            if used + width + (0 if last else room_for_more) > available:
+                break
+            used += width
+            shown += 1
+        hidden = len(self.saved_chips) - shown + self._saved_overflow
+        for index, chip in enumerate(self.saved_chips):
+            if index < shown:
+                if not chip.winfo_ismapped():
+                    chip.pack(side="left", padx=(0, px(6)))
+            else:
+                chip.pack_forget()
+        self._saved_more.pack_forget()
+        if hidden > 0:
+            self._saved_more.configure(text=f"+{hidden}")
+            self._saved_more.pack(side="left", padx=(0, px(6)))
+
     def _apply_search(self, query: str):
         self.search.delete(0, tk.END)
         self.search.insert(0, query)
@@ -1060,8 +1367,10 @@ class LibraryTab(ctk.CTkFrame):
                   + self._info_pager.winfo_reqwidth() + 30)
         stack = needed > event.width
         if stack == self._info_stacked:
+            self.after_idle(self._fit_saved_chips)
             return
         self._info_stacked = stack
+        self.after_idle(self._fit_saved_chips)
         if stack:
             self._info_chips.grid(row=1, column=0, columnspan=3, sticky="w",
                                   pady=(6, 0))
@@ -1207,11 +1516,19 @@ class LibraryTab(ctk.CTkFrame):
 
         hidden = set(self.cfg.hidden_tags)
         row = 0
-        groups = (("ARTISTS", artists, "artist:", T.ACCENT2),
-                 ("CHARACTERS", characters, "character:", T.ACCENT),
-                 ("SPECIES", species, "species:", T.OK),
-                 ("SERIES", series, "copyright:", T.WARN),
-                 ("LORE", lore, "lore:", T.ACCENT2_HOV),
+        # One treatment for every tag, whatever kind it is. Colour used to
+        # say which category a pill belonged to - violet artists, pink
+        # characters, mint species, amber series - which meant the rail
+        # painted with all four tab identities at once, and mint in
+        # particular was simultaneously "species", "has a 4K copy" and
+        # "scored over a thousand". The headers already say which group is
+        # which. Colour is kept for state: what is selected, what is
+        # marked, what is rated. Everything else is quiet.
+        groups = (("ARTISTS", artists, "artist:", T.DIM),
+                 ("CHARACTERS", characters, "character:", T.DIM),
+                 ("SPECIES", species, "species:", T.DIM),
+                 ("SERIES", series, "copyright:", T.DIM),
+                 ("LORE", lore, "lore:", T.DIM),
                  ("TAGS", other, "", T.DIM))
         for title, counter, prefix, colour in groups:
             visible = [(n, c) for n, c in counter.most_common(60) if n not in hidden][:24]
@@ -1424,7 +1741,7 @@ class LibraryTab(ctk.CTkFrame):
                                fill=T.ACCENT2, font=(T.UI, pt(10)), anchor="w", tags=(tag,))
         if score:
             canvas.create_text(x + self.CARD_W - px(8), y + self.IMG_H + px(31), text=f"▲{score}",
-                               fill=T.OK if rec.score >= 1000 else T.FAINT,
+                               fill=T.TEXT if rec.score >= 1000 else T.FAINT,
                                font=(T.MONO, pt(9)), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
@@ -1454,7 +1771,13 @@ class LibraryTab(ctk.CTkFrame):
         if self.selected and self.selected.path == rec.path:
             return T.ACCENT, 2
         if rec.used_projects and rec.used_color:
-            return rec.used_color, 2
+            # Blended most of the way to the background. At full chroma
+            # and two pixels this was the loudest thing on the page, and
+            # in a library where most clips eventually get spent that is a
+            # wall of coloured boxes. It only has to whisper "been here" -
+            # which project it was is on the badge, and the card you are
+            # acting on is the one wearing the accent.
+            return mix(rec.used_color, T.BG, 0.55), 1
         if hover:
             return T.ACCENT2, 2
         return T.LINE, 1
@@ -1733,14 +2056,15 @@ class LibraryTab(ctk.CTkFrame):
 
         self._draw_tick(index, rec, slot)
 
-        # Top left: what the pipeline cares about. Green once a clip is
-        # edit-pool quality, dim while it still needs an upscale. Sits
-        # below the top edge so the selection tick owns that corner.
+        # Top left: what the pipeline cares about. Legible once a clip is
+        # edit-pool quality, faint while it still needs an upscale - a
+        # difference in weight rather than in hue. Sits below the top edge
+        # so the selection tick owns that corner.
         spec = f"{rec.height}p" if rec.height else "--"
         if rec.fps:
             spec += f"·{rec.fps:.0f}"
         self._pill(tag, x + px(5), y + self.IMG_H - px(38), spec,
-                   T.OK if rec.premium else T.DIM)
+                   T.DIM if rec.premium else T.FAINT)
 
         # Top right: the rating, as its own colour. Explicit is the loudest
         # of the three because that is what gets scanned for.
@@ -1754,7 +2078,7 @@ class LibraryTab(ctk.CTkFrame):
 
         # Bottom right: length.
         self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(19),
-                   fmt_len(rec.duration), T.TEXT, anchor="ne")
+                   fmt_len(rec.duration), T.DIM, anchor="ne")
 
         # Bottom left: which project already spent this clip. The coloured
         # border says "used"; this says used *where*, which is the part you
@@ -1764,8 +2088,13 @@ class LibraryTab(ctk.CTkFrame):
             room = self.CARD_W - 62
             while label and self._badge_font.measure(label) > room:
                 label = label[:-1]
+            # Named, not coloured. Four badges a card, each in its own
+            # colour, was four things shouting over the frame they are
+            # meant to be annotating - so they all speak in the same
+            # quiet voice and the rating is the only one left in colour,
+            # because the rating is the one that gets scanned for.
             self._pill(tag, x + px(5), y + self.IMG_H - px(19), label or "used",
-                       rec.used_color or T.DIM)
+                       T.DIM)
         if rec.used_projects:
             canvas.tag_raise(f"used{index}")
 
@@ -1910,11 +2239,11 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_meta.configure(text="  ·  ".join(bits))
 
         groups = [
-            ("Artists", "artist:", rec.artists, T.ACCENT2),
-            ("Characters", "character:", rec.characters, T.ACCENT),
-            ("Species", "species:", rec.species, T.OK),
-            ("Series", "copyright:", rec.copyrights, T.WARN),
-            ("Lore", "lore:", rec.lore, T.ACCENT2_HOV),
+            ("Artists", "artist:", rec.artists, T.DIM),
+            ("Characters", "character:", rec.characters, T.DIM),
+            ("Species", "species:", rec.species, T.DIM),
+            ("Series", "copyright:", rec.copyrights, T.DIM),
+            ("Lore", "lore:", rec.lore, T.DIM),
             ("Tags", "", sorted(rec.tags - rec.named), T.DIM),
         ]
 

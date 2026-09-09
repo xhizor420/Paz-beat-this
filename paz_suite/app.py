@@ -101,6 +101,10 @@ class PazApp:
 
         if self.cfg.last_tab in TAB_NAMES:
             self.tabview.set(self.cfg.last_tab)
+        # set() does not run the change callback, so the tab we open on
+        # would never get its first-look call. Give it one, after the
+        # window is up rather than in the middle of building it.
+        self.root.after(200, self._first_look)
 
         self._apply_chrome()
         self._style_tabs()
@@ -352,10 +356,26 @@ class PazApp:
             dot.configure(fg_color=bright if selected else mix(bright, T.BG, 0.55))
             label.configure(text_color=bright if selected else T.DIM)
 
+    def _first_look(self) -> None:
+        tab = self._tab_object(self.tabview.get())
+        shown = getattr(tab, "on_shown", None)
+        if shown is not None:
+            shown()
+
+    def _tab_object(self, name: str):
+        return {"Convert": self.convert, "Library": self.library,
+                "Vault": self.vault, "Beat This": self.beat}.get(name)
+
     def _on_tab_changed(self) -> None:
-        self.cfg.last_tab = self.tabview.get()
+        name = self.tabview.get()
+        self.cfg.last_tab = name
         self.cfg.save()
         self._style_tabs()
+        # Tabs get to do their first-look work when they are first looked
+        # at, rather than all of it during startup.
+        shown = getattr(self._tab_object(name), "on_shown", None)
+        if shown is not None:
+            shown()
 
     def _on_root_configure(self, event) -> None:
         if event.widget is not self.root:
@@ -425,10 +445,6 @@ class PazApp:
         root.bind("<Control-Return>", lambda e: self._only("Convert", self.convert.key_start))
         for key in ("h", "H"):
             root.bind(key, lambda e: self._only_evt("Convert", self.convert.key_peek_toggle, e))
-        root.bind("<Shift-Left>", lambda e: self._only(
-            "Convert", lambda: self.convert.key_scrub(e, -10)))
-        root.bind("<Shift-Right>", lambda e: self._only(
-            "Convert", lambda: self.convert.key_scrub(e, 10)))
 
         # Library-only
         for key in ("r", "R"):
@@ -442,6 +458,26 @@ class PazApp:
         root.bind("<Prior>", lambda e: self._only("Library", lambda: self.library.key_page(-1)))
         root.bind("<Next>", lambda e: self._only("Library", lambda: self.library.key_page(1)))
         root.bind("/", lambda e: self._only_evt("Library", self.library.key_find_search, e))
+        # Transport, Library-only. The set an editor expects: comma and
+        # full stop step one frame (Resolve, Premiere and every web player
+        # agree on those two), Shift with an arrow is a fine one-second
+        # nudge, Home and End are the ends of the clip, and a digit jumps
+        # that tenth of the way in.
+        root.bind(",", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_frame_step(ev, -1), e))
+        root.bind(".", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_frame_step(ev, 1), e))
+        root.bind("<Shift-Left>", self._shift_left)
+        root.bind("<Shift-Right>", self._shift_right)
+        root.bind("<Home>", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_edge(ev, False), e))
+        root.bind("<End>", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_edge(ev, True), e))
+        for key in ("m", "M"):
+            root.bind(key, lambda e: self._only_evt("Library", self.library.key_mute, e))
+        for digit in range(10):
+            root.bind(str(digit), lambda e, d=digit: self._only_evt(
+                "Library", lambda ev: self.library.key_jump(ev, d / 10.0), e))
         root.bind("<Control-c>", lambda e: self._only_evt("Library", self.library.key_copy_name, e))
         root.bind("<Control-Shift-C>",
                   lambda e: self._only_evt("Library", self.library.key_copy_path, e))
@@ -466,6 +502,23 @@ class PazApp:
             self.convert.key_scrub(event, 1)
         elif self._active() == "Library":
             self.library.key_seek(event, 5)
+
+    # Shift means "further" in Convert and "finer" in Library, because the
+    # unshifted step already means different things in the two: a frame of
+    # scrub there, five seconds of playback here.
+    def _shift_left(self, event):
+        if self._active() == "Convert":
+            self.convert.key_scrub(event, -10)
+        elif self._active() == "Library":
+            return self.library.key_seek(event, -1)
+        return None
+
+    def _shift_right(self, event):
+        if self._active() == "Convert":
+            self.convert.key_scrub(event, 10)
+        elif self._active() == "Library":
+            return self.library.key_seek(event, 1)
+        return None
 
     # ── shutdown ─────────────────────────────────────────────────────────
 

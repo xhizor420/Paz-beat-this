@@ -33,20 +33,44 @@ in this order:
 |---|---|---|
 | VLC | [VLC](https://videolan.org) + `python-vlc` | locked - VLC keeps one clock |
 | mpv | `mpv` on PATH | locked |
-| built-in | nothing beyond ffmpeg | drifts; adjustable by hand |
+| built-in | ffmpeg + `sounddevice` | locked - see below |
+| built-in | ffmpeg alone | drifts; adjustable by hand |
 
 VLC is the one to have. It is loaded into the program rather than run
 beside it, so unlike mpv there is no connection between the two that can
 fail to open - which is what makes it dependable on Windows. `python-vlc`
 comes with `requirements.txt`; VLC itself is a normal install.
 
-The built-in player needs nothing, but it decodes video with ffmpeg and
-plays sound with a separate ffplay, and nothing joins the two - so sound
-sits a fixed distance from the picture. The player's **sync** button
-shifts it by ear, 50 to 400 ms either way, and remembers the setting.
+The built-in player used to decode video with ffmpeg and play sound with a
+separate ffplay - two processes with no clock between them, so sound sat a
+fixed distance from the picture for the life of the clip. With
+`sounddevice` installed it drives the audio device itself, which means it
+knows how much sound has actually reached the speakers, and it paces the
+picture to that: frames are dropped or held to stay level with what is
+being heard. Audio is the master because a gap in sound is audible and a
+repeated frame is not.
+
+Measured over a 24-second clip against a recording of the output: picture
+stays within one frame of the sound and does not accumulate error
+(-13 ms end to end), and the sound plays at 1000.21 ms per second with no
+dropouts.
+
+Without `sounddevice` it falls back to the old ffplay path, which drifts.
+The player's **sync** button shifts it by ear there, 50 to 400 ms either
+way, and remembers the setting; on every other path it says there is
+nothing to set.
 
 Which one is live, and why the others aren't, is under the player's
 **sync** button → *Copy playback report*.
+
+### Playing keys
+
+`,` and `.` step one frame - that is how you find the frame a beat lands
+on, and it comes off the decoder already running, so holding it walks
+through a clip rather than waiting on one. Space or Enter plays, arrows
+seek five seconds, Shift+arrows one, Home and End are the ends of the
+clip, a digit jumps that tenth of the way in, `M` mutes. All of them
+defer to the search box, so typing a post ID still types.
 
 First launch: **Settings → Convert Folders** to point Source / Converted /
 4K 60+ / Needs work at your real folders. Library indexes Convert's
@@ -136,6 +160,7 @@ paz_suite/
   e621.py                   e621 tag lookup + cache
   media.py                  ffprobe, thumbnailing, frame/storyboard cache, dhash
   player_engine.py          shared ffmpeg-decode + ffplay-audio playback engine
+  audio_out.py              audio device output, and the clock the picture follows
   vlc_player.py             libVLC playback, in-process, same surface as above
   mpv_player.py             mpv playback over a socket, same surface as above
   widgets.py                Card/Bar/StatTile/PeekWindow/Toaster/JobPanel/LogView

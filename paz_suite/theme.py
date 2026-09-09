@@ -267,12 +267,16 @@ def _scrim(width: int, height: int) -> "Image.Image":
     pixels = ramp.load()
     for x in range(width):
         pos = x / max(width - 1, 1)
+        # The floor was low enough that a bright picture read as the main
+        # event - a saturated band across the top with the app underneath
+        # it. A header should be the room the app sits in, not the thing
+        # competing with it, so the picture stays visible but subordinate.
         if pos < 0.42:                      # left: under the lockup
-            alpha = 235 - (pos / 0.42) * 130
+            alpha = 242 - (pos / 0.42) * 92
         elif pos < 0.68:                    # middle: let the picture through
-            alpha = 105
+            alpha = 150
         else:                               # right: under the status line
-            alpha = 105 + ((pos - 0.68) / 0.32) * 95
+            alpha = 150 + ((pos - 0.68) / 0.32) * 80
         pixels[x, 0] = int(alpha)
     mask = ramp.resize((width, height), Image.BILINEAR)
 

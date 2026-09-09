@@ -638,7 +638,7 @@ class VaultTab(ctk.CTkFrame):
         self._strip_refs = []
         self._strip_boxes = []
         x = 4
-        for index, rec in enumerate(self._project_clips):
+        for index in range(len(self._project_clips)):
             self._strip_boxes.append((x, x + self.STRIP_W, index))
             selected = index == self._focused_index
             c.create_rectangle(x, 2, x + self.STRIP_W, 2 + self.STRIP_H,

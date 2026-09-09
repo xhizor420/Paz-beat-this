@@ -49,8 +49,22 @@ class BeatTab(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         self._build()
-        self._check_deps()
+        # Deliberately not probing dependencies here. The probe imports
+        # torch, and torch is half a gigabyte of resident memory and
+        # several seconds of loading - paid at startup, by everyone,
+        # including the many sessions that never leave the Library. It
+        # happens the first time this tab is actually opened instead; see
+        # on_shown.
+        self._deps_checked = False
         self.set_status(self.F("idle"), T.FAINT)
+
+    def on_shown(self) -> None:
+        """This tab has been brought to the front. Do the work that only
+        matters once someone is looking at it."""
+        if self._deps_checked:
+            return
+        self._deps_checked = True
+        self._check_deps()
 
     @property
     def checkpoint(self) -> str:
@@ -495,6 +509,7 @@ class BeatTab(ctk.CTkFrame):
     # ── dependency check ──────────────────────────────────────────────────
 
     def _check_deps(self) -> None:
+        self._deps_checked = True
         self._refresh_setup()
 
     # ── song picking ──────────────────────────────────────────────────────
@@ -632,7 +647,8 @@ class BeatTab(ctk.CTkFrame):
 
         self.tree.delete(*self.tree.get_children())
         for index, (time, number, is_down) in enumerate(
-                zip(result.beats, result.beat_numbers, result.is_downbeat)):
+                zip(result.beats, result.beat_numbers,
+                    result.is_downbeat, strict=True)):
             iid = f"b{index}"
             self.tree.insert("", "end", iid=iid, values=(
                 fmt_clock(float(time)), int(number), "Downbeat" if is_down else "Beat"))

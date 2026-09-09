@@ -91,6 +91,10 @@ class AppConfig:
     card_width: int = 264              # gallery tile width in px (Settings)
     sidebar_open: bool = True
     search_history: list = field(default_factory=list)
+    # Named searches, in the order they appear as chips. Each is
+    # {"name": str, "query": str} - the query is exactly what would have
+    # been typed into the box.
+    saved_searches: list = field(default_factory=list)
     theater: bool = False
     last_search: str = ""
     last_sort: str = ""

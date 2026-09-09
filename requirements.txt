@@ -1,7 +1,10 @@
 customtkinter>=5.2
 Pillow>=10.0
 
-# Playback. Needs VLC itself installed too - see the Setup section.
-# The player falls back to mpv, then to a built-in ffmpeg pipe, so this
-# is strongly recommended rather than required.
+# Playback. python-vlc needs VLC itself installed too - see the Setup
+# section. sounddevice is what lets the built-in player drive the audio
+# device directly, which is what keeps its picture locked to its sound;
+# without it sound goes through a separate ffplay and drifts.
 python-vlc>=3.0
+sounddevice>=0.4
+numpy>=1.24

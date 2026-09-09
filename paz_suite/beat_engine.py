@@ -11,7 +11,10 @@ github.com/CPJKU/beat_this) rather than pip-installed, so this module adds
 that folder to sys.path before importing it. Its own dependencies (torch,
 torchaudio, einops, rotary-embedding-torch, soxr) are heavy and optional -
 nothing here is imported at module load time, so the rest of the suite
-works fine without them installed. Call import_error() first to check.
+works fine without them installed. dependency_status() reports what is
+present without committing to it; note that anything which does reach for
+torch pays half a gigabyte of resident memory for the privilege, so the
+Beat This tab holds off until someone actually opens it.
 """
 
 from __future__ import annotations
@@ -113,17 +116,6 @@ def checkpoint_parts(name: str) -> tuple:
 DEVICE_CHOICES = ("Auto", "CPU", "GPU")
 MARKER_COLORS = ("Blue", "Cyan", "Green", "Yellow", "Red", "Pink", "Purple")
 FRAME_RATES = (23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0)
-
-
-def import_error() -> str | None:
-    """None if the beat tracker and its dependencies are importable, else a
-    short human-readable reason. Call before touching anything else here."""
-    try:
-        import torch  # noqa: F401
-        import beat_this.inference  # noqa: F401
-    except Exception as exc:
-        return str(exc)
-    return None
 
 
 # ── dependencies ────────────────────────────────────────────────────────
@@ -326,6 +318,21 @@ class BeatResult:
     beats: np.ndarray          # seconds, includes downbeats
     downbeats: np.ndarray      # seconds, subset of beats
     beat_numbers: np.ndarray   # 1 = downbeat, counts up within each measure
+
+    def __post_init__(self):
+        """One beat, one number. Checked here rather than trusted.
+
+        The three arrays are walked together to build the markers that go
+        into Resolve, and zip() stops at the shortest without a word - so
+        a numbering pass that came back short would not fail, it would
+        quietly export a cut list missing its last beats. Catching it at
+        analysis time names the problem; catching it at export time means
+        finding out from the timeline.
+        """
+        if len(self.beat_numbers) != len(self.beats):
+            raise ValueError(
+                f"beat numbering does not match the beats: "
+                f"{len(self.beats)} beats but {len(self.beat_numbers)} numbers")
 
     @property
     def duration(self) -> float:
@@ -589,7 +596,8 @@ def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
 
     lines = [f"TITLE: {name} - Beat This markers", "FCM: NON-DROP FRAME", ""]
     event = 0
-    for time, number, is_down in zip(result.beats, result.beat_numbers, result.is_downbeat):
+    for time, number, is_down in zip(result.beats, result.beat_numbers,
+                                     result.is_downbeat, strict=True):
         if downbeats_only and not is_down:
             continue
         event += 1
@@ -641,7 +649,7 @@ def send_to_resolve(result: BeatResult, beat_color: str = "Blue",
         """Add every beat, offsetting frame numbers by `base`."""
         added = missed = 0
         for time, number, is_down in zip(result.beats, result.beat_numbers,
-                                          result.is_downbeat):
+                                          result.is_downbeat, strict=True):
             if downbeats_only and not is_down:
                 continue
             frame_id = base + int(round(float(time) * fps))
