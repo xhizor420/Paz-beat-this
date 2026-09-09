@@ -63,6 +63,35 @@ nothing to set.
 Which one is live, and why the others aren't, is under the player's
 **sync** button → *Copy playback report*.
 
+### Your own pictures
+
+Right-click the header strip, or **Settings → Your pictures**. Three slots:
+
+| | shape | where it shows |
+|---|---|---|
+| Header strip | 1760 × 76 or wider | across the top, every tab |
+| Window icon | 256 × 256 | taskbar, window, alt-tab |
+| Backdrop | 1920 × 1080 | under the clip grid, blurred and dimmed |
+
+Each one says the size it wants, reports the resolution of whatever you
+picked, and tells you in words what is about to be cropped. Drag the crop
+to place it, scroll to pull in closer. The backdrop also has blur and dim
+sliders - it is the ground the app sits on, so it is softened until it
+reads as texture rather than as something to look at.
+
+Nothing is copied: a slot stores where the picture lives plus a focal
+point and a zoom, so the original file is untouched and the header
+re-crops as the window resizes instead of stretching. Move or delete the
+file and the slot simply empties.
+
+Not slots, on purpose: behind the player and behind the thumbnails. Both
+are covered by a clip seconds after the app opens.
+
+Vault projects get a **cover picture** of their own (right-click a project
+→ Cover picture) at 1280 × 720 - the still for the finished video, kept
+with the project instead of loose in a folder, and shown against it in the
+project list.
+
 ### Playing keys
 
 `,` and `.` step one frame - that is how you find the frame a beat lands

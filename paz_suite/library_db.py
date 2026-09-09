@@ -47,6 +47,7 @@ def db_connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    _add_missing_columns(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_files_pid ON files(pid)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_marks_path ON vault_marks(path)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_marks_project ON vault_marks(project)")
@@ -232,6 +233,62 @@ SORTS = {
 # clip. Colour assignment lives with the caller (the Vault tab), not
 # here, so this module stays UI-free.
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS does
+# nothing to a table that already exists, so anything added later has to
+# come through here or it only appears on a fresh database.
+_LATER_COLUMNS = (
+    ("vault_projects", "cover_path", "TEXT"),
+    ("vault_projects", "cover_zoom", "REAL"),
+    ("vault_projects", "cover_fx", "REAL"),
+    ("vault_projects", "cover_fy", "REAL"),
+)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, column, kind in _LATER_COLUMNS:
+        have = {row[1] for row in
+                conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+    conn.commit()
+
+
+def vault_cover(conn: sqlite3.Connection, name: str) -> dict:
+    """A project's cover picture and where it is cropped."""
+    row = conn.execute(
+        "SELECT cover_path, cover_zoom, cover_fx, cover_fy "
+        "FROM vault_projects WHERE name=?", (name,)).fetchone()
+    if row is None:
+        return {"path": "", "zoom": 1.0, "fx": 0.5, "fy": 0.5}
+    path, zoom, fx, fy = row
+    return {"path": path or "",
+            "zoom": float(zoom) if zoom else 1.0,
+            "fx": 0.5 if fx is None else float(fx),
+            "fy": 0.5 if fy is None else float(fy)}
+
+
+def vault_set_cover(conn: sqlite3.Connection, name: str, path: str,
+                    zoom: float = 1.0, fx: float = 0.5, fy: float = 0.5) -> None:
+    conn.execute(
+        "UPDATE vault_projects SET cover_path=?, cover_zoom=?, cover_fx=?, "
+        "cover_fy=? WHERE name=?",
+        (path or "", float(zoom), float(fx), float(fy), name))
+    conn.commit()
+
+
+def vault_covers(conn: sqlite3.Connection) -> dict:
+    """name -> cover dict, for every project that has one."""
+    rows = conn.execute(
+        "SELECT name, cover_path, cover_zoom, cover_fx, cover_fy "
+        "FROM vault_projects WHERE cover_path IS NOT NULL "
+        "AND cover_path <> ''").fetchall()
+    return {name: {"path": path,
+                   "zoom": float(zoom) if zoom else 1.0,
+                   "fx": 0.5 if fx is None else float(fx),
+                   "fy": 0.5 if fy is None else float(fy)}
+            for name, path, zoom, fx, fy in rows}
+
+
 def vault_ensure_project(conn: sqlite3.Connection, name: str, color: str) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO vault_projects (name, color, created_at) VALUES (?,?,?)",
@@ -266,6 +323,16 @@ def vault_rename_project(conn: sqlite3.Connection, old: str, new: str) -> None:
     if existing is None:
         conn.execute("UPDATE vault_projects SET name=? WHERE name=?", (new, old))
     else:
+        # Merging into a project that has no cover of its own keeps the
+        # one being merged in, rather than throwing it away.
+        conn.execute(
+            "UPDATE vault_projects SET cover_path=("
+            "  SELECT cover_path FROM vault_projects WHERE name=?), "
+            "cover_zoom=(SELECT cover_zoom FROM vault_projects WHERE name=?), "
+            "cover_fx=(SELECT cover_fx FROM vault_projects WHERE name=?), "
+            "cover_fy=(SELECT cover_fy FROM vault_projects WHERE name=?) "
+            "WHERE name=? AND (cover_path IS NULL OR cover_path='')",
+            (old, old, old, old, new))
         # Renaming onto an existing project merges into it instead of
         # colliding on the (path, project) primary key.
         conn.execute("DELETE FROM vault_projects WHERE name=?", (old,))

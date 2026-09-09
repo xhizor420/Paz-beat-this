@@ -16,7 +16,7 @@ from .theme import T, font
 from .config import AppConfig, CONFIG_PATH
 from .convert_engine import GPU_ENCODERS
 from .media import available_encoders
-from . import beat_engine as be
+from . import artwork, beat_engine as be
 
 
 class SettingsWindow(ctk.CTkToplevel):
@@ -78,6 +78,19 @@ class SettingsWindow(ctk.CTkToplevel):
                             anchor="w", width=self.LABEL_W, justify="left"
                             ).grid(row=row, column=0, sticky="w", padx=(4, 10),
                                    pady=4)
+
+    def _open_artwork(self, slot) -> None:
+        self.app.open_artwork(slot)
+        # The window is modeless, so the tick can only be refreshed when
+        # focus comes back rather than when it closes.
+        self.bind("<FocusIn>", lambda e: self._refresh_art_buttons(), add="+")
+
+    def _refresh_art_buttons(self) -> None:
+        for key, button in getattr(self, "art_buttons", {}).items():
+            slot = artwork.SLOTS_BY_KEY[key]
+            has = bool(artwork.read_slot(self.cfg, key)["path"])
+            button.configure(text=f"{slot.title}  ✓" if has else slot.title,
+                             text_color=T.ACCENT2 if has else T.DIM)
 
     def _section(self, parent, text: str, row: int) -> None:
         """A caption with a hairline under it. Bare captions left the tabs
@@ -392,27 +405,27 @@ class SettingsWindow(ctk.CTkToplevel):
         self._switch(tab, 13, "hover_peek", "Hover peek on the Convert queue")
         self._number(tab, 14, "filmstrip_frames", "Filmstrip frames", 4, 16)
 
-        # Also reachable by right-clicking the strip itself, but that is not
-        # a thing anyone discovers on their own.
-        self._label(tab, "Header picture", 15)
-        self.banner_label = ctk.CTkLabel(
-            tab, text=self._banner_summary(), font=font(11, mono=True),
-            text_color=T.ACCENT2 if self.cfg.banner_path else T.FAINT,
-            anchor="w", wraplength=self.HINT_W, justify="left")
-        self.banner_label.grid(row=15, column=1, columnspan=2, sticky="w", pady=4)
-        banner_row = ctk.CTkFrame(tab, fg_color="transparent")
-        banner_row.grid(row=16, column=1, columnspan=2, sticky="w", pady=(2, 4))
-        ctk.CTkButton(banner_row, text="Choose picture…", width=140, height=32,
-                      corner_radius=7, font=font(11), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.DIM,
-                      command=self._pick_banner).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(banner_row, text="Clear", width=70, height=32,
-                      corner_radius=7, font=font(11), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.DIM,
-                      command=self._clear_banner).pack(side="left")
-        self._hint(tab, 17, "Your own picture across the top strip, behind the "
-                            "PAZ mark. Wide pictures suit it best - it is a "
-                            "76px band, cropped to fill from just above centre.")
+        # Also reachable by right-clicking the header strip itself, but
+        # that is not a thing anyone discovers on their own.
+        self._label(tab, "Your pictures", 15)
+        art_row = ctk.CTkFrame(tab, fg_color="transparent")
+        art_row.grid(row=15, column=1, columnspan=2, sticky="w", pady=4)
+        self.art_buttons = {}
+        for slot in artwork.SLOTS:
+            button = ctk.CTkButton(
+                art_row, text=slot.title, width=132, height=32,
+                corner_radius=7, font=font(11), fg_color=T.BTN,
+                hover_color=T.BTN_HOV, text_color=T.DIM,
+                command=lambda s=slot: self._open_artwork(s))
+            button.pack(side="left", padx=(0, 8))
+            self.art_buttons[slot.key] = button
+        self._refresh_art_buttons()
+        self._hint(tab, 16,
+                   "Each one says the size it wants and what you handed it, "
+                   "and crops for you when they do not match - drag to place "
+                   "the crop, scroll to pull in closer. The original file is "
+                   "never touched or copied, so moving or deleting it later "
+                   "just empties the slot.")
 
         self._section(tab, "Playback", 25)
         self._choice(tab, 26, "player_backend", "Player",
@@ -459,24 +472,6 @@ class SettingsWindow(ctk.CTkToplevel):
                             "comes from is called \"Accurate Beat Tracking "
                             "Without DBN Postprocessing\". It is here for "
                             "comparison, not for quality.")
-
-    def _banner_summary(self) -> str:
-        path = self.cfg.banner_path
-        return os.path.basename(path) if path else "None - using the default sweep"
-
-    def _pick_banner(self) -> None:
-        self.app.pick_banner()
-        self._refresh_banner()
-
-    def _clear_banner(self) -> None:
-        self.app.clear_banner()
-        self._refresh_banner()
-
-    def _refresh_banner(self) -> None:
-        self.banner_label.configure(
-            text=self._banner_summary(),
-            text_color=T.ACCENT2 if self.cfg.banner_path else T.FAINT)
-        self.lift()
 
     # ── save ──────────────────────────────────────────────────────────────
 

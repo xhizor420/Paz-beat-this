@@ -178,8 +178,34 @@ class AppConfig:
     # DPI; a 4K screen left at 100% reports 96 DPI and needs a hand-picked
     # value, which is the case this setting exists for.
     ui_scale: str = "Auto"
+    banner_dir: str = ""      # last folder a picture came from
+
+    # ── artwork slots ────────────────────────────────────────────────────
+    #
+    # One group per slot in artwork.SLOTS. The picture is referenced where
+    # it lives rather than copied, and the crop is stored as a focal point
+    # and a zoom so a slot that changes size re-crops instead of
+    # stretching - see paz_suite/artwork.py.
+    art_banner_path: str = ""
+    art_banner_zoom: float = 1.0
+    art_banner_fx: float = 0.5
+    art_banner_fy: float = 0.34   # the old fixed anchor, kept as the default
+    art_wallpaper_path: str = ""
+    art_wallpaper_zoom: float = 1.0
+    art_wallpaper_fx: float = 0.5
+    art_wallpaper_fy: float = 0.5
+    # Softening for the backdrop. Both start high: a backdrop that is
+    # readable is a backdrop that is in the way.
+    art_wallpaper_blur: float = 14.0
+    art_wallpaper_dim: float = 0.72
+    art_icon_path: str = ""
+    art_icon_zoom: float = 1.0
+    art_icon_fx: float = 0.5
+    art_icon_fy: float = 0.5
+
+    # Superseded by art_banner_path; still read once, on load, so an
+    # existing header picture survives the upgrade.
     banner_path: str = ""
-    banner_dir: str = ""      # last folder a header picture came from
     last_tab: str = "Convert"
 
     @classmethod
@@ -187,7 +213,9 @@ class AppConfig:
         cfg = cls()
         if os.path.exists(CONFIG_PATH):
             cfg._read(CONFIG_PATH)
-            if cfg._upgrade_beat_default():
+            changed = cfg._upgrade_beat_default()
+            changed = cfg._upgrade_banner_slot() or changed
+            if changed:
                 cfg.save()
             return cfg
         # First run of the merged suite: fold in whatever the two
@@ -196,6 +224,19 @@ class AppConfig:
         if migrated:
             cfg.save()
         return cfg
+
+    def _upgrade_banner_slot(self) -> bool:
+        """Carry an existing header picture into the artwork slot.
+
+        The header used to be a bare path with the crop hard-coded a third
+        of the way down. It is a slot now, with a focal point the user can
+        move, so the old path moves across once and the old anchor becomes
+        that slot's starting focal point."""
+        if self.banner_path and not self.art_banner_path:
+            self.art_banner_path = self.banner_path
+            self.banner_path = ""
+            return True
+        return False
 
     def _upgrade_beat_default(self) -> bool:
         """Move installs made before these defaults changed onto the new
