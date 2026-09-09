@@ -17,8 +17,8 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font
-from .format import fmt_clock, fmt_len
+from .theme import T, font, pt, px
+from .format import fmt_clock, fmt_short
 from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
 from .player_engine import ClipPlayer, HAS_AUDIO
@@ -122,13 +122,14 @@ class InlinePlayer:
             command=lambda v: self._set_speed(float(v.rstrip("x"))))
         self.speed_menu.set("1x")
         self.speed_menu.pack(side="left", padx=(0, 5))
-        # Sync nudge, built-in engine only. Tuning this is a by-ear job,
-        # so it belongs next to the sound rather than three clicks away in
-        # a settings window.
-        self.sync_btn = cbtn("sync", self._sync_menu, 46, T.DIM)
-        self.clock = ctk.CTkLabel(controls, text="", font=font(9, mono=True),
-                                   text_color=T.DIM)
-        self.clock.pack(side="left", padx=(4, 0))
+        # Which player is running, and the menu behind it. This slot used
+        # to read "sync" and, on every healthy setup, open a menu saying
+        # there was nothing to set - a permanent control next to Play that
+        # did nothing. It says what is playing the clip instead, which is
+        # the thing you actually want to know when playback looks wrong,
+        # and the offset steps are still in there for the one arrangement
+        # that needs them.
+        self.sync_btn = cbtn("·", self._sync_menu, 46, T.FAINT)
 
         self.volume_slider = ctk.CTkSlider(
             controls, from_=0, to=100, number_of_steps=100, width=64,
@@ -150,9 +151,11 @@ class InlinePlayer:
 
         self._volume_job = None
         self._progress_job = None
-        saved = int(getattr(tab.cfg, "player_av_offset_ms", 0))
-        if saved:
-            self.sync_btn.configure(text=f"{-saved:+d}", text_color=T.ACCENT2)
+        self._track_end = None
+        import tkinter.font as tkfont
+        self._btn_font = tkfont.Font(family=T.UI, size=pt(10))
+        self._clock_font = tkfont.Font(family=T.MONO, size=pt(9))
+        self._refresh_backend_btn()
         self._show_idle_text("Select a clip")
 
     # ── which engine ────────────────────────────────────────────────────
@@ -245,6 +248,26 @@ class InlinePlayer:
 
     AV_STEPS = (-400, -300, -200, -150, -100, -50, 0, 50, 100, 150, 200, 300, 400)
 
+    SHORT_NAMES = {"vlc": "VLC", "mpv": "mpv", "builtin": "built-in"}
+
+    def _refresh_backend_btn(self) -> None:
+        """Name the live player, and say when it is the one that drifts.
+
+        An offset that has been dialled in still has to be visible, so it
+        wins the label when it is set - that is the one case where the
+        number matters more than the name."""
+        offset = int(getattr(self.tab.cfg, "player_av_offset_ms", 0))
+        drifts = not self.embedded and not getattr(self.engine, "synced", False)
+        if offset and drifts:
+            label, colour = f"{-offset:+d} ms", T.ACCENT2
+        else:
+            label = self.SHORT_NAMES.get(self.backend, "player")
+            colour = T.WARN if drifts else T.FAINT
+        # Sized to the label. Fixed-width, it was wide enough for "built-in"
+        # and so stole room from the clock in every other case.
+        self.sync_btn.configure(text=label, text_color=colour,
+                                width=self._btn_font.measure(label) + px(22))
+
     def playback_report(self) -> str:
         """Which player is running and what the others would do. When
         something is wrong with playback this is the answer, and it is one
@@ -335,9 +358,7 @@ class InlinePlayer:
         self.tab.cfg.player_av_offset_ms = int(ms)
         self.tab.cfg.save()
         self._apply_av_offset()
-        # The button reads the way the menu does: later is +, earlier is -.
-        self.sync_btn.configure(text="sync" if ms == 0 else f"{-ms:+d}",
-                                text_color=T.DIM if ms == 0 else T.ACCENT2)
+        self._refresh_backend_btn()
         # Restart the sound at the new offset so the change is audible now
         # rather than at the next clip.
         if self.engine.playing:
@@ -382,6 +403,7 @@ class InlinePlayer:
         # Name first: the reason can be a long sentence and the status bar
         # is one line, so the part that must survive truncation goes at the
         # front.
+        self._refresh_backend_btn()
         self.tab.set_status(
             f"Switched to {self.BACKEND_NAMES[self.backend]}. {why}", T.WARN)
         if self.rec is not None:
@@ -421,13 +443,11 @@ class InlinePlayer:
         if rec is None:
             self.engine.clear()
             self._show_idle_text("Select a clip")
-            self.clock.configure(text="")
             self._draw_bar()
             self._update_quality_btn()
             return
         path, duration, fps = self._resolve_source(rec)
         self.engine.load(path, duration, fps)
-        self.clock.configure(text=f"0:00.0 / {fmt_len(self.engine.duration)}")
         self._draw_bar()
         self._show_thumb(rec)
         self._update_quality_btn()
@@ -486,7 +506,6 @@ class InlinePlayer:
             return
         self.engine.load(path, answer[0], answer[1])
         self._draw_bar()
-        self.clock.configure(text=f"0:00.0 / {fmt_len(self.engine.duration)}")
 
     def toggle_quality(self) -> None:
         if self.rec is None or not self.rec.premium_path:
@@ -500,8 +519,6 @@ class InlinePlayer:
         self.engine.load(path, duration, fps)
         self.engine.position = min(position, self.engine.duration) if self.engine.duration else 0.0
         self._draw_bar()
-        self.clock.configure(
-            text=f"{fmt_clock(self.engine.position)} / {fmt_len(self.engine.duration)}")
         if was_playing:
             self.engine.play()
         self._update_quality_btn()
@@ -704,7 +721,6 @@ class InlinePlayer:
 
     def _on_tick(self, position: float) -> None:
         self._draw_bar()
-        self.clock.configure(text=f"{fmt_clock(position)} / {fmt_len(self.engine.duration)}")
 
     def _refresh_readout(self) -> None:
         """Bar and clock, both from the engine's own position.
@@ -721,19 +737,36 @@ class InlinePlayer:
     # ── seek bar ────────────────────────────────────────────────────────
 
     def _draw_bar(self):
+        """The scrubber, with the time on its right-hand end.
+
+        The readout used to be another button-sized widget in the control
+        row, which on a narrow inspector left the row wider than the panel
+        - the clock was simply cut in half by the edge. It belongs here
+        anyway: every other player in the world puts the time against the
+        scrubber, not in with the transport buttons."""
         c = self.bar
         c.delete("all")
         width = c.winfo_width()
         if width < 20:
             return
         y = 10
-        c.create_line(2, y, width - 2, y, fill=T.LINE, width=4, capstyle="round")
+        track_end = width - 2
+        clock_font = getattr(self, "_clock_font", None)
+        if self.engine.duration > 0 and clock_font is not None:
+            text = (f"{fmt_clock(self.engine.position)} / "
+                    f"{fmt_short(self.engine.duration)}")
+            track_end = width - clock_font.measure(text) - 10
+            c.create_text(width - 2, y, text=text, fill=T.DIM,
+                          font=(T.MONO, pt(9)), anchor="e")
+        c.create_line(2, y, track_end, y, fill=T.LINE, width=4, capstyle="round")
         if self.engine.duration <= 0:
             return
         frac = max(0.0, min(self.engine.position / self.engine.duration, 1.0))
-        px = 2 + frac * (width - 4)
-        c.create_line(2, y, px, y, fill=T.ACCENT, width=4, capstyle="round")
-        c.create_oval(px - 5, y - 5, px + 5, y + 5, fill=T.ACCENT_HOV, outline="")
+        head = 2 + frac * max(track_end - 4, 1)
+        c.create_line(2, y, head, y, fill=T.ACCENT, width=4, capstyle="round")
+        c.create_oval(head - 5, y - 5, head + 5, y + 5,
+                      fill=T.ACCENT_HOV, outline="")
+        self._track_end = track_end
 
     def _bar_press(self, event):
         if self.rec is None or self.engine.duration <= 0:
@@ -776,8 +809,16 @@ class InlinePlayer:
         # seek during the drag hadn't fired yet.
         self._commit_seek(self._pending_pos)
 
+    def _track_width(self) -> int:
+        """The clickable length of the scrubber. Not the widget's width -
+        the time sits on the right-hand end, and mapping clicks against
+        the full width would put the playhead a little further along than
+        wherever you pressed."""
+        end = getattr(self, "_track_end", None) or self.bar.winfo_width() - 2
+        return max(int(end) - 4, 1)
+
     def _scrub_to(self, x: int, commit: bool) -> None:
-        width = max(self.bar.winfo_width() - 4, 1)
+        width = self._track_width()
         frac = max(0.0, min((x - 2) / width, 1.0))
         position = frac * self.engine.duration
         self._pending_pos = position
@@ -786,8 +827,6 @@ class InlinePlayer:
         # feel like it's tracking the mouse instead of catching up to it.
         self.engine.position = position
         self._draw_bar()
-        self.clock.configure(
-            text=f"{fmt_clock(position)} / {fmt_len(self.engine.duration)}")
         if commit:
             self._commit_seek(position)
             return
@@ -831,8 +870,7 @@ class InlinePlayer:
         rec = self.rec
         if rec is None or self.engine.duration <= 0:
             return
-        width = max(self.bar.winfo_width() - 4, 1)
-        frac = max(0.0, min((x - 2) / width, 1.0))
+        frac = max(0.0, min((x - 2) / self._track_width(), 1.0))
         moment = frac * self.engine.duration
         self._peek_token += 1
         token = self._peek_token

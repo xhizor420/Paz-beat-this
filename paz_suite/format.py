@@ -26,6 +26,20 @@ def fmt_clock(sec: float) -> str:
     return f"{m}:{s:04.1f}"
 
 
+def fmt_short(sec) -> str:
+    """A duration for a scrubber: M:SS, or H:MM:SS past the hour.
+
+    fmt_len says "1 min 12 sec", which is right in a caption and wrong
+    next to a running clock - prose beside a timecode, and wide enough to
+    push the readout off the end of the panel."""
+    if sec is None or sec <= 0:
+        return "0:00"
+    sec = int(round(sec))
+    h, rest = divmod(sec, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
 def fmt_len(sec) -> str:
     """Durations the way a person says them: 30 sec, 1 min, 1 min 12 sec."""
     if sec is None or sec <= 0:

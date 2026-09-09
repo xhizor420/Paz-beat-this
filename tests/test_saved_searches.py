@@ -179,3 +179,26 @@ def test_a_config_written_before_this_existed_still_loads(tmp_path, monkeypatch)
     monkeypatch.setattr(cfg_mod, "CONFIG_DIR", str(tmp_path))
     path.write_text(json.dumps({"sort": "Newest"}), encoding="utf-8")
     assert cfg_mod.AppConfig.load().saved_searches == []
+
+
+# ── the scrubber's duration format ──────────────────────────────────────
+
+def test_scrubber_durations_are_timecode_not_prose():
+    """fmt_len says "1 min 12 sec", which is right in a caption and wrong
+    beside a running clock - it is prose next to a timecode, and wide
+    enough to push the readout off the end of the panel."""
+    from paz_suite.format import fmt_short
+    assert fmt_short(0) == "0:00"
+    assert fmt_short(None) == "0:00"
+    assert fmt_short(-5) == "0:00"
+    assert fmt_short(9) == "0:09"
+    assert fmt_short(72) == "1:12"
+    assert fmt_short(600) == "10:00"
+    assert fmt_short(3600) == "1:00:00"
+    assert fmt_short(3671) == "1:01:11"
+
+
+def test_scrubber_duration_is_never_wider_than_a_timecode():
+    from paz_suite.format import fmt_short
+    for seconds in (0, 1, 59, 60, 599, 600, 3599, 3600, 86399):
+        assert len(fmt_short(seconds)) <= 8

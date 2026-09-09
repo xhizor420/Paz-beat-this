@@ -18,7 +18,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, lens_photo, pt, px, LIBRARY_LABELS
+from .theme import T, font, lens_photo, mix, pt, px, LIBRARY_LABELS
 from .format import fmt_len, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
@@ -1516,11 +1516,19 @@ class LibraryTab(ctk.CTkFrame):
 
         hidden = set(self.cfg.hidden_tags)
         row = 0
-        groups = (("ARTISTS", artists, "artist:", T.ACCENT2),
-                 ("CHARACTERS", characters, "character:", T.ACCENT),
-                 ("SPECIES", species, "species:", T.OK),
-                 ("SERIES", series, "copyright:", T.WARN),
-                 ("LORE", lore, "lore:", T.ACCENT2_HOV),
+        # One treatment for every tag, whatever kind it is. Colour used to
+        # say which category a pill belonged to - violet artists, pink
+        # characters, mint species, amber series - which meant the rail
+        # painted with all four tab identities at once, and mint in
+        # particular was simultaneously "species", "has a 4K copy" and
+        # "scored over a thousand". The headers already say which group is
+        # which. Colour is kept for state: what is selected, what is
+        # marked, what is rated. Everything else is quiet.
+        groups = (("ARTISTS", artists, "artist:", T.DIM),
+                 ("CHARACTERS", characters, "character:", T.DIM),
+                 ("SPECIES", species, "species:", T.DIM),
+                 ("SERIES", series, "copyright:", T.DIM),
+                 ("LORE", lore, "lore:", T.DIM),
                  ("TAGS", other, "", T.DIM))
         for title, counter, prefix, colour in groups:
             visible = [(n, c) for n, c in counter.most_common(60) if n not in hidden][:24]
@@ -1733,7 +1741,7 @@ class LibraryTab(ctk.CTkFrame):
                                fill=T.ACCENT2, font=(T.UI, pt(10)), anchor="w", tags=(tag,))
         if score:
             canvas.create_text(x + self.CARD_W - px(8), y + self.IMG_H + px(31), text=f"▲{score}",
-                               fill=T.OK if rec.score >= 1000 else T.FAINT,
+                               fill=T.TEXT if rec.score >= 1000 else T.FAINT,
                                font=(T.MONO, pt(9)), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
@@ -1763,7 +1771,13 @@ class LibraryTab(ctk.CTkFrame):
         if self.selected and self.selected.path == rec.path:
             return T.ACCENT, 2
         if rec.used_projects and rec.used_color:
-            return rec.used_color, 2
+            # Blended most of the way to the background. At full chroma
+            # and two pixels this was the loudest thing on the page, and
+            # in a library where most clips eventually get spent that is a
+            # wall of coloured boxes. It only has to whisper "been here" -
+            # which project it was is on the badge, and the card you are
+            # acting on is the one wearing the accent.
+            return mix(rec.used_color, T.BG, 0.55), 1
         if hover:
             return T.ACCENT2, 2
         return T.LINE, 1
@@ -2042,14 +2056,15 @@ class LibraryTab(ctk.CTkFrame):
 
         self._draw_tick(index, rec, slot)
 
-        # Top left: what the pipeline cares about. Green once a clip is
-        # edit-pool quality, dim while it still needs an upscale. Sits
-        # below the top edge so the selection tick owns that corner.
+        # Top left: what the pipeline cares about. Legible once a clip is
+        # edit-pool quality, faint while it still needs an upscale - a
+        # difference in weight rather than in hue. Sits below the top edge
+        # so the selection tick owns that corner.
         spec = f"{rec.height}p" if rec.height else "--"
         if rec.fps:
             spec += f"·{rec.fps:.0f}"
         self._pill(tag, x + px(5), y + self.IMG_H - px(38), spec,
-                   T.OK if rec.premium else T.DIM)
+                   T.DIM if rec.premium else T.FAINT)
 
         # Top right: the rating, as its own colour. Explicit is the loudest
         # of the three because that is what gets scanned for.
@@ -2063,7 +2078,7 @@ class LibraryTab(ctk.CTkFrame):
 
         # Bottom right: length.
         self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(19),
-                   fmt_len(rec.duration), T.TEXT, anchor="ne")
+                   fmt_len(rec.duration), T.DIM, anchor="ne")
 
         # Bottom left: which project already spent this clip. The coloured
         # border says "used"; this says used *where*, which is the part you
@@ -2073,8 +2088,13 @@ class LibraryTab(ctk.CTkFrame):
             room = self.CARD_W - 62
             while label and self._badge_font.measure(label) > room:
                 label = label[:-1]
+            # Named, not coloured. Four badges a card, each in its own
+            # colour, was four things shouting over the frame they are
+            # meant to be annotating - so they all speak in the same
+            # quiet voice and the rating is the only one left in colour,
+            # because the rating is the one that gets scanned for.
             self._pill(tag, x + px(5), y + self.IMG_H - px(19), label or "used",
-                       rec.used_color or T.DIM)
+                       T.DIM)
         if rec.used_projects:
             canvas.tag_raise(f"used{index}")
 
@@ -2219,11 +2239,11 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_meta.configure(text="  ·  ".join(bits))
 
         groups = [
-            ("Artists", "artist:", rec.artists, T.ACCENT2),
-            ("Characters", "character:", rec.characters, T.ACCENT),
-            ("Species", "species:", rec.species, T.OK),
-            ("Series", "copyright:", rec.copyrights, T.WARN),
-            ("Lore", "lore:", rec.lore, T.ACCENT2_HOV),
+            ("Artists", "artist:", rec.artists, T.DIM),
+            ("Characters", "character:", rec.characters, T.DIM),
+            ("Species", "species:", rec.species, T.DIM),
+            ("Series", "copyright:", rec.copyrights, T.DIM),
+            ("Lore", "lore:", rec.lore, T.DIM),
             ("Tags", "", sorted(rec.tags - rec.named), T.DIM),
         ]
 
