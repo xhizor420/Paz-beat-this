@@ -577,9 +577,9 @@ class InlinePlayer:
             "Until then the sync button shifts the sound by ear.", T.WARN)
 
     def play(self) -> None:
-        self._warn_if_sound_will_drift()
         if self.rec is None:
             return
+        self._warn_if_sound_will_drift()
         self.engine.play()
 
     def pause(self) -> None:
@@ -598,7 +598,41 @@ class InlinePlayer:
     def nudge(self, seconds: float) -> None:
         if self.rec:
             self.engine.nudge(seconds)
-            self._draw_bar()
+            self._refresh_readout()
+
+    def step_frames(self, count: int) -> None:
+        """Move by whole frames, the way a cutting tool does.
+
+        Finding the frame a beat lands on is the whole job when you are
+        cutting to music, and five-second jumps cannot do it. Stepping
+        pauses first: a frame step while running is meaningless, and
+        leaving it playing would take the picture straight back off the
+        frame you were looking for.
+        """
+        if self.rec is None:
+            return
+        if self.engine.playing:
+            self.engine.pause()
+        fps = max(float(getattr(self.engine, "fps", 0) or 0) or 30.0, 1.0)
+        self.engine.seek(self.engine.position + count / fps)
+        self._refresh_readout()
+        self.tab.set_status(
+            f"Frame {round(self.engine.position * fps):,} "
+            f"· {fmt_clock(self.engine.position)} · {fps:g} fps", T.DIM)
+
+    def go_to_fraction(self, fraction: float) -> None:
+        """Jump a proportion of the way in - the number keys."""
+        if self.rec is None or not self.engine.duration:
+            return
+        self.engine.seek(self.engine.duration * max(0.0, min(fraction, 1.0)))
+        self._refresh_readout()
+
+    def go_to_edge(self, end: bool) -> None:
+        if self.rec is None:
+            return
+        limit = self.engine.duration
+        self.engine.seek(max(limit - 0.1, 0.0) if end and limit else 0.0)
+        self._refresh_readout()
 
     def toggle_mute(self) -> None:
         muted = self.engine.toggle_mute()
@@ -667,6 +701,15 @@ class InlinePlayer:
     def _on_tick(self, position: float) -> None:
         self._draw_bar()
         self.clock.configure(text=f"{fmt_clock(position)} / {fmt_len(self.engine.duration)}")
+
+    def _refresh_readout(self) -> None:
+        """Bar and clock, both from the engine's own position.
+
+        Anything that moves the playhead goes through here. Redrawing only
+        the bar left the clock reading 0:00.0 next to a handle sitting
+        half way along, which is the sort of thing that makes a tool feel
+        untrustworthy even when the seek itself worked."""
+        self._on_tick(self.engine.position)
 
     def _on_fail(self, message: str) -> None:
         self.tab.set_status(message, T.FAIL)

@@ -327,6 +327,21 @@ class BeatResult:
     downbeats: np.ndarray      # seconds, subset of beats
     beat_numbers: np.ndarray   # 1 = downbeat, counts up within each measure
 
+    def __post_init__(self):
+        """One beat, one number. Checked here rather than trusted.
+
+        The three arrays are walked together to build the markers that go
+        into Resolve, and zip() stops at the shortest without a word - so
+        a numbering pass that came back short would not fail, it would
+        quietly export a cut list missing its last beats. Catching it at
+        analysis time names the problem; catching it at export time means
+        finding out from the timeline.
+        """
+        if len(self.beat_numbers) != len(self.beats):
+            raise ValueError(
+                f"beat numbering does not match the beats: "
+                f"{len(self.beats)} beats but {len(self.beat_numbers)} numbers")
+
     @property
     def duration(self) -> float:
         return float(self.beats[-1]) if len(self.beats) else 0.0
@@ -589,7 +604,8 @@ def build_edl(result: BeatResult, fps: float = 30.0, title: str | None = None,
 
     lines = [f"TITLE: {name} - Beat This markers", "FCM: NON-DROP FRAME", ""]
     event = 0
-    for time, number, is_down in zip(result.beats, result.beat_numbers, result.is_downbeat):
+    for time, number, is_down in zip(result.beats, result.beat_numbers,
+                                     result.is_downbeat, strict=True):
         if downbeats_only and not is_down:
             continue
         event += 1
@@ -641,7 +657,7 @@ def send_to_resolve(result: BeatResult, beat_color: str = "Blue",
         """Add every beat, offsetting frame numbers by `base`."""
         added = missed = 0
         for time, number, is_down in zip(result.beats, result.beat_numbers,
-                                          result.is_downbeat):
+                                          result.is_downbeat, strict=True):
             if downbeats_only and not is_down:
                 continue
             frame_id = base + int(round(float(time) * fps))

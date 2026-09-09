@@ -72,6 +72,14 @@ def _reap(proc) -> None:
                 proc.kill()
             except OSError:
                 pass
+            # Wait again. A killed process still has to be collected, and
+            # skipping this left one zombie behind per stubborn decoder -
+            # invisible in a short run, a growing pile of them over an
+            # evening of browsing.
+            try:
+                proc.wait(timeout=3)
+            except (OSError, subprocess.SubprocessError):
+                pass
         # The pipes are deliberately left alone. A reader thread may still
         # be blocked inside read() on this same file object, and closing it
         # underneath that thread aborts the interpreter outright. The
@@ -258,18 +266,21 @@ class ClipPlayer:
         self._apply_gain()
 
     def set_speed(self, value: float) -> None:
-        """Change the rate. The sound has to be decoded again because the
-        tempo shift is baked in by ffmpeg, but the picture just re-paces
-        itself against the new clock."""
+        """Change the rate.
+
+        Both sides have to be decoded again from here: the tempo shift is
+        baked in by ffmpeg, and the frames already queued belong to the
+        old timeline. Restarting only the sound left the picture running
+        off a queue whose frames no longer matched the clock - the change
+        of speed itself knocked the clip out of sync. A seek to where we
+        already are does both.
+        """
         value = max(0.25, min(float(value), 4.0))
         if abs(value - self.speed) < 0.001:
             return
         self.speed = value
-        if self.playing and self.audio_track is not None:
-            self._spawn_audio(self.position)
-            self._clock_pos = self.position
-            self._clock_t0 = time.monotonic()
-            self._frames_shown = 0
+        if self.playing or self.path:
+            self.seek(self.position)
 
     def _apply_gain(self) -> None:
         """Change the level on the sound that is already playing.
@@ -481,10 +492,6 @@ class ClipPlayer:
         if self._wants_audio:
             self._spawn_audio(self._clock_pos)
             self._wants_audio = False
-
-    def _period(self) -> float:
-        """Wall-clock seconds between frames at the current speed."""
-        return 1.0 / max(self.stream_fps * self.speed, 1.0)
 
     def _elapsed(self) -> float:
         """Source seconds played since the clock started.

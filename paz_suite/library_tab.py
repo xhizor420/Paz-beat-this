@@ -36,7 +36,6 @@ from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, Verify
 from .convert_widgets import ContactSheet
 from .widgets import popup_menu, menu_rule
 
-RATIO_TOKENS = ("is:portrait", "is:widescreen", "is:square")
 
 
 class LibraryTab(ctk.CTkFrame):
@@ -509,14 +508,6 @@ class LibraryTab(ctk.CTkFrame):
     def _on_scroll(self, first, last):
         self.gallery_bar.set(first, last)
 
-    def _set_ratio(self, token: str | None):
-        tokens = [t for t in self.search.get().split() if t not in RATIO_TOKENS]
-        if token:
-            tokens.append(token)
-        self.search.delete(0, tk.END)
-        self.search.insert(0, " ".join(tokens))
-        self.run_search()
-
     def _gal_background_click(self, event):
         if not self.gallery.find_withtag("current"):
             self.selected = None
@@ -667,6 +658,31 @@ class LibraryTab(ctk.CTkFrame):
         if self.selected and (self.player.playing or self.player.position):
             self.player.nudge(seconds)
             return "break"
+
+    def key_frame_step(self, event, frames: int):
+        if self.is_typing(event) or not self.selected:
+            return
+        self.player.step_frames(frames)
+        return "break"
+
+    def key_edge(self, event, end: bool):
+        if self.is_typing(event) or not self.selected:
+            return
+        self.player.go_to_edge(end)
+        return "break"
+
+    def key_mute(self, event):
+        if self.is_typing(event):
+            return
+        self.player.toggle_mute()
+        return "break"
+
+    def key_jump(self, event, fraction: float):
+        """0-9 jump that proportion of the way into the clip."""
+        if self.is_typing(event) or not self.selected:
+            return
+        self.player.go_to_fraction(fraction)
+        return "break"
 
     def key_grid(self, event):
         if self.is_typing(event):

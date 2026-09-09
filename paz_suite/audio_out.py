@@ -183,8 +183,7 @@ class AudioTrack:
                 pass
             # Collected on a thread nobody is waiting on; the pipe is left
             # alone because a read may still be in flight on it.
-            threading.Thread(
-                target=lambda: _quietly(proc.wait, 3), daemon=True).start()
+            threading.Thread(target=_collect, args=(proc,), daemon=True).start()
 
     # ── what the player asks ────────────────────────────────────────────
 
@@ -239,6 +238,11 @@ class AudioTrack:
         feeder a clean EOF, and it tears the stream down itself on the way
         out, inside a block time.
         """
+        # Silent from this instant. The feeder needs a block or two to
+        # notice and get out, and a burst of seeks would otherwise have
+        # two or three dying tracks still writing to the device at once -
+        # audible as a smear of overlapping sound.
+        self.gain = 0.0
         self._stop.set()
         proc = self._proc
         if proc is not None:
@@ -257,6 +261,19 @@ def _atempo(speed: float) -> str:
         speed /= 0.5
     parts.append(f"atempo={speed:.4f}")
     return ",".join(parts)
+
+
+def _collect(proc) -> None:
+    """See a terminated process all the way out. Without the kill-then-wait
+    a decoder that ignores terminate stays a zombie for the life of the
+    program, one per clip."""
+    try:
+        proc.wait(timeout=3)
+        return
+    except Exception:
+        pass
+    _quietly(proc.kill)
+    _quietly(proc.wait, 3)
 
 
 def _quietly(fn, *a) -> None:

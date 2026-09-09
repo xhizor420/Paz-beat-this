@@ -632,7 +632,8 @@ class BeatTab(ctk.CTkFrame):
 
         self.tree.delete(*self.tree.get_children())
         for index, (time, number, is_down) in enumerate(
-                zip(result.beats, result.beat_numbers, result.is_downbeat)):
+                zip(result.beats, result.beat_numbers,
+                    result.is_downbeat, strict=True)):
             iid = f"b{index}"
             self.tree.insert("", "end", iid=iid, values=(
                 fmt_clock(float(time)), int(number), "Downbeat" if is_down else "Beat"))

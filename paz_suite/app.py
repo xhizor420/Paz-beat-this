@@ -425,10 +425,6 @@ class PazApp:
         root.bind("<Control-Return>", lambda e: self._only("Convert", self.convert.key_start))
         for key in ("h", "H"):
             root.bind(key, lambda e: self._only_evt("Convert", self.convert.key_peek_toggle, e))
-        root.bind("<Shift-Left>", lambda e: self._only(
-            "Convert", lambda: self.convert.key_scrub(e, -10)))
-        root.bind("<Shift-Right>", lambda e: self._only(
-            "Convert", lambda: self.convert.key_scrub(e, 10)))
 
         # Library-only
         for key in ("r", "R"):
@@ -442,6 +438,26 @@ class PazApp:
         root.bind("<Prior>", lambda e: self._only("Library", lambda: self.library.key_page(-1)))
         root.bind("<Next>", lambda e: self._only("Library", lambda: self.library.key_page(1)))
         root.bind("/", lambda e: self._only_evt("Library", self.library.key_find_search, e))
+        # Transport, Library-only. The set an editor expects: comma and
+        # full stop step one frame (Resolve, Premiere and every web player
+        # agree on those two), Shift with an arrow is a fine one-second
+        # nudge, Home and End are the ends of the clip, and a digit jumps
+        # that tenth of the way in.
+        root.bind(",", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_frame_step(ev, -1), e))
+        root.bind(".", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_frame_step(ev, 1), e))
+        root.bind("<Shift-Left>", self._shift_left)
+        root.bind("<Shift-Right>", self._shift_right)
+        root.bind("<Home>", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_edge(ev, False), e))
+        root.bind("<End>", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_edge(ev, True), e))
+        for key in ("m", "M"):
+            root.bind(key, lambda e: self._only_evt("Library", self.library.key_mute, e))
+        for digit in range(10):
+            root.bind(str(digit), lambda e, d=digit: self._only_evt(
+                "Library", lambda ev: self.library.key_jump(ev, d / 10.0), e))
         root.bind("<Control-c>", lambda e: self._only_evt("Library", self.library.key_copy_name, e))
         root.bind("<Control-Shift-C>",
                   lambda e: self._only_evt("Library", self.library.key_copy_path, e))
@@ -466,6 +482,23 @@ class PazApp:
             self.convert.key_scrub(event, 1)
         elif self._active() == "Library":
             self.library.key_seek(event, 5)
+
+    # Shift means "further" in Convert and "finer" in Library, because the
+    # unshifted step already means different things in the two: a frame of
+    # scrub there, five seconds of playback here.
+    def _shift_left(self, event):
+        if self._active() == "Convert":
+            self.convert.key_scrub(event, -10)
+        elif self._active() == "Library":
+            return self.library.key_seek(event, -1)
+        return None
+
+    def _shift_right(self, event):
+        if self._active() == "Convert":
+            self.convert.key_scrub(event, 10)
+        elif self._active() == "Library":
+            return self.library.key_seek(event, 1)
+        return None
 
     # ── shutdown ─────────────────────────────────────────────────────────
 

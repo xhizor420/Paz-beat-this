@@ -150,3 +150,43 @@ def test_reap_returns_immediately_and_still_collects(clip):
     while proc.poll() is None and time.monotonic() < deadline:
         time.sleep(0.05)
     assert proc.poll() is not None, "process was never collected"
+
+
+# ── child processes are collected, not just killed ──────────────────────
+
+def _is_zombie(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            return fh.read().split()[2] == "Z"
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"),
+                    reason="needs /proc to see process state")
+def test_a_decoder_that_ignores_terminate_is_still_collected():
+    """_reap terminates, and kills if that is ignored - but it used to
+    stop there. A killed process still has to be waited on or it stays a
+    zombie for the life of the program, and an evening of browsing spawns
+    hundreds of decoders."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c",
+         "import signal, time\n"
+         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+         "time.sleep(60)\n"])
+    pid = proc.pid
+    _reap(proc)
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        if proc.returncode is not None and not _is_zombie(pid):
+            break
+        time.sleep(0.1)
+    else:
+        proc.kill()
+        proc.wait(timeout=5)
+        pytest.fail("still not collected - that is a zombie per stubborn decoder")
+    assert not _is_zombie(pid)
+
+
+def test_reaping_nothing_is_harmless():
+    _reap(None)
