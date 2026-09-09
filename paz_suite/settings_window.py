@@ -427,7 +427,12 @@ class SettingsWindow(ctk.CTkToplevel):
                             "separate ffplay with no clock between them, so "
                             "sound sits a fixed distance from the picture. "
                             "Naming one here starts there instead; if it is not "
-                            "usable the next one down still takes over.")
+                            "usable the next one down still takes over. The "
+                            "built-in player drives the audio device itself "
+                            "when the sounddevice package is installed, which "
+                            "is what keeps its picture locked to its sound; "
+                            "without it, sound falls back to a separate ffplay "
+                            "and drifts.")
         self._entry(tab, 28, "player_mpv_vo", "mpv video output", width=140)
         self._hint(tab, 29, "Leave empty unless mpv plays sound with a black "
                             "picture - then try gpu, x11 or direct3d.")

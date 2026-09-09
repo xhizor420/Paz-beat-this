@@ -38,8 +38,13 @@ from PIL import Image, ImageTk
 
 from .files import NO_WINDOW
 from .media import read_exact, has_ffplay
+from . import audio_out
 
 HAS_FFPLAY = has_ffplay()
+# Can this build make any sound at all? Our own device first, ffplay as the
+# old fallback. Callers use this to decide whether the volume control means
+# anything, so it must not be ffplay alone any more.
+HAS_AUDIO = audio_out.available() or HAS_FFPLAY
 
 
 def _reap(proc) -> None:
@@ -111,7 +116,7 @@ class ClipPlayer:
         self.speed = 1.0
         self.loop = True
         self.volume = 80
-        self.muted = not HAS_FFPLAY
+        self.muted = not HAS_AUDIO
 
         self.proc = None
         self.audio_proc = None
@@ -133,7 +138,10 @@ class ClipPlayer:
         # it will fail for every file, and retrying each one costs a
         # visible stall apiece.
         self._hwaccel = True
-        self.av_offset = 0.0     # seconds; see _spawn_audio
+        # The sound, when we are driving the device ourselves. It is also
+        # the clock - see _elapsed.
+        self.audio_track = None
+        self.av_offset = 0.0     # seconds; only used on the ffplay path
         self._clock_pos = 0.0       # source position that _clock_t0 corresponds to
         self._frames_shown = 0      # frames consumed since _clock_t0 (incl. dropped)
         self._starved_at = 0.0      # when the queue first came up empty
@@ -240,19 +248,44 @@ class ClipPlayer:
 
     def toggle_mute(self) -> bool:
         self.muted = not self.muted
-        if self.muted:
-            self._kill_audio()
-        elif self.playing:
-            self._spawn_audio(self.position)
+        self._apply_gain()
         return self.muted
 
     def set_volume(self, value: int) -> None:
         self.volume = max(0, min(int(value), 100))
         if self.muted and self.volume > 0:
             self.muted = False
-        if self.volume <= 0:
+        self._apply_gain()
+
+    def set_speed(self, value: float) -> None:
+        """Change the rate. The sound has to be decoded again because the
+        tempo shift is baked in by ffmpeg, but the picture just re-paces
+        itself against the new clock."""
+        value = max(0.25, min(float(value), 4.0))
+        if abs(value - self.speed) < 0.001:
+            return
+        self.speed = value
+        if self.playing and self.audio_track is not None:
+            self._spawn_audio(self.position)
+            self._clock_pos = self.position
+            self._clock_t0 = time.monotonic()
+            self._frames_shown = 0
+
+    def _apply_gain(self) -> None:
+        """Change the level on the sound that is already playing.
+
+        On our own device this is a number the feeder thread picks up on
+        its next block, so muting or nudging the volume costs nothing and
+        cannot knock the clip out of sync. ffplay has no such control -
+        its level is fixed at launch - so that path still has to restart,
+        and muting there means silence with the wall clock back in charge.
+        """
+        if self.audio_track is not None:
+            self.audio_track.set_gain(self._gain())
+            return
+        if self.muted or self.volume <= 0:
             self._kill_audio()
-        elif self.playing and not self.muted:
+        elif self.playing:
             self._spawn_audio(self.position)
 
     # ── decoding ────────────────────────────────────────────────────────
@@ -346,9 +379,28 @@ class ClipPlayer:
         threading.Thread(target=reader, daemon=True).start()
         return True
 
+    @property
+    def synced(self) -> bool:
+        """True when sound is going through our own device, which means
+        the picture is paced to it and there is no gap to dial out."""
+        return audio_out.available()
+
+    def _gain(self) -> float:
+        return 0.0 if self.muted else max(0, min(self.volume, 100)) / 100.0
+
     def _spawn_audio(self, position: float):
         self._kill_audio()
-        if not HAS_FFPLAY or self.muted or self.volume <= 0 or not self.path:
+        if not self.path:
+            return
+        if audio_out.available():
+            # Our own device, so we can see how much has been heard. Muted
+            # still plays - silently, at gain 0 - because stopping it would
+            # stop the clock the picture is following.
+            self.audio_track = audio_out.AudioTrack(
+                self.path, position, speed=self.speed, gain=self._gain(),
+                on_fail=lambda why: None)
+            return
+        if not HAS_FFPLAY or self.muted or self.volume <= 0:
             return
         # ffplay is a separate process with its own start-up cost, and
         # there is no clock between it and the video - so it produces its
@@ -372,6 +424,9 @@ class ClipPlayer:
             self.audio_proc = None
 
     def _kill_audio(self):
+        track, self.audio_track = self.audio_track, None
+        if track is not None:
+            track.stop()
         _reap(self.audio_proc)
         self.audio_proc = None
 
@@ -431,6 +486,36 @@ class ClipPlayer:
         """Wall-clock seconds between frames at the current speed."""
         return 1.0 / max(self.stream_fps * self.speed, 1.0)
 
+    def _elapsed(self) -> float:
+        """Source seconds played since the clock started.
+
+        This is the whole of the sync fix. When we are driving the audio
+        device ourselves, the answer comes from how much sound has
+        actually reached the speakers - so the picture is paced to what
+        the ear is hearing, and a slow decode costs a dropped frame
+        instead of a growing gap. Without a device (no sounddevice, no
+        sound card, a clip with no audio track, ffplay doing the sound
+        instead) it falls back to the wall clock, which is what it always
+        used to be.
+        """
+        track = self.audio_track
+        if track is not None and not track.failed and not track.ended:
+            heard = track.position()
+            if heard is None:
+                # Device opened but nothing audible yet. Hold on frame one
+                # rather than letting the picture run out ahead of the
+                # sound it is supposed to be locked to. A clip with no
+                # audio does not come through here - it reports failed
+                # within a block time, and the wall clock takes over.
+                return 0.0
+            # The wall clock has to be able to carry on from here if the
+            # sound stops, so keep it level with what has been heard.
+            self._clock_t0 = time.monotonic() - (heard - self._clock_pos) / max(self.speed, 0.01)
+            return max(heard - self._clock_pos, 0.0)
+        if self._clock_t0 is None:
+            return 0.0
+        return (time.monotonic() - self._clock_t0) * self.speed
+
     def _schedule(self):
         if not self.playing:
             return
@@ -439,10 +524,11 @@ class ClipPlayer:
             # playback begins the moment it lands.
             self._after = self.canvas.after(5, self._tick)
             return
-        # Deadline for the *next* frame, measured from the start of this
-        # run - not "now + one frame", which is what accumulated drift.
-        target = self._clock_t0 + self._frames_shown * self._period()
-        delay_ms = int((target - time.monotonic()) * 1000)
+        # When the next frame is due, in source seconds, against however
+        # much has actually played. Measured from the start of the run,
+        # not "now + one frame", which is what accumulated drift.
+        ahead = (self._frames_shown / max(self.stream_fps, 1.0)) - self._elapsed()
+        delay_ms = int(ahead / max(self.speed, 0.01) * 1000)
         self._after = self.canvas.after(max(delay_ms, 1), self._tick)
 
     def _tick(self):
@@ -473,13 +559,21 @@ class ClipPlayer:
             self._schedule()
             return
 
-        period = self._period()
-        # How many frames should already have been shown by now. If the
-        # display fell behind, pull (and discard) the stale ones so the
-        # frame we actually paint is the one that belongs on screen right
-        # now - the video stays locked to the audio instead of sliding.
-        due = int((now - self._clock_t0) / period) - self._frames_shown + 1
-        due = max(1, min(due, self.MAX_CATCHUP))
+        # How many frames should already have been shown by the point the
+        # sound has reached. If the display fell behind, pull (and discard)
+        # the stale ones so the frame we actually paint is the one that
+        # belongs against what is being heard right now - the video stays
+        # locked to the audio instead of sliding away from it.
+        due = int(self._elapsed() * self.stream_fps) - self._frames_shown + 1
+        if due < 1:
+            # Nothing is due yet. This used to take a frame anyway, on a
+            # floor of one per tick, which let the picture creep ahead of
+            # the sound whenever ticks came faster than frames - most
+            # visibly in the first second, before the audio device had
+            # produced anything to pace against. Wait instead.
+            self._schedule()
+            return
+        due = min(due, self.MAX_CATCHUP)
 
         chunk = None
         hit_eof = False

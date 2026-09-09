@@ -21,7 +21,7 @@ from .theme import T, font
 from .format import fmt_clock, fmt_len
 from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
-from .player_engine import ClipPlayer, HAS_FFPLAY
+from .player_engine import ClipPlayer, HAS_AUDIO
 from .mpv_player import MpvPlayer, available as mpv_available
 from .vlc_player import VlcPlayer, available as vlc_available
 from . import uithread
@@ -76,11 +76,12 @@ class InlinePlayer:
         # question is asked once per file per session rather than on every
         # click. None means "asked, still waiting".
         self._premium_probe: dict = {}
+        self._warned_about_sound = False
         self.backend = "builtin"
         self.engine = self._build_engine()
         self.engine.loop = tab.cfg.player_loop
         self.engine.volume = max(0, min(int(tab.cfg.player_volume), 100))
-        self.engine.muted = bool(tab.cfg.player_muted) or not HAS_FFPLAY
+        self.engine.muted = bool(tab.cfg.player_muted) or not HAS_AUDIO
         self._apply_av_offset()
 
         self.bar = tk.Canvas(self.frame, height=20, bg=T.SURFACE,
@@ -141,10 +142,10 @@ class InlinePlayer:
             width=28, height=26, corner_radius=6, font=font(11),
             fg_color="transparent", hover_color=T.BTN_HOV,
             text_color=T.FAINT if self.engine.muted else T.TEXT,
-            state="normal" if HAS_FFPLAY else "disabled",
+            state="normal" if HAS_AUDIO else "disabled",
             command=self.toggle_mute)
         self.mute_btn.pack(side="right", padx=(4, 0))
-        if not HAS_FFPLAY:
+        if not HAS_AUDIO:
             self.volume_slider.configure(state="disabled")
 
         self._volume_job = None
@@ -259,6 +260,16 @@ class InlinePlayer:
             if reason and not usable:
                 line += f" - {reason}"
             lines.append(line)
+        from . import audio_out
+        if self.embedded:
+            lines.append("\n  sound: this player's own, locked to the picture")
+        elif audio_out.available():
+            lines.append("\n  sound: our own audio device - the picture is "
+                         "paced to it, so it cannot drift")
+        else:
+            lines.append("\n  sound: a separate ffplay, with no clock joining "
+                         "it to the picture")
+            lines.append(f"    {audio_out.why_not()}")
         from . import vlc_player
         found = vlc_player.library_path()
         if found:
@@ -294,7 +305,7 @@ class InlinePlayer:
             label=f"Playing through {self.BACKEND_NAMES[self.backend]}",
             state="disabled")
         menu_rule(menu)
-        if self.embedded:
+        if self.embedded or getattr(self.engine, "synced", False):
             menu.add_command(label="It keeps its own sync - nothing to set",
                              state="disabled")
         else:
@@ -366,7 +377,7 @@ class InlinePlayer:
         self._show_stage(self.embedded)
         self.engine.loop = self.tab.cfg.player_loop
         self.engine.volume = max(0, min(int(self.tab.cfg.player_volume), 100))
-        self.engine.muted = bool(self.tab.cfg.player_muted) or not HAS_FFPLAY
+        self.engine.muted = bool(self.tab.cfg.player_muted) or not HAS_AUDIO
         self._apply_av_offset()
         # Name first: the reason can be a long sentence and the status bar
         # is one line, so the part that must survive truncation goes at the
@@ -545,7 +556,28 @@ class InlinePlayer:
     def position(self) -> float:
         return self.engine.position
 
+    def _warn_if_sound_will_drift(self) -> None:
+        """Say so the first time they press Play, once per session.
+
+        The one arrangement that drifts is the built-in player without an
+        audio device of its own, and it is also the one nobody would know
+        they were on: it is what you get when neither VLC nor mpv is
+        installed and the sounddevice package is missing. Left unsaid, it
+        looks like the program is simply broken - which is exactly how it
+        has looked up to now.
+        """
+        if self._warned_about_sound:
+            return
+        self._warned_about_sound = True
+        if self.embedded or getattr(self.engine, "synced", False):
+            return
+        self.tab.set_status(
+            "Sound will drift from the picture on this setup. Install VLC, "
+            "or run: pip install -r requirements.txt - either one fixes it. "
+            "Until then the sync button shifts the sound by ear.", T.WARN)
+
     def play(self) -> None:
+        self._warn_if_sound_will_drift()
         if self.rec is None:
             return
         self.engine.play()

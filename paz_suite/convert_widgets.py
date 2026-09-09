@@ -19,7 +19,7 @@ from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
 from .widgets import PeekWindow, popup_menu
-from .player_engine import ClipPlayer, HAS_FFPLAY
+from .player_engine import ClipPlayer, HAS_AUDIO
 from . import uithread
 
 STATE_COLOURS = {
@@ -428,7 +428,7 @@ class ScrubPreview(ctk.CTkFrame):
             on_tick=self._on_play_tick, on_state=self._on_play_state,
             on_fail=self._on_play_fail)
         self.player_engine.volume = max(0, min(int(cfg.player_volume), 100))
-        self.player_engine.muted = bool(cfg.player_muted) or not HAS_FFPLAY
+        self.player_engine.muted = bool(cfg.player_muted) or not HAS_AUDIO
         self._volume_job = None
 
         self.timeline = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0,
@@ -477,7 +477,7 @@ class ScrubPreview(ctk.CTkFrame):
             width=28, height=26, corner_radius=6, font=font(11),
             fg_color="transparent", hover_color=T.BTN_HOV,
             text_color=T.FAINT if self.player_engine.muted else T.TEXT,
-            state="normal" if HAS_FFPLAY else "disabled",
+            state="normal" if HAS_AUDIO else "disabled",
             command=self._toggle_mute)
         self.mute_btn.pack(side="left")
         self.volume_slider = ctk.CTkSlider(
@@ -487,7 +487,7 @@ class ScrubPreview(ctk.CTkFrame):
             command=self._on_volume_drag)
         self.volume_slider.set(0 if self.player_engine.muted else self.player_engine.volume)
         self.volume_slider.pack(side="left", padx=(6, 0))
-        if not HAS_FFPLAY:
+        if not HAS_AUDIO:
             self.volume_slider.configure(state="disabled")
 
         self.meta = ctk.CTkLabel(footer, text="", font=font(10, mono=True),
