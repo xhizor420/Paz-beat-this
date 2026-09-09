@@ -38,6 +38,79 @@ from .widgets import popup_menu, menu_rule
 
 
 
+# ── saved searches ──────────────────────────────────────────────────────
+#
+# A saved search is just a name and the text you would have typed. Kept as
+# plain data and manipulated by the four functions below rather than in the
+# middle of UI code, so the awkward parts - a name reused, a rename onto a
+# name already taken, a query saved twice - have somewhere to be decided
+# and somewhere to be tested.
+
+SAVED_NAME_MAX = 40
+# A sanity limit on how many chips are ever built. How many are actually
+# *shown* is decided by the width there is - see _fit_saved_chips - since
+# that depends on the window, the display scaling and how long the names
+# are, none of which a constant can know.
+SAVED_CHIPS_MAX = 20
+
+
+def clean_saved_name(name: str) -> str:
+    return " ".join(str(name or "").split())[:SAVED_NAME_MAX]
+
+
+def find_saved(saved: list, name: str):
+    """Case-insensitively, because nobody remembers whether they
+    capitalised it."""
+    lowered = clean_saved_name(name).lower()
+    for entry in saved:
+        if str(entry.get("name", "")).lower() == lowered:
+            return entry
+    return None
+
+
+def save_search(saved: list, name: str, query: str) -> tuple:
+    """(new list, "added"|"updated"|"") - "" when there is nothing to save.
+
+    Saving under a name already in use replaces that one rather than
+    making a second chip with the same label, which would be two identical
+    buttons doing different things."""
+    name = clean_saved_name(name)
+    query = " ".join(str(query or "").split())
+    if not name or not query:
+        return list(saved), ""
+    out = list(saved)
+    existing = find_saved(out, name)
+    if existing is not None:
+        out[out.index(existing)] = {"name": existing["name"], "query": query}
+        return out, "updated"
+    out.append({"name": name, "query": query})
+    return out, "added"
+
+
+def rename_saved(saved: list, old: str, new: str) -> tuple:
+    """(new list, ok). Refuses a name already taken by a different entry -
+    silently merging them would lose one."""
+    new = clean_saved_name(new)
+    entry = find_saved(saved, old)
+    if entry is None or not new:
+        return list(saved), False
+    clash = find_saved(saved, new)
+    if clash is not None and clash is not entry:
+        return list(saved), False
+    out = list(saved)
+    out[out.index(entry)] = {"name": new, "query": entry["query"]}
+    return out, True
+
+
+def delete_saved(saved: list, name: str) -> list:
+    entry = find_saved(saved, name)
+    if entry is None:
+        return list(saved)
+    out = list(saved)
+    out.remove(entry)
+    return out
+
+
 class LibraryTab(ctk.CTkFrame):
 
     def __init__(self, parent, app):
@@ -90,15 +163,19 @@ class LibraryTab(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        self._build()
-        self._bind_local_keys()
-        self._apply_brand()
+        # Measuring fonts are a resource, not a build step, and the
+        # builders need them to size chips to their text - so they exist
+        # before anything is built rather than after.
         import tkinter.font as tkfont
         self._card_font = tkfont.Font(family=T.UI, size=10)
         self._badge_font = tkfont.Font(family=T.MONO, size=pt(8))
         self._spec_font = tkfont.Font(family=T.MONO, size=9)
         self._chip_font = tkfont.Font(family=T.UI, size=pt(11))
         self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
+
+        self._build()
+        self._bind_local_keys()
+        self._apply_brand()
         self.folders_label.configure(text=self._folders_summary())
         self._restore_state()
         self._load_library()
@@ -175,6 +252,7 @@ class LibraryTab(ctk.CTkFrame):
 
         self.clear_btn = boxbtn("✕", self._clear_search, 12)
         self.history_btn = boxbtn("↺", self._show_history)
+        self.saved_btn = boxbtn("★", self._saved_menu, 12)
 
         self.search = ctk.CTkEntry(
             box, placeholder_text="Search",
@@ -404,6 +482,21 @@ class LibraryTab(ctk.CTkFrame):
         self._info_row = info
         self._info_chips = left
         self._info_stacked = False
+        # Two rows inside one. The counted chips hide and reappear as their
+        # counts change, and pack() puts a returning chip at the end of
+        # whatever frame it is in - so if they shared a frame with the
+        # saved ones, every refresh would deal them into a different
+        # order. Separate frames, packed once.
+        self._quick_row = ctk.CTkFrame(left, fg_color="transparent")
+        self._quick_row.pack(side="left")
+        self._saved_row = ctk.CTkFrame(left, fg_color="transparent")
+        self._saved_row.pack(side="left", padx=(px(10), 0))
+        self.saved_chips = []
+        # Filled here rather than at the end of __init__: the row has to
+        # exist first, and calling it from the wrong builder just returned
+        # quietly and left the chips missing until something else happened
+        # to rebuild them.
+        self._rebuild_saved_chips()
         self.quick_chips = {}
         for key, text, token in (
                 # Unused leads: on a library this size the question is
@@ -413,7 +506,7 @@ class LibraryTab(ctk.CTkFrame):
                 ("noid", "No post ID", "is:noid"),
                 ("4k", "4K ✓", "is:4k"),
                 ("no4k", "Non-4K", "is:no4k")):
-            chip = ctk.CTkButton(left, text=text, height=22, width=92,
+            chip = ctk.CTkButton(self._quick_row, text=text, height=22, width=92,
                                  corner_radius=11, font=font(10),
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
                                  text_color=T.DIM,
@@ -1001,6 +1094,204 @@ class LibraryTab(ctk.CTkFrame):
         finally:
             menu.grab_release()
 
+    # ── saved searches ──────────────────────────────────────────────────
+
+    def _ask_name(self, title: str, text: str, initial: str = "") -> str:
+        dialog = ctk.CTkInputDialog(
+            title=title, text=text,
+            fg_color=T.SURFACE, text_color=T.TEXT,
+            button_fg_color=T.ACCENT2_DEEP, button_hover_color=T.BTN_HOV,
+            button_text_color=T.ACCENT2, entry_fg_color=T.INPUT,
+            entry_border_color=T.LINE, entry_text_color=T.TEXT)
+        if initial:
+            try:
+                dialog._entry.insert(0, initial)
+            except Exception:
+                pass
+        return clean_saved_name(dialog.get_input() or "")
+
+    def _saved_menu(self) -> None:
+        saved = list(getattr(self.cfg, "saved_searches", []))
+        query = " ".join(self.search.get().split())
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        if query:
+            existing = find_saved(saved, query)
+            menu.add_command(
+                label=f"Save this search as…{'' if existing is None else ' (replaces)'}",
+                command=self.save_current_search)
+        else:
+            menu.add_command(label="Type a search first, then save it",
+                             state="disabled")
+        if saved:
+            menu_rule(menu)
+            for entry in saved:
+                menu.add_command(
+                    label=f"{entry['name']}   ({entry['query']})",
+                    command=lambda n=entry["name"]: self.apply_saved(n))
+            menu_rule(menu)
+            forget = popup_menu(menu, activebackground=T.ACCENT2_DEEP,
+                                activeforeground=T.ACCENT2)
+            for entry in saved:
+                forget.add_command(label=entry["name"],
+                                   command=lambda n=entry["name"]: self.forget_saved(n))
+            menu.add_cascade(label="Forget", menu=forget)
+        try:
+            menu.tk_popup(self.saved_btn.winfo_rootx(),
+                          self.saved_btn.winfo_rooty() + self.saved_btn.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def save_current_search(self) -> None:
+        query = " ".join(self.search.get().split())
+        if not query:
+            self.set_status("Nothing in the search box to save.", T.WARN)
+            return
+        name = self._ask_name("Save search", f"Name for “{query}”:")
+        if not name:
+            return
+        saved, what = save_search(getattr(self.cfg, "saved_searches", []),
+                                  name, query)
+        if not what:
+            return
+        self.cfg.saved_searches = saved
+        self.cfg.save()
+        self._rebuild_saved_chips()
+        self.set_status(f"Saved “{name}”." if what == "added"
+                        else f"“{name}” now finds {query}.", T.OK)
+
+    def apply_saved(self, name: str) -> None:
+        entry = find_saved(getattr(self.cfg, "saved_searches", []), name)
+        if entry is None:
+            return
+        self._apply_search(entry["query"])
+
+    def forget_saved(self, name: str) -> None:
+        self.cfg.saved_searches = delete_saved(
+            getattr(self.cfg, "saved_searches", []), name)
+        self.cfg.save()
+        self._rebuild_saved_chips()
+        self.set_status(f"Forgot “{name}”.", T.DIM)
+
+    def rename_saved_search(self, name: str) -> None:
+        new = self._ask_name("Rename search", f"New name for “{name}”:", name)
+        if not new or new == name:
+            return
+        saved, ok = rename_saved(getattr(self.cfg, "saved_searches", []),
+                                 name, new)
+        if not ok:
+            self.set_status(f"There is already a search called “{new}”.", T.WARN)
+            return
+        self.cfg.saved_searches = saved
+        self.cfg.save()
+        self._rebuild_saved_chips()
+        self.set_status(f"Renamed to “{new}”.", T.OK)
+
+    def _saved_chip_menu(self, name: str) -> None:
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        menu.add_command(label=name, state="disabled")
+        menu_rule(menu)
+        menu.add_command(label="Rename…",
+                         command=lambda: self.rename_saved_search(name))
+        menu.add_command(label="Replace with what's in the box now",
+                         command=lambda: self._replace_saved(name))
+        menu.add_command(label="Forget", command=lambda: self.forget_saved(name))
+        try:
+            menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        finally:
+            menu.grab_release()
+
+    def _replace_saved(self, name: str) -> None:
+        query = " ".join(self.search.get().split())
+        if not query:
+            self.set_status("Nothing in the search box to save.", T.WARN)
+            return
+        saved, what = save_search(getattr(self.cfg, "saved_searches", []),
+                                  name, query)
+        if not what:
+            return
+        self.cfg.saved_searches = saved
+        self.cfg.save()
+        self._rebuild_saved_chips()
+        self.set_status(f"“{name}” now finds {query}.", T.OK)
+
+    def _rebuild_saved_chips(self) -> None:
+        row = getattr(self, "_saved_row", None)
+        if row is None:
+            return
+        for chip in self.saved_chips:
+            chip.destroy()
+        self.saved_chips = []
+        saved = list(getattr(self.cfg, "saved_searches", []))
+        self._saved_hidden = 0
+        for entry in saved[:SAVED_CHIPS_MAX]:
+            name = entry["name"]
+            # Yours, not counted: the accent tells them apart from the
+            # chips that are just reporting what's in the results.
+            chip = ctk.CTkButton(
+                row, text=f"★ {name}", height=22, corner_radius=11,
+                font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                text_color=T.ACCENT2,
+                width=self._quick_font.measure(f"★ {name}") + px(26),
+                command=lambda n=name: self.apply_saved(n))
+            chip.pack(side="left", padx=(0, px(6)))
+            chip.bind("<Button-3>", lambda e, n=name: self._saved_chip_menu(n))
+            self.saved_chips.append(chip)
+        # The rest of the list, and any of these that turn out not to fit,
+        # live behind this.
+        self._saved_more = ctk.CTkButton(
+            row, text="", height=22, width=px(40), corner_radius=11,
+            font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
+            text_color=T.FAINT, command=self._saved_menu)
+        self._saved_overflow = max(len(saved) - SAVED_CHIPS_MAX, 0)
+        self._fit_saved_chips()
+
+    def _fit_saved_chips(self) -> None:
+        """Show as many saved chips as there is room for, and put the rest
+        behind a +N button.
+
+        A fixed number was always going to be wrong: how many fit depends
+        on the window width, the display scaling and how long the names
+        are. Measured, they cannot run off the edge - which is what the
+        last three were doing."""
+        row = getattr(self, "_saved_row", None)
+        if row is None or not getattr(self, "saved_chips", None):
+            more = getattr(self, "_saved_more", None)
+            if more is not None:
+                more.pack_forget()
+            return
+        info = self._info_row
+        available = info.winfo_width()
+        if available <= 1:                      # not laid out yet
+            return
+        available -= self._quick_row.winfo_reqwidth() + px(30)
+        if not self._info_stacked:
+            available -= self._info_pager.winfo_reqwidth()
+        room_for_more = px(46)
+        shown = 0
+        used = 0
+        for chip in self.saved_chips:
+            width = chip.winfo_reqwidth() + px(6)
+            # Keep room for the +N button unless this is the last chip and
+            # nothing would be left over.
+            last = chip is self.saved_chips[-1] and not self._saved_overflow
+            if used + width + (0 if last else room_for_more) > available:
+                break
+            used += width
+            shown += 1
+        hidden = len(self.saved_chips) - shown + self._saved_overflow
+        for index, chip in enumerate(self.saved_chips):
+            if index < shown:
+                if not chip.winfo_ismapped():
+                    chip.pack(side="left", padx=(0, px(6)))
+            else:
+                chip.pack_forget()
+        self._saved_more.pack_forget()
+        if hidden > 0:
+            self._saved_more.configure(text=f"+{hidden}")
+            self._saved_more.pack(side="left", padx=(0, px(6)))
+
     def _apply_search(self, query: str):
         self.search.delete(0, tk.END)
         self.search.insert(0, query)
@@ -1076,8 +1367,10 @@ class LibraryTab(ctk.CTkFrame):
                   + self._info_pager.winfo_reqwidth() + 30)
         stack = needed > event.width
         if stack == self._info_stacked:
+            self.after_idle(self._fit_saved_chips)
             return
         self._info_stacked = stack
+        self.after_idle(self._fit_saved_chips)
         if stack:
             self._info_chips.grid(row=1, column=0, columnspan=3, sticky="w",
                                   pady=(6, 0))
