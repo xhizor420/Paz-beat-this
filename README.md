@@ -92,6 +92,22 @@ Vault projects get a **cover picture** of their own (right-click a project
 with the project instead of loose in a folder, and shown against it in the
 project list.
 
+### If it freezes or crashes
+
+The app writes its own post-mortem to `~/.video_tool/freeze.log`
+(`C:\Users\<you>\.video_tool\freeze.log` on Windows).
+
+A hung window is the one failure that normally leaves no evidence: nothing
+crashed, so there is no traceback, and killing it from Task Manager throws
+away the only copy of where it stopped. So a heartbeat runs on the thread
+that draws the window, and a watcher notices when the beat stops and dumps
+every thread's stack to that file. The thread marked `MAIN/UI` is the one
+that is stuck and its top frame is the line to fix. Native crashes inside a
+video or audio library, and errors thrown out of UI callbacks, land in the
+same file.
+
+If playback misbehaves: reproduce it once, then send that file.
+
 ### Playing keys
 
 `,` and `.` step one frame - that is how you find the frame a beat lands

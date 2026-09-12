@@ -7,12 +7,13 @@ tab and must only fire for whichever one is currently visible.
 
 from __future__ import annotations
 
+import os
 import tkinter as tk
 
 import customtkinter as ctk
 
 from .theme import (T, BANNER_H, banner_photo, font, mark_photo, mix, resolve_fonts)
-from .config import AppConfig
+from .config import AppConfig, CONFIG_DIR
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
 from .widgets import Toaster, PeekWindow, popup_menu, menu_rule
@@ -21,7 +22,8 @@ from .library_tab import LibraryTab
 from .vault_tab import VaultTab
 from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
-from . import artwork, uithread
+from .watchdog import Watchdog
+from . import artwork, audio_out, uithread, vlc_player
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
 
@@ -548,8 +550,24 @@ def main() -> None:
     # before any widget is built, since T.UI/T.MONO are read at construction.
     resolve_fonts()
     root.configure(fg_color=T.BG)
+
+    # Settled off-thread, before anything asks: importing sounddevice is
+    # what loads the audio library, and on an unhappy machine that is slow
+    # or worse. Nothing waits on the answer.
+    audio_out.start_probe()
+    vlc_player.start_load()
+
+    # A hung window is the one failure that leaves no evidence - nothing
+    # crashed, so there is no traceback, and killing the process throws
+    # away the only copy of where it stopped. This writes its own
+    # post-mortem to ~/.video_tool/freeze.log instead.
+    dog = Watchdog(root, os.path.join(CONFIG_DIR, "freeze.log"))
+    dog.start()
     PazApp(root)
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        dog.stop()
 
 
 if __name__ == "__main__":

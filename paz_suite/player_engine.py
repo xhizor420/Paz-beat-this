@@ -44,7 +44,10 @@ HAS_FFPLAY = has_ffplay()
 # Can this build make any sound at all? Our own device first, ffplay as the
 # old fallback. Callers use this to decide whether the volume control means
 # anything, so it must not be ffplay alone any more.
-HAS_AUDIO = audio_out.available() or HAS_FFPLAY
+# "could there be sound at all", which is all the volume control needs to
+# know. Whether the picture gets a real clock out of it is a different and
+# slower question - see ClipPlayer.synced.
+HAS_AUDIO = audio_out.bindings_present() or HAS_FFPLAY
 
 
 def _reap(proc) -> None:

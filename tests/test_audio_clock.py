@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -20,6 +21,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from paz_suite import audio_out                          # noqa: E402
 from paz_suite.player_engine import ClipPlayer           # noqa: E402
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _audio_loaded():
+    """Settle the audio probe once, on this thread, before any test runs.
+
+    This is what the app does at startup, and for the same reason: the
+    probe imports numpy and an audio library, and letting that happen on a
+    background thread while the main thread is using numpy produces a
+    "partially initialized module" error - or, on Windows, a process that
+    stops answering. Doing it up front removes the race here exactly as it
+    does there.
+    """
+    audio_out._run_probe()
 
 
 class FakeTrack:
@@ -269,3 +284,91 @@ def test_a_step_of_nothing_does_nothing(monkeypatch):
     p = _stepper(monkeypatch)
     p.step(0)
     assert p.seeks == [] and p.blitted == []
+
+
+# ── proving the audio device, rather than assuming it ───────────────────
+
+def test_unknown_counts_as_unavailable(monkeypatch):
+    """Until an import has actually succeeded the answer is no. Saying
+    yes on the strength of a file being on disk promised a clock we did
+    not have, which came out as silence plus a menu claiming there was
+    nothing to set."""
+    monkeypatch.setattr(audio_out, "_probe", None)
+    monkeypatch.setattr(audio_out, "_probe_started", True)
+    assert audio_out.available() is False
+    assert "checking" in audio_out.why_not()
+
+
+def test_a_successful_probe_makes_it_available(monkeypatch):
+    monkeypatch.setattr(audio_out, "_probe", (True, ""))
+    assert audio_out.available() is True
+    assert audio_out.why_not() == ""
+
+
+def test_a_library_that_will_not_load_is_not_available(monkeypatch):
+    """The exact shape of a pip install whose native library is missing:
+    the module imports as far as raising OSError."""
+    monkeypatch.setattr(audio_out, "_probe",
+                        (False, "the sounddevice package will not load "
+                                "(PortAudio library not found)"))
+    monkeypatch.setattr(audio_out, "bindings_present", lambda: True)
+    assert audio_out.available() is False
+    assert "PortAudio" in audio_out.why_not()
+
+
+def test_a_missing_package_says_how_to_get_it(monkeypatch):
+    monkeypatch.setattr(audio_out, "_probe", (False, "no module"))
+    monkeypatch.setattr(audio_out, "bindings_present", lambda: False)
+    assert "pip install sounddevice" in audio_out.why_not()
+
+
+def test_the_probe_records_whichever_way_it_goes(monkeypatch):
+    """Without actually importing an audio library. Doing that for real
+    initialises ALSA and JACK, which leaves threads and handles behind
+    and made unrelated tests fail at random."""
+    import builtins
+    real_import = builtins.__import__
+
+    def refuse(name, *args, **kw):
+        if name in ("sounddevice", "numpy"):
+            raise OSError("PortAudio library not found")
+        return real_import(name, *args, **kw)
+
+    monkeypatch.setattr(audio_out, "_probe", None)
+    monkeypatch.setattr(builtins, "__import__", refuse)
+    ok, reason = audio_out._run_probe()
+    assert ok is False
+    assert "PortAudio" in reason, "a refusal has to say why"
+    assert audio_out._probe == (False, reason)
+
+    def allow(name, *args, **kw):
+        if name in ("sounddevice", "numpy"):
+            return object()
+        return real_import(name, *args, **kw)
+
+    monkeypatch.setattr(audio_out, "_probe", None)
+    monkeypatch.setattr(builtins, "__import__", allow)
+    assert audio_out._run_probe() == (True, "")
+
+
+def test_asking_never_imports_on_the_calling_thread(monkeypatch):
+    """available() is called while the window is being built. Importing an
+    audio library there is what makes an app freeze on a machine with an
+    unhappy driver, so the question must never trigger the import inline.
+
+    Checked by what it leaves behind rather than by replacing
+    threading.Thread - patching that reaches the shared module and breaks
+    unrelated tests at random, which is exactly what it did."""
+    ran_on = []
+    monkeypatch.setattr(audio_out, "_probe", None)
+    monkeypatch.setattr(audio_out, "_probe_started", False)
+    monkeypatch.setattr(audio_out, "_run_probe",
+                        lambda: ran_on.append(threading.current_thread()))
+    here = threading.current_thread()
+    assert audio_out.available() is False, "unknown has to count as no"
+    for _ in range(200):
+        if ran_on:
+            break
+        time.sleep(0.01)
+    assert ran_on, "never arranged to find out"
+    assert ran_on[0] is not here, "probed on the calling thread"
