@@ -567,6 +567,7 @@ def main() -> None:
     try:
         root.mainloop()
     finally:
+        uithread.stop()
         dog.stop()
 
 

@@ -15,12 +15,13 @@ its own thread with the traceback above and silently loses the result
 (no census, no thumbnails). At shutdown the same call raises `TclError`
 once the interpreter is gone.
 
-So worker threads post here instead. Until the main loop is confirmed
-running, callbacks are parked in a queue; the moment it starts they are
-flushed in order and everything afterwards goes straight through to
-`after(0, ...)` exactly as before, so there's no added latency in the
-normal case. Callbacks that arrive while the window is being torn down
-are dropped rather than raising.
+So worker threads post here instead - and, since a freeze log showed a
+worker wedged inside `createcommand`, they no longer call Tk at all. A
+post only appends to a queue. The main thread drains that queue on a
+pump it schedules for itself, which is the only arrangement where Tk is
+touched by exactly one thread. Callbacks that arrive before the main loop
+starts simply wait for the first pump; ones that arrive while the window
+is being torn down are dropped rather than raising.
 """
 
 from __future__ import annotations
@@ -29,34 +30,56 @@ import threading
 import tkinter as tk
 from collections import deque
 
+# How often the main thread looks for work handed over by a worker. Small
+# enough that a result appearing is indistinguishable from immediate, and
+# cheap: an empty pump is a deque check.
+PUMP_MS = 10
+# Anything more than this waiting means a worker is posting faster than
+# the UI can draw; running them all in one pump would stall the window
+# instead, so a pump takes a bounded slice and comes straight back.
+MAX_PER_PUMP = 200
+
 _lock = threading.Lock()
 _pending: deque = deque()
 _root = None
-_running = False
+_pumping = False
 
 
 def install(root) -> None:
     """Point the dispatcher at the app's root window. Call once, from the
     main thread, before any worker thread is started."""
-    global _root
+    global _root, _pumping
     with _lock:
         _root = root
-    # Runs as soon as the main loop starts spinning - which is exactly the
-    # moment it becomes safe for other threads to schedule callbacks.
+        _pumping = True
+    # Scheduled from the main thread, which is the only thread allowed to
+    # do this. Every later pump reschedules itself from inside the loop,
+    # so no other thread ever calls into Tk.
     try:
-        root.after(0, _activate)
+        root.after(PUMP_MS, _pump)
     except (RuntimeError, tk.TclError):
-        pass
+        with _lock:
+            _pumping = False
 
 
-def _activate() -> None:
-    global _running
+def _pump() -> None:
+    """Run what the workers left, on the UI thread."""
+    global _pumping
     with _lock:
-        _running = True
-        parked = list(_pending)
-        _pending.clear()
-    for fn, args, kwargs in parked:
+        root, pumping = _root, _pumping
+    if not pumping:
+        return
+    for _ in range(MAX_PER_PUMP):
+        with _lock:
+            if not _pending:
+                break
+            fn, args, kwargs = _pending.popleft()
         _invoke(fn, args, kwargs)
+    try:
+        root.after(PUMP_MS, _pump)
+    except (RuntimeError, tk.TclError):
+        with _lock:
+            _pumping = False
 
 
 def _invoke(fn, args, kwargs) -> None:
@@ -64,26 +87,37 @@ def _invoke(fn, args, kwargs) -> None:
         fn(*args, **kwargs)
     except tk.TclError:
         pass  # window went away between posting and running
+    except Exception:
+        # A failing callback must not stop the pump - that would strand
+        # every later hand-off from every worker in the app.
+        import traceback
+        traceback.print_exc()
 
 
 def post(fn, *args, **kwargs) -> None:
     """Run `fn(*args, **kwargs)` on the UI thread. Safe from any thread,
-    at any point in the app's life."""
+    at any point in the app's life.
+
+    Does not touch Tk. A worker calling root.after() is a worker calling
+    into the Tcl interpreter, which is not something two threads may do;
+    a freeze log caught one wedged inside createcommand. Appending is all
+    that happens here - the main thread comes and collects.
+    """
     with _lock:
-        root, running = _root, _running
-        if not running:
-            _pending.append((fn, args, kwargs))
-            return
-    try:
-        root.after(0, lambda: _invoke(fn, args, kwargs))
-    except (RuntimeError, tk.TclError):
-        pass  # shutting down
+        _pending.append((fn, args, kwargs))
+
+
+def stop() -> None:
+    """Stop pumping, on the way down."""
+    global _pumping
+    with _lock:
+        _pumping = False
 
 
 def reset() -> None:
     """Forget the installed root - only needed by tests."""
-    global _root, _running
+    global _root, _pumping
     with _lock:
         _root = None
-        _running = False
+        _pumping = False
         _pending.clear()

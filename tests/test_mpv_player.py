@@ -35,10 +35,28 @@ def player():
     p = mp.MpvPlayer.__new__(mp.MpvPlayer)
     p.__init__(widget=None, width=854, height=480)
     p._sock = FakeSocket()
+    p._alive = True
     return p
 
 
 def commands(player):
+    """What the player has decided to send.
+
+    Read off the outbox rather than the socket: commands are handed to a
+    queue and written by one thread that does nothing else, because
+    writing them inline is what froze the app. Draining the queue here is
+    the same thing the writer does, minus the socket."""
+    out = []
+    while not player._outbox.empty():
+        out.append(list(player._outbox.get_nowait()))
+    return out
+
+
+def drain_through_writer(player):
+    """Run the writer once over whatever is queued, so the bytes that
+    would really go down the pipe can be inspected."""
+    player._outbox.put(None)
+    player._writer()
     return [json.loads(line)["command"] for line in player._sock.sent]
 
 
@@ -203,17 +221,74 @@ def test_a_failed_start_reports_back_instead_of_hanging(player, monkeypatch):
 
 
 def test_commands_issued_before_it_is_up_are_not_lost(player):
+    """Click a clip, press play: both can happen before mpv has finished
+    starting, and neither should evaporate."""
     player._sock = None
+    player._alive = False
     player._starting = True
     player._send("set_property", "pause", False)
     player._send("seek", 3.0, "absolute+exact")
-    assert len(player._queued) == 2
 
     sock = FakeSocket()
     player._sock = sock
     player._starting = False
-    player._flush_pending()
-    sent = [json.loads(line)["command"] for line in sock.sent]
+    player._alive = True
+    sent = drain_through_writer(player)
     assert ["set_property", "pause", False] in sent
     assert ["seek", 3.0, "absolute+exact"] in sent
-    assert player._queued == []
+
+
+# ── the deadlock that froze the app ─────────────────────────────────────
+
+def test_sending_never_writes_on_the_calling_thread(player):
+    """The freeze, in one assertion.
+
+    On Windows the channel is a single synchronous pipe handle. The reader
+    parks in a blocking read on it, and the OS will not run a write on the
+    same handle until that read finishes - so a write waits for mpv to
+    speak. Doing that write inline, under a lock, meant the thread drawing
+    the window waited too, forever, and the app had to be killed.
+    """
+    class Exploding:
+        def write(self, _data):
+            raise AssertionError("wrote on the caller's thread")
+
+        def sendall(self, _data):
+            raise AssertionError("wrote on the caller's thread")
+
+    player._sock = Exploding()
+    player._send("set_property", "pause", False)     # must not raise
+    player.seek(4.0)
+    player.pause()
+
+
+def test_sending_takes_no_lock(player):
+    """Not merely 'does not block' - it must not be able to queue behind
+    anything the writer is doing either."""
+    player._lock.acquire()
+    try:
+        player._send("set_property", "pause", False)
+    finally:
+        player._lock.release()
+    assert commands(player) == [["set_property", "pause", False]]
+
+
+def test_a_stuck_channel_does_not_grow_without_bound(player):
+    for index in range(5000):
+        player._send("seek", float(index), "absolute+exact")
+    assert player._outbox.qsize() <= player._outbox.maxsize
+
+
+def test_the_writer_stops_when_the_channel_breaks(player):
+    class Broken:
+        def write(self, _data):
+            raise OSError("pipe gone")
+
+        def sendall(self, _data):
+            raise OSError("pipe gone")
+
+    player._sock = Broken()
+    player._send("set_property", "pause", False)
+    player._outbox.put(None)
+    player._writer()                 # returns rather than spinning
+    assert player._sock is None
