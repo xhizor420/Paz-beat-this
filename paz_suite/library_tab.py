@@ -167,9 +167,12 @@ class LibraryTab(ctk.CTkFrame):
         # builders need them to size chips to their text - so they exist
         # before anything is built rather than after.
         import tkinter.font as tkfont
-        self._card_font = tkfont.Font(family=T.UI, size=10)
-        self._badge_font = tkfont.Font(family=T.MONO, size=pt(8))
-        self._spec_font = tkfont.Font(family=T.MONO, size=9)
+        # pt(), not a bare number: this one was missed when the rest of
+        # the hand-drawn sizes were scaled, so card captions stayed 10px
+        # on a display where everything around them grew.
+        self._card_font = tkfont.Font(family=T.UI, size=pt(12))
+        self._badge_font = tkfont.Font(family=T.MONO, size=pt(10))
+        self._spec_font = tkfont.Font(family=T.MONO, size=pt(11))
         self._chip_font = tkfont.Font(family=T.UI, size=pt(11))
         self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
 
@@ -487,10 +490,18 @@ class LibraryTab(ctk.CTkFrame):
         # whatever frame it is in - so if they shared a frame with the
         # saved ones, every refresh would deal them into a different
         # order. Separate frames, packed once.
-        self._quick_row = ctk.CTkFrame(left, fg_color="transparent")
+        # Same trap: every counted chip hides itself when its count is
+        # zero, so a search that finds nothing empties this row too.
+        self._quick_row = ctk.CTkFrame(left, fg_color="transparent",
+                                       width=1, height=22)
         self._quick_row.pack(side="left")
-        self._saved_row = ctk.CTkFrame(left, fg_color="transparent")
-        self._saved_row.pack(side="left", padx=(px(10), 0))
+        # Packed only while it holds something. An empty CTkFrame is not
+        # zero-sized - it falls back to 200x200 - so an empty saved-search
+        # row stood there as 200px of blank above the grid and 200px of
+        # blank beside the counted chips. That was most of the dead space
+        # in the window, on every search that had no saved chips.
+        self._saved_row = ctk.CTkFrame(left, fg_color="transparent",
+                                       width=1, height=22)
         self.saved_chips = []
         # Filled here rather than at the end of __init__: the row has to
         # exist first, and calling it from the wrong builder just returned
@@ -659,11 +670,15 @@ class LibraryTab(ctk.CTkFrame):
     # than the gallery beside it - a wall of player next to three columns
     # of tiny cards. Capped in absolute terms so a wider screen spends its
     # extra width on more clips, which is the point of the tab.
-    PANEL_MIN, PANEL_MAX = 430, 1500
+    PANEL_MIN, PANEL_MAX = 430, 1900
 
     @property
     def panel_cap(self) -> int:
-        return px(660)
+        # A fixed ceiling here was what kept the player small on a big
+        # screen: the share said 26% of a 3840px window, the cap said
+        # 660px, and the cap won - so the panel stopped growing while the
+        # window kept going and the video sat in the middle of it.
+        return px(1000)
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -686,10 +701,15 @@ class LibraryTab(ctk.CTkFrame):
             total = 1680
         if total < 400:
             total = 1680
-        base = int(max(px(self.PANEL_MIN), min(total * 0.26, self.panel_cap)))
+        # Normal browsing keeps most of the window for the grid - a wider
+        # panel costs a column of clips, and on a library this size the
+        # columns matter. The gain goes where it was asked for instead:
+        # the ceiling, so a big screen stops being capped at 660px, and
+        # theater, which exists precisely to be the big one.
+        base = int(max(px(self.PANEL_MIN), min(total * 0.28, self.panel_cap)))
         if not self.cfg.theater:
             return base
-        theater = max(base + self.THEATER_BONUS, int(total * 0.46))
+        theater = max(base + self.THEATER_BONUS, int(total * 0.60))
         return min(theater, self.PANEL_MAX)
 
     def _build_details(self):
@@ -1261,10 +1281,18 @@ class LibraryTab(ctk.CTkFrame):
         self._rebuild_saved_chips()
         self.set_status(f"“{name}” now finds {query}.", T.OK)
 
+    def _show_saved_row(self, wanted: bool) -> None:
+        row = self._saved_row
+        if wanted and not row.winfo_ismapped():
+            row.pack(side="left", padx=(px(10), 0))
+        elif not wanted and row.winfo_ismapped():
+            row.pack_forget()
+
     def _rebuild_saved_chips(self) -> None:
         row = getattr(self, "_saved_row", None)
         if row is None:
             return
+        self._show_saved_row(bool(getattr(self.cfg, "saved_searches", [])))
         for chip in self.saved_chips:
             chip.destroy()
         self.saved_chips = []
@@ -1622,7 +1650,7 @@ class LibraryTab(ctk.CTkFrame):
     def CAP_H(self) -> int:
         """Caption strip height. Grows with the text scale - at 200% the
         two lines of caption no longer fit in a fixed 42px band."""
-        return px(42)
+        return px(50)
 
     @property
     def card_width(self) -> int:
@@ -1778,7 +1806,8 @@ class LibraryTab(ctk.CTkFrame):
         name = rec.pid or os.path.splitext(rec.name)[0]
         canvas.create_text(x + px(8), y + self.IMG_H + px(15),
                            text=self._ellipsize(name, x + self.CARD_W - 10),
-                           fill=T.TEXT, font=(T.MONO, pt(10)), anchor="w", tags=(tag, f"tt{index}"))
+                           fill=T.TEXT, font=(T.MONO, pt(12)), anchor="w",
+                           tags=(tag, f"tt{index}"))
 
         score = fmt_score(rec.score)
         score_w = (self._spec_font.measure(f"▲{score}") + 10) if score else 0
@@ -1786,12 +1815,12 @@ class LibraryTab(ctk.CTkFrame):
             canvas.create_text(x + px(8), y + self.IMG_H + px(31),
                                text=self._ellipsize(rec.artists[0],
                                                     x + self.CARD_W - score_w - 12),
-                               fill=T.TAG["artist"], font=(T.UI, pt(10)),
+                               fill=T.TAG["artist"], font=(T.UI, pt(11)),
                                anchor="w", tags=(tag,))
         if score:
             canvas.create_text(x + self.CARD_W - px(8), y + self.IMG_H + px(31), text=f"▲{score}",
                                fill=T.TEXT if rec.score >= 1000 else T.FAINT,
-                               font=(T.MONO, pt(9)), anchor="e", tags=(tag,))
+                               font=(T.MONO, pt(10)), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
 
@@ -2072,13 +2101,13 @@ class LibraryTab(ctk.CTkFrame):
         """A small dark plate with a line of mono on it. `x`,`y` is the
         corner named by `anchor` ("nw" or "ne")."""
         canvas = self.gallery
-        pad, h = px(4), px(14)
+        pad, h = px(5), px(18)
         w = self._badge_font.measure(text) + pad * 2
         x0 = x if anchor == "nw" else x - w
         canvas.create_rectangle(x0, y, x0 + w, y + h, fill=T.BG, outline="",
                                 tags=(tag,))
         canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
-                           font=(T.MONO, pt(8)), anchor="w", tags=(tag,))
+                           font=(T.MONO, pt(10)), anchor="w", tags=(tag,))
 
     def _draw_tick(self, index: int, rec: Rec, slot: dict) -> None:
         """The selection tick, on its own tag so selection can be repainted
@@ -2112,7 +2141,7 @@ class LibraryTab(ctk.CTkFrame):
         spec = f"{rec.height}p" if rec.height else "--"
         if rec.fps:
             spec += f"·{rec.fps:.0f}"
-        self._pill(tag, x + px(5), y + self.IMG_H - px(38), spec,
+        self._pill(tag, x + px(5), y + self.IMG_H - px(46), spec,
                    T.DIM if rec.premium else T.FAINT)
 
         # Top right: the rating, as its own colour. Explicit is the loudest
@@ -2126,7 +2155,7 @@ class LibraryTab(ctk.CTkFrame):
                                font=(T.MONO, pt(8), "bold"), tags=(tag,))
 
         # Bottom right: length.
-        self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(19),
+        self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(23),
                    fmt_len(rec.duration), T.DIM, anchor="ne")
 
         # Bottom left: which project already spent this clip. The coloured
@@ -2142,7 +2171,7 @@ class LibraryTab(ctk.CTkFrame):
             # meant to be annotating - so they all speak in the same
             # quiet voice and the rating is the only one left in colour,
             # because the rating is the one that gets scanned for.
-            self._pill(tag, x + px(5), y + self.IMG_H - px(19), label or "used",
+            self._pill(tag, x + px(5), y + self.IMG_H - px(23), label or "used",
                        T.DIM)
         if rec.used_projects:
             canvas.tag_raise(f"used{index}")
