@@ -165,8 +165,49 @@ def test_why_not_names_the_missing_half(monkeypatch):
 
 
 def test_available_needs_both_halves(monkeypatch):
+    """Both halves present is necessary but no longer sufficient - libVLC
+    has to have actually loaded. Saying yes on the strength of the files
+    being on disk meant picking a player that might be mid-load or
+    broken, when falling through to the next one costs nothing."""
     monkeypatch.setattr(vp, "bindings_present", lambda: True)
     monkeypatch.setattr(vp, "library_path", lambda: "/usr/lib/libvlc.so")
+    monkeypatch.setattr(vp, "_loaded", True)
+    monkeypatch.setattr(vp, "_module", object())
     assert vp.available() is True
     monkeypatch.setattr(vp, "library_path", lambda: "")
     assert vp.available() is False
+
+
+def test_not_available_until_it_has_loaded(monkeypatch):
+    monkeypatch.setattr(vp, "bindings_present", lambda: True)
+    monkeypatch.setattr(vp, "library_path", lambda: "/usr/lib/libvlc.so")
+    monkeypatch.setattr(vp, "_loaded", False)
+    monkeypatch.setattr(vp, "_module", None)
+    monkeypatch.setattr(vp, "_load_started", True)   # don't start a thread
+    assert vp.available() is False
+    assert "loading" in vp.why_not()
+
+
+def test_a_library_that_will_not_load_is_not_available(monkeypatch):
+    monkeypatch.setattr(vp, "bindings_present", lambda: True)
+    monkeypatch.setattr(vp, "library_path", lambda: "/usr/lib/libvlc.so")
+    monkeypatch.setattr(vp, "_loaded", True)
+    monkeypatch.setattr(vp, "_module", None)
+    monkeypatch.setattr(vp, "_load_error", "OSError: wrong architecture")
+    assert vp.available() is False
+    assert "will not load" in vp.why_not()
+
+
+def test_a_player_whose_library_never_loaded_says_so_and_steps_aside(monkeypatch):
+    """Rather than reaching for the import itself on its worker thread,
+    which is the thing that could take the process with it."""
+    monkeypatch.setattr(vp, "_module", None)
+    monkeypatch.setattr(vp, "_load_error", "OSError: nope")
+    told = []
+    p = vp.VlcPlayer.__new__(vp.VlcPlayer)
+    p._worker = None
+    p.__init__(widget=None, width=854, height=480)
+    p.on_unavailable = told.append
+    p._post = lambda fn, *a: fn(*a)
+    assert p._boot() is False
+    assert told and "libVLC" in told[0]

@@ -74,8 +74,67 @@ def bindings_present() -> bool:
         return False
 
 
+# libVLC, loaded once and kept. Importing the bindings is what loads
+# libvlc itself, and that must not happen on a worker thread at play
+# time: Python's import lock and the platform's native library loader are
+# both in play, and doing it while the thread drawing the window is busy
+# is how a player takes an app down instead of failing. Settled at
+# startup, on a thread of its own, before anything asks to play.
+_module_lock = threading.Lock()
+_module = None          # the `vlc` module once it has loaded
+_load_error = ""
+_load_started = False
+_loaded = False
+
+
+def _load() -> None:
+    global _module, _load_error, _loaded
+    try:
+        import vlc
+    except Exception as exc:
+        with _module_lock:
+            _load_error = f"{exc.__class__.__name__}: {exc}"
+            _loaded = True
+        return
+    with _module_lock:
+        _module = vlc
+        _loaded = True
+
+
+def start_load() -> None:
+    """Begin loading libVLC in the background. Called once, at startup."""
+    global _load_started
+    if not (bindings_present() and library_path()):
+        return
+    with _module_lock:
+        if _load_started:
+            return
+        _load_started = True
+    threading.Thread(target=_load, daemon=True).start()
+
+
+def module():
+    """The loaded `vlc` module, or None if it is not ready or failed."""
+    with _module_lock:
+        return _module
+
+
+def load_error() -> str:
+    with _module_lock:
+        return _load_error
+
+
 def available() -> bool:
-    return bindings_present() and bool(library_path())
+    """Usable only once libVLC has actually loaded. Unknown counts as no -
+    falling through to the next player beats promising one that may be
+    mid-load or broken."""
+    if not (bindings_present() and bool(library_path())):
+        return False
+    with _module_lock:
+        if _loaded:
+            return _module is not None
+    start_load()
+    return False
 
 
 def why_not() -> str:
@@ -86,6 +145,10 @@ def why_not() -> str:
         return "VLC is installed but the python-vlc package isn't (pip install python-vlc)"
     if not library_path():
         return "python-vlc is installed but VLC itself isn't - get it from videolan.org"
+    if load_error():
+        return f"VLC is installed but will not load - {load_error()}"
+    if module() is None:
+        return "still loading VLC"
     return ""
 
 
@@ -165,8 +228,15 @@ class VlcPlayer:
         self._teardown()
 
     def _boot(self) -> bool:
+        vlc = module()
+        if vlc is None:
+            self._failed = True
+            self._report_unavailable(
+                "libVLC has not loaded" + (f" ({load_error()})"
+                                           if load_error() else "")
+                + ". Falling back to another player.")
+            return False
         try:
-            import vlc
             self._vlc = vlc
             # --no-video-title-show: no filename splashed over the picture.
             # --quiet: VLC's own logging is not ours to print.

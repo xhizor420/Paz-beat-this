@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import socket
 import subprocess
@@ -95,6 +96,31 @@ def mpv_path() -> str:
     return ""
 
 
+def _pipe_waiting(handle) -> int:
+    """Bytes ready to read on a Windows named pipe: 0 for none, -1 if the
+    pipe has gone.
+
+    Why this exists at all: the channel is one synchronous pipe handle,
+    and Windows will not run a write on it while a read on the same handle
+    is in flight. A reader parked in a blocking read therefore holds every
+    command up until mpv happens to say something - play, pause and seek
+    all silently waiting on the picture they were meant to change. Asking
+    first, and reading only what is already there, keeps each read short
+    enough that writes get through.
+    """
+    try:
+        import ctypes
+        import ctypes.wintypes
+        import msvcrt
+        native = msvcrt.get_osfhandle(handle.fileno())
+        waiting = ctypes.wintypes.DWORD(0)
+        ok = ctypes.windll.kernel32.PeekNamedPipe(
+            native, None, 0, None, ctypes.byref(waiting), None)
+        return waiting.value if ok else -1
+    except Exception:
+        return -1
+
+
 def available() -> bool:
     return bool(mpv_path())
 
@@ -132,11 +158,14 @@ class MpvPlayer:
         self._ipc = ""
         self._lock = threading.Lock()
         self._request = 0
+        # Commands leave by this queue and nothing else. Writing to the
+        # IPC channel is done by one thread, which is the only thread that
+        # ever touches it - see _writer.
+        self._outbox: queue.Queue = queue.Queue(maxsize=256)
         self._alive = False
         self._pending: dict = {}
         self._failed = False
         self._starting = False
-        self._queued: list = []
         # Called when mpv turns out not to be usable, so the caller can
         # go back to the built-in engine. Set by whoever builds this.
         self.on_unavailable = None
@@ -189,9 +218,9 @@ class MpvPlayer:
         if ok:
             self._alive = True
             threading.Thread(target=self._reader, daemon=True).start()
+            threading.Thread(target=self._writer, daemon=True).start()
             for name, ident in _OBSERVED:
                 self._send("observe_property", ident, name)
-            self._flush_pending()
         else:
             self.shutdown()
             if self.on_unavailable:
@@ -274,8 +303,6 @@ class MpvPlayer:
     def shutdown(self) -> None:
         self._alive = False
         self._starting = False
-        with self._lock:
-            self._queued = []
         try:
             self._send("quit")
         except Exception:
@@ -306,24 +333,48 @@ class MpvPlayer:
 
     # ── talking to it ───────────────────────────────────────────────────
 
-    def _flush_pending(self) -> None:
-        with self._lock:
-            queued, self._queued = self._queued, []
-        for args in queued:
-            self._send(*args)
-
     def _send(self, *args) -> None:
-        sock = self._sock
-        if sock is None:
-            # Still coming up. Hold the command rather than dropping it,
-            # so "click a clip, press play" works even when both happen
-            # before mpv has finished starting.
-            if self._starting:
-                with self._lock:
-                    self._queued.append(args)
-                    del self._queued[:-32]
+        """Hand a command over. Never writes, never waits, never locks.
+
+        This used to serialise the write itself under a lock, which is how
+        pressing Play froze the whole app: on Windows the IPC channel is
+        one synchronous pipe handle, the reader thread sits inside a
+        blocking read on it, and the operating system makes a write on the
+        same handle queue up behind that read. So the write did not return
+        until mpv happened to say something - and it was holding the lock
+        the UI thread needed to do anything at all.
+
+        Two things follow, and both matter. Writing belongs to one thread
+        that does nothing else, so a write that blocks blocks only itself.
+        And the thread drawing the window never writes, so it cannot be
+        made to wait on mpv no matter what mpv does.
+        """
+        if not self._alive and not self._starting:
             return
-        with self._lock:
+        try:
+            self._outbox.put_nowait(args)
+        except queue.Full:
+            # Backed up behind a stuck channel. Losing a seek is better
+            # than growing without bound; the player is about to be told
+            # it is not working anyway.
+            pass
+
+    def _writer(self) -> None:
+        """The only thread that writes to mpv."""
+        while True:
+            try:
+                args = self._outbox.get(timeout=0.2)
+            except queue.Empty:
+                if not self._alive:
+                    return
+                continue
+            if args is None or not self._alive:
+                return
+            sock = self._sock
+            if sock is None:
+                continue
+            # Request ids are handed out here because here is the only
+            # place that needs them, and only one thread ever runs this.
             self._request += 1
             payload = json.dumps({"command": list(args),
                                   "request_id": self._request}) + "\n"
@@ -331,11 +382,11 @@ class MpvPlayer:
                 data = payload.encode("utf-8")
                 if IS_WINDOWS:
                     sock.write(data)
-                    sock.flush()
                 else:
                     sock.sendall(data)
             except (OSError, ValueError):
                 self._sock = None
+                return
 
     def _set(self, name: str, value) -> None:
         self._send("set_property", name, value)
@@ -347,7 +398,16 @@ class MpvPlayer:
         sock = self._sock
         while self._alive and sock is not None:
             try:
-                chunk = sock.read(65536) if IS_WINDOWS else sock.recv(65536)
+                if IS_WINDOWS:
+                    waiting = _pipe_waiting(sock)
+                    if waiting < 0:
+                        break
+                    if waiting == 0:
+                        time.sleep(0.02)
+                        continue
+                    chunk = sock.read(min(waiting, 65536))
+                else:
+                    chunk = sock.recv(65536)
             except (OSError, ValueError):
                 break
             if not chunk:

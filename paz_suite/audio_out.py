@@ -39,20 +39,96 @@ BYTES_PER_FRAME = CHANNELS * 4
 BLOCK = 1024
 
 
-def available() -> bool:
-    """True if we can drive an audio device ourselves."""
+# Whether we can really drive a device is settled once, on a thread, and
+# then remembered. Two reasons it cannot be answered inline:
+#
+#   * find_spec() only proves the module file is on disk. Importing it is
+#     what loads PortAudio, and that is what can fail - a pip install
+#     whose native library is missing or the wrong architecture imports
+#     with OSError('PortAudio library not found'). Answering from
+#     find_spec alone promised a clock we did not have, which showed up as
+#     no sound at all plus a menu claiming there was nothing to set.
+#   * importing it is also the part that can be *slow*. Loading an audio
+#     DLL enumerates the machine's devices, and on Windows with an unhappy
+#     driver that is seconds, or hangs. Doing that on the thread drawing
+#     the window is how a player freezes an app.
+#
+# So: unknown until proven, proven off to the side, and "unknown" counts
+# as no - better to fall back to ffplay and drift than to promise a clock
+# and produce silence.
+_probe_lock = threading.Lock()
+_probe: tuple | None = None          # (ok, reason) once settled
+_probe_started = False
+
+
+# Loaded once, here, and then used. Deliberately not imported inside the
+# feeder thread where they are needed: importing numpy and an audio
+# library is not thread-safe in any useful sense. Python's import lock and
+# the platform's native library loader are both involved, and doing it on
+# a worker while the main thread is using the same modules produces either
+# a "partially initialized module" error or, on Windows, a process that
+# stops answering - which is what pressing Play looked like.
+_np = None
+_sd = None
+
+
+def _run_probe() -> tuple:
+    global _probe, _np, _sd
+    try:
+        import numpy
+        import sounddevice
+    except Exception as exc:
+        answer = (False, f"the audio packages will not load ({exc})")
+    else:
+        _np, _sd = numpy, sounddevice
+        answer = (True, "")
+    with _probe_lock:
+        _probe = answer
+    return answer
+
+
+def start_probe() -> None:
+    """Settle it in the background. Called once as the app starts."""
+    global _probe_started
+    with _probe_lock:
+        if _probe_started or _probe is not None:
+            return
+        _probe_started = True
+    threading.Thread(target=_run_probe, daemon=True).start()
+
+
+def bindings_present() -> bool:
+    """Cheap: is the module on disk at all. Says nothing about whether it
+    loads, so it is only good enough for deciding that sound is worth
+    offering a volume control for."""
     try:
         return importlib.util.find_spec("sounddevice") is not None
     except Exception:
         return False
 
 
+def available() -> bool:
+    """True only once an import has actually succeeded."""
+    with _probe_lock:
+        settled = _probe
+    if settled is None:
+        start_probe()
+        return False
+    return settled[0]
+
+
 def why_not() -> str:
-    if available():
+    with _probe_lock:
+        settled = _probe
+    if settled is None:
+        return "still checking whether this machine can drive an audio device"
+    if settled[0]:
         return ""
-    return ("the sounddevice package isn't installed, so sound has to go "
-            "through a separate ffplay with no clock joining it to the "
-            "picture (pip install sounddevice)")
+    if not bindings_present():
+        return ("the sounddevice package isn't installed, so sound has to go "
+                "through a separate ffplay with no clock joining it to the "
+                "picture (pip install sounddevice)")
+    return settled[1]
 
 
 class AudioTrack:
@@ -92,12 +168,12 @@ class AudioTrack:
     # ── the worker ──────────────────────────────────────────────────────
 
     def _run(self) -> None:
-        try:
-            import numpy as np
-            import sounddevice as sd
-            self._np = np
-        except Exception as exc:
-            return self._give_up(f"no audio output ({exc.__class__.__name__})")
+        # Already loaded by the startup probe, or we do not play. Nothing
+        # is imported from here - see the note on _run_probe.
+        np, sd = _np, _sd
+        if np is None or sd is None:
+            return self._give_up("the audio packages are not loaded")
+        self._np = np
 
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
         if self.start > 0.01:
