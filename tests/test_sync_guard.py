@@ -88,3 +88,48 @@ def test_a_small_library_is_not_second_guessed_proportionally():
 def test_an_empty_index_is_not_second_guessed():
     tab = FakeTab(dirs=["P:/clips"])
     assert tab._refuse_mass_delete([], {}, {}) is None
+
+
+# ── an empty CTkFrame is not zero-sized ─────────────────────────────────
+
+def test_the_chip_rows_are_not_left_empty_at_their_default_size():
+    """CustomTkinter falls back to 200x200 for a frame with no children
+    and no size of its own. Two rows above the grid can legitimately be
+    empty - the saved-search row when nothing is saved, the counted row
+    when a search finds nothing - and each one stood there as 200px of
+    blank above the clips and 200px beside them. It was most of the dead
+    space in the window."""
+    import re
+    src = open("paz_suite/library_tab.py", encoding="utf-8").read()
+    for name in ("_quick_row", "_saved_row"):
+        match = re.search(rf"self\.{name} = ctk\.CTkFrame\((.*?)\)", src, re.S)
+        assert match, f"{name} is not built where expected"
+        args = match.group(1)
+        assert "height=" in args, (
+            f"{name} has no height, so empty it becomes a 200px hole")
+        assert "width=" in args, (
+            f"{name} has no width, so empty it becomes a 200px gap")
+
+
+def test_the_saved_row_is_only_shown_when_it_holds_something():
+    src = open("paz_suite/library_tab.py", encoding="utf-8").read()
+    assert "_show_saved_row" in src
+    assert "pack_forget()" in src
+
+
+def test_card_captions_are_scaled_not_fixed():
+    """The card font was a bare 10 while everything around it went
+    through pt(), so captions stayed small on a display where the rest of
+    the text grew."""
+    import re
+    src = open("paz_suite/library_tab.py", encoding="utf-8").read()
+    match = re.search(r"self\._card_font = tkfont\.Font\((.*?)\)", src)
+    assert match
+    assert "pt(" in match.group(1), "card caption size is not scaled"
+
+
+def test_the_inspector_is_not_capped_below_a_useful_size():
+    """A fixed 660px ceiling meant the player stopped growing while the
+    window kept going."""
+    src = open("paz_suite/library_tab.py", encoding="utf-8").read()
+    assert "px(660)" not in src, "the old inspector cap is back"

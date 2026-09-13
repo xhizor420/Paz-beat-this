@@ -19,7 +19,7 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from .theme import T, font, lens_photo, mix, pt, px, LIBRARY_LABELS
-from .format import fmt_len, fmt_size, fmt_score
+from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
 )
@@ -151,11 +151,24 @@ class LibraryTab(ctk.CTkFrame):
         self._pv_step = 0
         self._pv_token = 0
         self._pv_photo = None            # keep-alive for the frame on screen
+        self._pv_at: float | None = None  # where the next reel should start
         self._static_thumb: dict = {}    # index -> the card's resting thumbnail
-        # path -> {"frames": [jpeg bytes], "photos": {i: PhotoImage}}. The
+        # (path, start) -> {"frames": [jpeg bytes], "photos": {i: PhotoImage}}.
+        # Keyed by where the reel begins as well as which clip it is, because
+        # resting after a hover-scrub asks for a reel from THAT moment - one
+        # entry per clip would hand back the wrong stretch of footage. The
         # converted frames ride along with the reel they came from, so
         # evicting one clip drops its images with it.
         self._reels: dict = {}
+        # In-tile hover scrub (see "hover scrub" further down)
+        self._sb_index: int | None = None
+        self._sb_token = 0
+        self._sb_busy = False
+        self._sb_want: float | None = None
+        self._sb_frac = 0.0
+        self._sb_x: float | None = None
+        self._sb_photo = None            # keep-alive for the frame on screen
+        self._sb_after = None
         self._search_after = None
         self._resize_after = None
         self._columns = 0
@@ -167,9 +180,12 @@ class LibraryTab(ctk.CTkFrame):
         # builders need them to size chips to their text - so they exist
         # before anything is built rather than after.
         import tkinter.font as tkfont
-        self._card_font = tkfont.Font(family=T.UI, size=10)
-        self._badge_font = tkfont.Font(family=T.MONO, size=pt(8))
-        self._spec_font = tkfont.Font(family=T.MONO, size=9)
+        # pt(), not a bare number: this one was missed when the rest of
+        # the hand-drawn sizes were scaled, so card captions stayed 10px
+        # on a display where everything around them grew.
+        self._card_font = tkfont.Font(family=T.UI, size=pt(12))
+        self._badge_font = tkfont.Font(family=T.MONO, size=pt(10))
+        self._spec_font = tkfont.Font(family=T.MONO, size=pt(11))
         self._chip_font = tkfont.Font(family=T.UI, size=pt(11))
         self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
 
@@ -487,10 +503,18 @@ class LibraryTab(ctk.CTkFrame):
         # whatever frame it is in - so if they shared a frame with the
         # saved ones, every refresh would deal them into a different
         # order. Separate frames, packed once.
-        self._quick_row = ctk.CTkFrame(left, fg_color="transparent")
+        # Same trap: every counted chip hides itself when its count is
+        # zero, so a search that finds nothing empties this row too.
+        self._quick_row = ctk.CTkFrame(left, fg_color="transparent",
+                                       width=1, height=22)
         self._quick_row.pack(side="left")
-        self._saved_row = ctk.CTkFrame(left, fg_color="transparent")
-        self._saved_row.pack(side="left", padx=(px(10), 0))
+        # Packed only while it holds something. An empty CTkFrame is not
+        # zero-sized - it falls back to 200x200 - so an empty saved-search
+        # row stood there as 200px of blank above the grid and 200px of
+        # blank beside the counted chips. That was most of the dead space
+        # in the window, on every search that had no saved chips.
+        self._saved_row = ctk.CTkFrame(left, fg_color="transparent",
+                                       width=1, height=22)
         self.saved_chips = []
         # Filled here rather than at the end of __init__: the row has to
         # exist first, and calling it from the wrong builder just returned
@@ -659,11 +683,15 @@ class LibraryTab(ctk.CTkFrame):
     # than the gallery beside it - a wall of player next to three columns
     # of tiny cards. Capped in absolute terms so a wider screen spends its
     # extra width on more clips, which is the point of the tab.
-    PANEL_MIN, PANEL_MAX = 430, 1500
+    PANEL_MIN, PANEL_MAX = 430, 1900
 
     @property
     def panel_cap(self) -> int:
-        return px(660)
+        # A fixed ceiling here was what kept the player small on a big
+        # screen: the share said 26% of a 3840px window, the cap said
+        # 660px, and the cap won - so the panel stopped growing while the
+        # window kept going and the video sat in the middle of it.
+        return px(1000)
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -686,10 +714,15 @@ class LibraryTab(ctk.CTkFrame):
             total = 1680
         if total < 400:
             total = 1680
-        base = int(max(px(self.PANEL_MIN), min(total * 0.26, self.panel_cap)))
+        # Normal browsing keeps most of the window for the grid - a wider
+        # panel costs a column of clips, and on a library this size the
+        # columns matter. The gain goes where it was asked for instead:
+        # the ceiling, so a big screen stops being capped at 660px, and
+        # theater, which exists precisely to be the big one.
+        base = int(max(px(self.PANEL_MIN), min(total * 0.28, self.panel_cap)))
         if not self.cfg.theater:
             return base
-        theater = max(base + self.THEATER_BONUS, int(total * 0.46))
+        theater = max(base + self.THEATER_BONUS, int(total * 0.60))
         return min(theater, self.PANEL_MAX)
 
     def _build_details(self):
@@ -884,6 +917,14 @@ class LibraryTab(ctk.CTkFrame):
 
     def key_page(self, delta):
         self.turn_page(delta)
+
+    def on_hidden(self) -> None:
+        """Another tab is in front now. A clip still playing behind it is
+        sound coming from a page the user cannot see to stop."""
+        if self.player.playing:
+            self.player.pause()
+        self._preview_stop()
+        self._scrub_stop()
 
     def on_app_close(self) -> bool:
         # mpv is a separate process embedded in our window. Killing the
@@ -1261,10 +1302,18 @@ class LibraryTab(ctk.CTkFrame):
         self._rebuild_saved_chips()
         self.set_status(f"“{name}” now finds {query}.", T.OK)
 
+    def _show_saved_row(self, wanted: bool) -> None:
+        row = self._saved_row
+        if wanted and not row.winfo_ismapped():
+            row.pack(side="left", padx=(px(10), 0))
+        elif not wanted and row.winfo_ismapped():
+            row.pack_forget()
+
     def _rebuild_saved_chips(self) -> None:
         row = getattr(self, "_saved_row", None)
         if row is None:
             return
+        self._show_saved_row(bool(getattr(self.cfg, "saved_searches", [])))
         for chip in self.saved_chips:
             chip.destroy()
         self.saved_chips = []
@@ -1622,7 +1671,7 @@ class LibraryTab(ctk.CTkFrame):
     def CAP_H(self) -> int:
         """Caption strip height. Grows with the text scale - at 200% the
         two lines of caption no longer fit in a fixed 42px band."""
-        return px(42)
+        return px(50)
 
     @property
     def card_width(self) -> int:
@@ -1698,6 +1747,11 @@ class LibraryTab(ctk.CTkFrame):
         self._static_thumb = {}
         self._layout = []
         self._hover_index = None
+        # Card indices are about to mean different clips, so anything
+        # still in flight for the old ones has to be dropped rather than
+        # allowed to paint itself onto whatever now sits at that index.
+        self._sb_index = None
+        self._scrub_reset()
         self._peek_hide()
 
         canvas = self.gallery
@@ -1778,7 +1832,8 @@ class LibraryTab(ctk.CTkFrame):
         name = rec.pid or os.path.splitext(rec.name)[0]
         canvas.create_text(x + px(8), y + self.IMG_H + px(15),
                            text=self._ellipsize(name, x + self.CARD_W - 10),
-                           fill=T.TEXT, font=(T.MONO, pt(10)), anchor="w", tags=(tag, f"tt{index}"))
+                           fill=T.TEXT, font=(T.MONO, pt(12)), anchor="w",
+                           tags=(tag, f"tt{index}"))
 
         score = fmt_score(rec.score)
         score_w = (self._spec_font.measure(f"▲{score}") + 10) if score else 0
@@ -1786,12 +1841,12 @@ class LibraryTab(ctk.CTkFrame):
             canvas.create_text(x + px(8), y + self.IMG_H + px(31),
                                text=self._ellipsize(rec.artists[0],
                                                     x + self.CARD_W - score_w - 12),
-                               fill=T.TAG["artist"], font=(T.UI, pt(10)),
+                               fill=T.TAG["artist"], font=(T.UI, pt(11)),
                                anchor="w", tags=(tag,))
         if score:
             canvas.create_text(x + self.CARD_W - px(8), y + self.IMG_H + px(31), text=f"▲{score}",
                                fill=T.TEXT if rec.score >= 1000 else T.FAINT,
-                               font=(T.MONO, pt(9)), anchor="e", tags=(tag,))
+                               font=(T.MONO, pt(10)), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
 
@@ -1804,7 +1859,9 @@ class LibraryTab(ctk.CTkFrame):
         canvas.tag_bind(tag, "<Double-Button-1>", lambda e, r=rec: self._select_and_play(r))
         canvas.tag_bind(tag, "<Button-3>", lambda e, r=rec: self._card_menu(e, r))
         canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
-        canvas.tag_bind(tag, "<Leave>", lambda e, i=index: self._unhover(i))
+        canvas.tag_bind(tag, "<Leave>", lambda e, i=index: self._unhover(i, e))
+        canvas.tag_bind(tag, "<Motion>",
+                        lambda e, i=index: self._scrub_motion(e, i))
 
     def _card_outline(self, rec: Rec, hover: bool) -> tuple:
         """(colour, width) for a card's border. Selection outranks the
@@ -1843,13 +1900,53 @@ class LibraryTab(ctk.CTkFrame):
             return
         self._hover_index = index
         self._restyle_cards()
+        self._scrub_stop()
         self._preview_stop()
         self._preview_arm(index)
+        # Build this clip's storyboard sheet now, while the pointer is
+        # still on its way across the tile. prime_hover() warns against
+        # calling it for every card - and this isn't: it is the one card
+        # under the pointer, so at most one sheet builds at a time, and by
+        # the time the sweep starts the scrub is reading from memory.
+        # index is None when the pointer left the grid entirely.
+        if index is not None and index < len(self._layout):
+            rec = self._layout[index]["rec"]
+            if rec.duration > 0:
+                self.frames.prime_hover(rec.path, rec.duration)
 
-    def _unhover(self, index):
+    def _card_box(self, index: int) -> tuple:
+        slot = self._layout[index]
+        return (slot["x"], slot["y"], slot["x"] + self.CARD_W,
+                slot["y"] + self.IMG_H + self.CAP_H)
+
+    def _still_on_card(self, index: int, event) -> bool:
+        """True when a Leave was only the pointer crossing from one of a
+        card's items to another.
+
+        A card is not one canvas item: it is a picture, a frame, badges,
+        pills and two lines of caption, all wearing the same tag. Tk raises
+        Leave and then Enter every time the pointer crosses between them,
+        which looks exactly like leaving the card and coming back. Acting
+        on those tore the preview and the scrub down and built them up
+        again every few pixels of a sweep - which is to say, precisely
+        while they were being used."""
+        if event is None or index >= len(self._layout):
+            return False
+        try:
+            x = self.gallery.canvasx(event.x)
+            y = self.gallery.canvasy(event.y)
+        except tk.TclError:
+            return False
+        x0, y0, x1, y1 = self._card_box(index)
+        return x0 <= x < x1 and y0 <= y < y1
+
+    def _unhover(self, index, event=None):
+        if self._still_on_card(index, event):
+            return
         if self._hover_index == index:
             self._hover_index = None
             self._restyle_cards()
+        self._scrub_stop()
         self._preview_stop()
 
     # ── hover preview ────────────────────────────────────────────────────
@@ -1887,7 +1984,13 @@ class LibraryTab(ctk.CTkFrame):
         rate = rec.fps or self.PREVIEW_FPS_FALLBACK
         return int(max(self.PREVIEW_FPS_MIN, min(round(rate), self.PREVIEW_FPS_MAX)))
 
-    def _preview_arm(self, index) -> None:
+    def _reel_key(self, path: str, start: float) -> tuple:
+        return (path, round(start, 1))
+
+    def _preview_arm(self, index, at: float | None = None) -> None:
+        """Arm the tile preview. `at` is where in the clip to play from -
+        the hover-scrub passes the position the pointer stopped on, so
+        letting go of a scrub carries straight on from there."""
         if index is None or index >= len(self._layout):
             return
         rec = self._layout[index]["rec"]
@@ -1896,6 +1999,7 @@ class LibraryTab(ctk.CTkFrame):
         self._pv_index = index
         self._pv_step = 0
         self._pv_token += 1
+        self._pv_at = at
         self._pv_after = self.after(self.PREVIEW_DWELL_MS, self._preview_begin)
 
     def _preview_begin(self) -> None:
@@ -1905,36 +2009,41 @@ class LibraryTab(ctk.CTkFrame):
             return
         rec = self._layout[index]["rec"]
         token = self._pv_token
-        reel = self._reels.get(rec.path)
+        start = self.frames.reel_start(rec.duration, self._pv_at)
+        key = self._reel_key(rec.path, start)
+        reel = self._reels.get(key)
         if reel is not None:
             self._preview_play(index, reel, token)
             return
         threading.Thread(target=self._preview_decode,
-                         args=(rec, index, token), daemon=True).start()
+                         args=(rec, index, token, start), daemon=True).start()
 
-    def _preview_decode(self, rec: Rec, index: int, token: int) -> None:
+    def _preview_decode(self, rec: Rec, index: int, token: int,
+                         start: float = 0.0) -> None:
         """Decode on a worker thread, handing frames to the UI as they
         appear instead of when the whole reel is done. A ten-second reel of
         4K takes seconds to decode in full; the first frames are ready
         almost at once, and that is the difference between a preview that
         starts when you stop moving and one that looks broken."""
         fps = self._preview_fps(rec)
+        key = self._reel_key(rec.path, start)
         self.frames.preview_reel_stream(
             rec.path, rec.duration, self.CARD_W,
             on_frames=lambda frames, done: self.ui(
-                self._preview_frames, rec.path, index, frames, done, fps, token),
+                self._preview_frames, key, index, frames, done, fps, token),
             alive=lambda: token == self._pv_token,
-            fps=fps)
+            fps=fps, start=start)
 
-    def _preview_frames(self, path: str, index: int, frames: list, done: bool,
+    def _preview_frames(self, key: tuple, index: int, frames: list, done: bool,
                          fps: int, token: int) -> None:
-        reel = self._reels.get(path)
+        reel = self._reels.get(key)
         if reel is None:
-            reel = {"frames": [], "photos": {}, "fps": fps, "done": False}
-            self._reels[path] = reel
+            reel = {"frames": [], "photos": {}, "fps": fps, "done": False,
+                    "start": key[1]}
+            self._reels[key] = reel
             while len(self._reels) > self.REEL_CACHE:
                 oldest = next(iter(self._reels))
-                if oldest != path:
+                if oldest != key:
                     self._reels.pop(oldest)
                 else:
                     break
@@ -1942,7 +2051,7 @@ class LibraryTab(ctk.CTkFrame):
         if done:
             reel["done"] = True
             if not reel["frames"]:
-                self._reels.pop(path, None)
+                self._reels.pop(key, None)
                 return
         if token != self._pv_token or self._pv_index != index:
             return
@@ -1966,11 +2075,22 @@ class LibraryTab(ctk.CTkFrame):
         if frame is not None:
             self.gallery.itemconfigure(f"im{index}", image=frame)
             self._pv_photo = frame
-            self._draw_progress(index, i / count)
+            # Against the whole clip, not against the reel: a reel that
+            # started where a scrub left off is a window onto the middle of
+            # a seven-minute clip, and a bar that ran 0..1 across it would
+            # contradict the scrub bar the user was just moving.
+            self._draw_progress(index, self._reel_frac(index, reel, i, count))
         self._pv_step += 1
         self._pv_after = self.after(
             max(int(1000 / reel.get("fps", self.PREVIEW_FPS_FALLBACK)), 16),
             lambda: self._preview_play(index, reel, token))
+
+    def _reel_frac(self, index: int, reel: dict, i: int, count: int) -> float:
+        rec = self._layout[index]["rec"]
+        fps = max(reel.get("fps") or self.PREVIEW_FPS_FALLBACK, 1)
+        if rec.duration <= 0:
+            return i / count
+        return max(0.0, min((reel.get("start", 0.0) + i / fps) / rec.duration, 1.0))
 
     def _reel_photo(self, reel: dict, i: int):
         """PhotoImages have to be built on the UI thread, so they are made
@@ -1981,15 +2101,24 @@ class LibraryTab(ctk.CTkFrame):
         photo = cache.get(i)
         if photo is not None:
             return photo
-        try:
-            image = Image.open(io.BytesIO(reel["frames"][i]))
-            image = fit_frame(image, self.CARD_W, self.IMG_H, self.cfg.thumb_fit)
-            image = round_corners(image, 9, T.SURFACE)
-            photo = ImageTk.PhotoImage(image)
-        except Exception:
+        photo = self._tile_photo(reel["frames"][i])
+        if photo is None:
             return None
         cache[i] = photo
         return photo
+
+    def _tile_photo(self, data: bytes):
+        """JPEG bytes -> a PhotoImage sized and rounded to fill a card's
+        picture area. Every moving picture a tile shows - reel frames and
+        scrub frames alike - goes through here, so they all sit in exactly
+        the same place as the resting thumbnail."""
+        try:
+            image = Image.open(io.BytesIO(data))
+            image = fit_frame(image, self.CARD_W, self.IMG_H, self.cfg.thumb_fit)
+            image = round_corners(image, 9, T.SURFACE)
+            return ImageTk.PhotoImage(image)
+        except Exception:
+            return None
 
     def _draw_progress(self, index: int, frac: float) -> None:
         slot = self._layout[index]
@@ -2004,7 +2133,11 @@ class LibraryTab(ctk.CTkFrame):
                                 fill=T.ACCENT, outline="",
                                 tags=(slot["tag"], f"pv{index}"))
 
-    def _preview_stop(self) -> None:
+    def _preview_stop(self, restore: bool = True) -> None:
+        """Stop the reel. `restore=False` when something else is about to
+        paint the tile - the hover-scrub does, on every mouse move, and
+        putting the resting thumbnail back in between would strobe the
+        card once per motion event."""
         self._pv_token += 1
         if self._pv_after is not None:
             try:
@@ -2015,7 +2148,159 @@ class LibraryTab(ctk.CTkFrame):
         index, self._pv_index = self._pv_index, None
         self._pv_step = 0
         self._pv_photo = None
-        if index is None:
+        if index is None or not restore:
+            return
+        self.gallery.delete(f"pv{index}")
+        resting = self._static_thumb.get(index)
+        if resting is not None and self.gallery.find_withtag(f"im{index}"):
+            self.gallery.itemconfigure(f"im{index}", image=resting)
+
+    # ── hover scrub ──────────────────────────────────────────────────────
+    #
+    # These clips run three to seven minutes. The reel above plays eleven
+    # seconds of one, which tells you a tile is alive - not what is in it.
+    # So: sweep the pointer sideways across a tile and it walks the whole
+    # clip. Left edge is the first frame, right edge is the last, and the
+    # picture under the pointer is the picture at that moment, with the
+    # timecode on it. The same gesture as a YouTube thumbnail, and the
+    # reason ThumbCache keeps a storyboard sheet at all - after the first
+    # sweep over a clip the frames come out of memory, so the picture
+    # keeps up with the hand instead of dragging behind it.
+    #
+    # Motion scrubs, stillness plays: stop moving and the reel takes over
+    # FROM WHERE YOU STOPPED. Finding a moment and then watching it is one
+    # gesture, and nothing has been opened to do it.
+
+    SCRUB_MIN_PX  = 3    # pointer travel before a hover counts as a scrub
+    SCRUB_REST_MS = 240  # stillness after which the reel takes over
+
+    def _scrub_motion(self, event, index: int) -> None:
+        if index >= len(self._layout):
+            return
+        slot = self._layout[index]
+        rec = slot["rec"]
+        if rec.duration <= 0:
+            return
+        # Card positions are canvas coordinates and the gallery scrolls, so
+        # the pointer has to be converted before the two can be compared.
+        x = self.gallery.canvasx(event.x)
+        if self._sb_index == index and self._sb_x is not None \
+                and abs(x - self._sb_x) < self.SCRUB_MIN_PX:
+            # Hand resting, not sweeping. Leave the reel alone.
+            return
+        if self._sb_index != index:
+            self._scrub_reset()
+            self._sb_index = index
+        self._sb_x = x
+        frac = (x - slot["x"]) / max(self.CARD_W, 1)
+        self._sb_frac = max(0.0, min(frac, 1.0))
+        # The reel and the scrub both own the tile's picture; whichever the
+        # hand is doing wins, and the other stands down.
+        self._preview_stop(restore=False)
+        self._scrub_request(index, rec, self._sb_frac)
+        self._scrub_arm_rest()
+
+    def _scrub_arm_rest(self) -> None:
+        if self._sb_after is not None:
+            try:
+                self.after_cancel(self._sb_after)
+            except ValueError:
+                pass
+        self._sb_after = self.after(self.SCRUB_REST_MS, self._scrub_rest)
+
+    def _scrub_rest(self) -> None:
+        """The pointer stopped. Play on from where it stopped."""
+        self._sb_after = None
+        index = self._sb_index
+        if index is None or index >= len(self._layout):
+            return
+        rec = self._layout[index]["rec"]
+        self._preview_arm(index, at=self._sb_frac * rec.duration)
+
+    def _scrub_request(self, index: int, rec: Rec, frac: float) -> None:
+        """One fetch in flight at a time, and always the newest position.
+
+        A sweep fires motion events far faster than frames can be made.
+        Starting a fetch for each would replay the sweep in slow motion
+        seconds after the hand had finished it; dropping everything but the
+        latest means the picture is always where the pointer is now, which
+        is the only place it is any use."""
+        self._sb_want = frac
+        if self._sb_busy:
+            return
+        self._sb_busy = True
+        want, self._sb_want = self._sb_want, None
+        threading.Thread(target=self._scrub_fetch,
+                         args=(rec, index, want, self._sb_token),
+                         daemon=True).start()
+
+    def _scrub_fetch(self, rec: Rec, index: int, frac: float, token: int) -> None:
+        try:
+            data = self.frames.hover_frame(rec.path, rec.duration, frac)
+        except Exception:
+            data = None
+        self.ui(self._scrub_show, index, frac, data, token)
+
+    def _scrub_show(self, index: int, frac: float, data, token: int) -> None:
+        if token != self._sb_token or self._sb_index != index:
+            return
+        self._sb_busy = False
+        if data and index < len(self._layout) \
+                and self.gallery.find_withtag(f"im{index}"):
+            photo = self._tile_photo(data)
+            if photo is not None:
+                self.gallery.itemconfigure(f"im{index}", image=photo)
+                self._sb_photo = photo
+                self._draw_scrub(index, frac)
+        # A position that arrived while this one was being fetched is the
+        # one the hand is on now, so it goes next.
+        want, self._sb_want = self._sb_want, None
+        if want is not None and index < len(self._layout):
+            self._scrub_request(index, self._layout[index]["rec"], want)
+
+    def _draw_scrub(self, index: int, frac: float) -> None:
+        """Where in the clip this frame is, in a bar and in figures. A bar
+        alone says roughly where; on a seven-minute clip "roughly" is a
+        minute, so the timecode is what makes the sweep usable."""
+        self._draw_progress(index, frac)
+        slot = self._layout[index]
+        canvas = self.gallery
+        x, y = slot["x"], slot["y"]
+        rec = slot["rec"]
+        tags = (slot["tag"], f"pv{index}")
+        # The playhead. Drawn full-height over the picture rather than only
+        # in the bar, so the eye finds it without leaving the frame.
+        px_at = x + int(self.CARD_W * frac)
+        canvas.create_line(px_at, y, px_at, y + self.IMG_H,
+                           fill=T.ACCENT, width=1, tags=tags)
+        text = f"{fmt_short(frac * rec.duration)} / {fmt_short(rec.duration)}"
+        pad, h = px(5), px(18)
+        w = self._badge_font.measure(text) + pad * 2
+        top = y + self.IMG_H - px(23)
+        canvas.create_rectangle(x + px(5), top, x + px(5) + w, top + h,
+                                fill=T.BG, outline="", tags=tags)
+        canvas.create_text(x + px(5) + pad, top + h // 2, text=text,
+                           fill=T.TEXT, font=(T.MONO, pt(10)), anchor="w",
+                           tags=tags)
+
+    def _scrub_reset(self) -> None:
+        """Drop everything in flight and forget where the pointer was."""
+        self._sb_token += 1
+        self._sb_busy = False
+        self._sb_want = None
+        self._sb_x = None
+        self._sb_photo = None
+        if self._sb_after is not None:
+            try:
+                self.after_cancel(self._sb_after)
+            except ValueError:
+                pass
+            self._sb_after = None
+
+    def _scrub_stop(self) -> None:
+        index, self._sb_index = self._sb_index, None
+        self._scrub_reset()
+        if index is None or index >= len(self._layout):
             return
         self.gallery.delete(f"pv{index}")
         resting = self._static_thumb.get(index)
@@ -2072,13 +2357,13 @@ class LibraryTab(ctk.CTkFrame):
         """A small dark plate with a line of mono on it. `x`,`y` is the
         corner named by `anchor` ("nw" or "ne")."""
         canvas = self.gallery
-        pad, h = px(4), px(14)
+        pad, h = px(5), px(18)
         w = self._badge_font.measure(text) + pad * 2
         x0 = x if anchor == "nw" else x - w
         canvas.create_rectangle(x0, y, x0 + w, y + h, fill=T.BG, outline="",
                                 tags=(tag,))
         canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
-                           font=(T.MONO, pt(8)), anchor="w", tags=(tag,))
+                           font=(T.MONO, pt(10)), anchor="w", tags=(tag,))
 
     def _draw_tick(self, index: int, rec: Rec, slot: dict) -> None:
         """The selection tick, on its own tag so selection can be repainted
@@ -2112,7 +2397,7 @@ class LibraryTab(ctk.CTkFrame):
         spec = f"{rec.height}p" if rec.height else "--"
         if rec.fps:
             spec += f"·{rec.fps:.0f}"
-        self._pill(tag, x + px(5), y + self.IMG_H - px(38), spec,
+        self._pill(tag, x + px(5), y + self.IMG_H - px(46), spec,
                    T.DIM if rec.premium else T.FAINT)
 
         # Top right: the rating, as its own colour. Explicit is the loudest
@@ -2126,7 +2411,7 @@ class LibraryTab(ctk.CTkFrame):
                                font=(T.MONO, pt(8), "bold"), tags=(tag,))
 
         # Bottom right: length.
-        self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(19),
+        self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(23),
                    fmt_len(rec.duration), T.DIM, anchor="ne")
 
         # Bottom left: which project already spent this clip. The coloured
@@ -2142,7 +2427,7 @@ class LibraryTab(ctk.CTkFrame):
             # meant to be annotating - so they all speak in the same
             # quiet voice and the rating is the only one left in colour,
             # because the rating is the one that gets scanned for.
-            self._pill(tag, x + px(5), y + self.IMG_H - px(19), label or "used",
+            self._pill(tag, x + px(5), y + self.IMG_H - px(23), label or "used",
                        T.DIM)
         if rec.used_projects:
             canvas.tag_raise(f"used{index}")

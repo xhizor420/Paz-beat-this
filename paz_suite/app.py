@@ -388,6 +388,15 @@ class PazApp:
         shown = getattr(self._tab_object(name), "on_shown", None)
         if shown is not None:
             shown()
+        # And the tabs now behind it get told so. Two tabs hold a player;
+        # a clip still playing on the page you just left is sound with no
+        # picture, coming from somewhere the user cannot see to stop it.
+        for other in TAB_NAMES:
+            if other == name:
+                continue
+            hidden = getattr(self._tab_object(other), "on_hidden", None)
+            if hidden is not None:
+                hidden()
 
     def _on_root_configure(self, event) -> None:
         if event.widget is not self.root:
@@ -538,6 +547,7 @@ class PazApp:
         if not self.convert.on_app_close():
             return
         self.library.on_app_close()
+        self.vault.on_app_close()
         self.cfg.save()
         self.root.destroy()
 

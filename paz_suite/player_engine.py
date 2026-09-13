@@ -33,6 +33,7 @@ import queue
 import subprocess
 import threading
 import time
+import weakref
 
 from PIL import Image, ImageTk
 
@@ -92,6 +93,39 @@ def _reap(proc) -> None:
     threading.Thread(target=run, daemon=True).start()
 
 
+# ── one clip at a time ──────────────────────────────────────────────────
+#
+# Three places in this app can put sound in the air: the Library player,
+# the Vault player and Convert's inspector. Two of them playing at once is
+# two clips over each other through the same speakers, which is nobody's
+# idea of a preview. Anything that plays registers here and claims
+# playback when it starts; everything else stops.
+#
+# Weak references, so a player that has gone away drops out by itself
+# rather than having to be unregistered from teardown paths that might
+# not run. Members need only `playing` and `pause()`.
+
+_PLAYERS: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def joins_playback(who) -> None:
+    _PLAYERS.add(who)
+
+
+def claim_playback(who) -> None:
+    """Stop everything except `who` (and whatever engine `who` drives)."""
+    engine = getattr(who, "engine", None)
+    for player in list(_PLAYERS):
+        if player is who or player is engine:
+            continue
+        try:
+            if player.playing:
+                player.pause()
+        except Exception:
+            # A player mid-teardown must not stop the one starting up.
+            pass
+
+
 class ClipPlayer:
 
     # How much decoded video to keep buffered ahead. Half a second absorbs
@@ -110,6 +144,7 @@ class ClipPlayer:
     def __init__(self, canvas, width: int, height: int,
                  on_tick=None, on_state=None, on_fail=None, on_eof=None):
         self.canvas = canvas
+        joins_playback(self)
         self.view_w = max(int(width) // 2 * 2, 240)
         self.view_h = max(int(height), 135)
         self.frame_bytes = self.view_w * self.view_h * 3
