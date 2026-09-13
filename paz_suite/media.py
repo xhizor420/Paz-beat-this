@@ -359,6 +359,22 @@ class ThumbCache:
     REEL_FPS = 15
     REEL_SECONDS = 11.0    # how much of the clip a hover preview covers
 
+    @staticmethod
+    def reel_start(duration: float, at: float | None = None) -> float:
+        """Where a preview reel should begin.
+
+        `at=None` is the default: a little way in, because the first
+        moments of a clip are often a fade or a title card and that is a
+        poor thing to preview. Given a position, the reel starts THERE -
+        that is what lets resting after a hover-scrub carry on playing
+        from the moment you scrubbed to instead of jumping back.
+        """
+        if duration <= 0:
+            return 0.0
+        if at is None:
+            return duration * 0.08 if duration > 6 else 0.0
+        return max(0.0, min(at, max(duration - 0.5, 0.0)))
+
     def preview_reel(self, path: str, duration: float, width: int,
                       fps: int = REEL_FPS, seconds: float = REEL_SECONDS) -> list:
         """JPEG bytes for a contiguous run of frames, ready to flip at
@@ -366,7 +382,7 @@ class ThumbCache:
         often a fade or a title card, which is a poor thing to preview."""
         if not path or duration <= 0 or not os.path.exists(path):
             return []
-        start = duration * 0.08 if duration > 6 else 0.0
+        start = self.reel_start(duration)
         span = min(seconds, max(duration - start, 0.5))
         cmd = [
             "ffmpeg", "-nostdin", "-v", "error",
@@ -387,7 +403,8 @@ class ThumbCache:
 
     def preview_reel_stream(self, path: str, duration: float, width: int,
                              on_frames, alive=None, fps: int = REEL_FPS,
-                             seconds: float = REEL_SECONDS) -> None:
+                             seconds: float = REEL_SECONDS,
+                             start: float | None = None) -> None:
         """The same reel, but handed over as it decodes rather than in one
         lump at the end.
 
@@ -400,12 +417,13 @@ class ThumbCache:
         `on_frames(list_of_jpegs, done)` is called from this thread each
         time whole frames come out of the pipe, and once more with
         done=True at the end. `alive()`, if given, is polled to abandon a
-        decode whose preview nobody is waiting for any more.
+        decode whose preview nobody is waiting for any more. `start` is
+        where in the clip to begin - see reel_start().
         """
         if not path or duration <= 0 or not os.path.exists(path):
             on_frames([], True)
             return
-        start = duration * 0.08 if duration > 6 else 0.0
+        start = self.reel_start(duration, start)
         span = min(seconds, max(duration - start, 0.5))
         cmd = [
             "ffmpeg", "-nostdin", "-v", "error",

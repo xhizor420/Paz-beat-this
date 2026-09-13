@@ -19,7 +19,7 @@ from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
 from .widgets import PeekWindow, popup_menu
-from .player_engine import ClipPlayer, HAS_AUDIO
+from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback
 from . import uithread
 
 STATE_COLOURS = {
@@ -414,6 +414,9 @@ class ScrubPreview(ctk.CTkFrame):
         self._strip_refs: list = []
         self._strip_marks: list = []
         self._dragging = False
+        # Whether the clip was playing when a scrub began, so releasing the
+        # scrubber can carry on from where it was dropped.
+        self._resume_on_release = False
 
         self.view = tk.Canvas(self, bg=T.INPUT, highlightthickness=0, borderwidth=0,
                                height=340)
@@ -653,6 +656,9 @@ class ScrubPreview(ctk.CTkFrame):
         self._sync_player_size(self.view.winfo_width(), self.view.winfo_height())
         if not self.player_engine.playing:
             self.player_engine.position = self._pos
+            # One clip at a time across the whole app - the Library and
+            # Vault players stand down rather than play over this one.
+            claim_playback(self.player_engine)
         self.player_engine.toggle()
 
     def _toggle_mute(self) -> None:
@@ -851,6 +857,11 @@ class ScrubPreview(ctk.CTkFrame):
         if not self._duration():
             return
         self._ghost_hide()
+        # Playback pauses for the drag - a scrub and the decoder fighting
+        # over the same canvas shows neither cleanly - but clicking the
+        # timeline of a playing clip is a request to watch from there, not
+        # a request to stop. It picks up again on release.
+        self._resume_on_release = self.player_engine.playing
         self.player_engine.pause()
         self._dragging = True
         self._pos = self._time_at(event.x)
@@ -868,6 +879,12 @@ class ScrubPreview(ctk.CTkFrame):
         if not self._dragging:
             return
         self._dragging = False
+        if self._resume_on_release:
+            self._resume_on_release = False
+            # seek() resumes from there by itself, and draws the landing
+            # frame if it turns out nothing was playing after all.
+            self.player_engine.seek(self._pos)
+            return
         self._request_frame(immediate=True)
 
     def _on_hover(self, event):

@@ -30,7 +30,7 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from .theme import T, font, VAULT_LABELS
-from .format import fmt_clock, fmt_len, fmt_size
+from .format import fmt_clock, fmt_short, fmt_size
 from .config import THUMB_DIR
 from .media import fit_frame, round_corners, thumb_key
 from .library_db import (
@@ -38,6 +38,7 @@ from .library_db import (
     vault_clear_project, vault_rename_project, vault_projects_list,
     vault_cover, vault_set_cover, vault_covers,
 )
+from .library_player import InlinePlayer
 from .library_windows import HelpWindow
 from .widgets import popup_menu, menu_rule
 from . import artwork, uithread
@@ -68,6 +69,11 @@ class VaultTab(ctk.CTkFrame):
         self.app = app
         self.root = app.root
         self.cfg = app.cfg
+        # InlinePlayer reaches for these on its tab - the Library tab has
+        # them under these names, so the Vault does too rather than the
+        # player growing a second way to ask.
+        self.frames = app.cache
+        self.peek = app.peek
 
         self._results: dict = {}   # tree iid -> Rec
         self._unmatched: list = []
@@ -275,19 +281,34 @@ class VaultTab(ctk.CTkFrame):
                                          justify="left")
         self.focused_info.grid(row=4, column=0, sticky="ew", pady=(6, 6))
 
-        list_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=10,
+        # The clip list and the player, side by side. A project is a list
+        # of clips you have already spent, and the question you ask of it
+        # is "which one was that?" - a filename and a thumbnail do not
+        # answer that for a four-minute clip, and having to open an
+        # external player to find out is the long way round.
+        bottom = ctk.CTkFrame(panel, fg_color="transparent")
+        bottom.grid(row=5, column=0, sticky="nsew")
+        bottom.grid_rowconfigure(0, weight=1)
+        bottom.grid_columnconfigure(0, weight=1)
+
+        list_wrap = ctk.CTkFrame(bottom, fg_color=T.SURFACE, corner_radius=10,
                                  border_width=1, border_color=T.ACCENT3_DEEP)
-        list_wrap.grid(row=5, column=0, sticky="nsew")
+        list_wrap.grid(row=0, column=0, sticky="nsew")
         list_wrap.grid_columnconfigure(0, weight=1)
         list_wrap.grid_rowconfigure(0, weight=1)
 
-        columns = ("name", "artist", "len")
+        # Two columns, not three: the list now shares this row with the
+        # player, and the artist is on the caption under it. Three columns
+        # in the room left over meant the length was clipped off the end,
+        # which is the one thing on this row you cannot get anywhere else.
+        columns = ("name", "len")
         self.project_tree = ttk.Treeview(list_wrap, style="V.Treeview", columns=columns,
                                          show="headings", selectmode="browse")
-        for key, title, width, anchor in (
-                ("name", "File", 200, "w"), ("artist", "Artist", 110, "w"),
-                ("len", "Length", 64, "e")):
-            self.project_tree.column(key, width=width, minwidth=50, anchor=anchor)
+        for key, title, width, anchor, stretch in (
+                ("name", "File", 150, "w", True),
+                ("len", "Len", 58, "e", False)):
+            self.project_tree.column(key, width=width, minwidth=48,
+                                     anchor=anchor, stretch=stretch)
             self.project_tree.heading(key, text=title)
         self.project_tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         list_scroll = ctk.CTkScrollbar(list_wrap, command=self.project_tree.yview, width=12,
@@ -295,7 +316,111 @@ class VaultTab(ctk.CTkFrame):
         list_scroll.grid(row=0, column=1, sticky="ns", padx=(2, 6), pady=8)
         self.project_tree.configure(yscrollcommand=list_scroll.set)
         self.project_tree.bind("<<TreeviewSelect>>", self._on_project_tree_select)
-        self.project_tree.bind("<Double-1>", lambda e: self._open_focused())
+        self.project_tree.bind("<Double-1>", lambda e: self._play_focused())
+        self.project_tree.bind("<Return>", lambda e: self._play_focused())
+
+        self._build_player(bottom)
+
+    # ── the player ───────────────────────────────────────────────────────
+
+    PLAYER_W = 424
+
+    def _build_player(self, parent) -> None:
+        card = ctk.CTkFrame(parent, fg_color=T.SURFACE, corner_radius=10,
+                            border_width=1, border_color=T.ACCENT3_DEEP)
+        card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        card.grid_columnconfigure(0, weight=1)
+        self._player_card = card
+
+        self.player = InlinePlayer(card, self)
+        self.player.frame.grid(row=0, column=0, padx=8, pady=(8, 4))
+        self.player_caption = ctk.CTkLabel(
+            card, text="Pick a clip to see it", font=font(10, mono=True),
+            text_color=T.FAINT, anchor="w", wraplength=self.PLAYER_W - 16,
+            justify="left")
+        self.player_caption.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        # Sized once the panel has a real width, not from the numbers above.
+        self.after(250, self._fit_player)
+        self.bind("<Configure>", lambda e: self._player_resize(), add="+")
+
+    def _player_resize(self) -> None:
+        if getattr(self, "_player_job", None):
+            try:
+                self.after_cancel(self._player_job)
+            except ValueError:
+                pass
+        self._player_job = self.after(220, self._fit_player)
+
+    def _fit_player(self) -> None:
+        """Give the player whatever room the window can spare.
+
+        The clip list needs a readable minimum and the rest is the
+        player's, so the picture grows with the window instead of staying
+        the size it happened to be built at. Height has a say too: a
+        16:9 picture as wide as the panel allows is taller than a short
+        window has room for, and the overflow goes exactly where it is
+        least welcome - the transport buttons and the caption, off the
+        bottom edge."""
+        self._player_job = None
+        try:
+            room = int(self._player_card.master.winfo_width())
+            tall = int(self._player_card.master.winfo_height())
+        except tk.TclError:
+            return
+        if room <= 1:
+            self.after(300, self._fit_player)
+            return
+        width = max(min(room - self.LIST_MIN_W, int(room * 0.62)), 300)
+        # Everything in the card that isn't the picture - seek bar,
+        # buttons, caption, padding - measured rather than guessed, so
+        # the fit survives a change to any of them.
+        chrome = max(self._player_chrome(), 60)
+        picture = max(tall - chrome, 135)
+        width = max(min(width, int(picture * 16 / 9)), 300)
+        self.player.set_size(width - 20)
+        self.player_caption.configure(wraplength=width - 30)
+
+    def _player_chrome(self) -> int:
+        try:
+            return (int(self._player_card.winfo_reqheight())
+                    - int(self.player.stack.winfo_reqheight()))
+        except tk.TclError:
+            return 0
+
+    # A clip list narrower than this is not a list any more - the file
+    # name column alone needs most of it.
+    LIST_MIN_W = 380
+
+    def _play_focused(self) -> None:
+        """Double-click plays it here, the same as in the Library."""
+        if self._focused_index is None:
+            return
+        self._show_in_player(self._project_clips[self._focused_index])
+        self.player.play()
+
+    def _show_in_player(self, rec) -> None:
+        player = getattr(self, "player", None)
+        if player is None:
+            return
+        player.show_rec(rec)
+        if rec is None:
+            self.player_caption.configure(text="Pick a clip to see it",
+                                          text_color=T.FAINT)
+            return
+        bits = [rec.name]
+        if rec.width:
+            bits.append(f"{rec.width}x{rec.height}")
+        bits.append(fmt_clock(rec.duration))
+        if rec.artists:
+            bits.append(", ".join(rec.artists[:2]))
+        self.player_caption.configure(text="  ·  ".join(bits), text_color=T.DIM)
+
+    def on_hidden(self) -> None:
+        """Another tab is in front now. Sound coming out of a page nobody
+        can see is worse than no sound at all."""
+        player = getattr(self, "player", None)
+        if player is not None and player.playing:
+            player.pause()
 
     # ── status ──────────────────────────────────────────────────────────
 
@@ -353,7 +478,7 @@ class VaultTab(ctk.CTkFrame):
             self.tree.insert("", "end", iid=iid, values=(
                 rec.name, ", ".join(rec.artists[:2]) or "--",
                 f"{rec.width}x{rec.height}" if rec.width else "--",
-                fmt_len(rec.duration), used))
+                fmt_short(rec.duration), used))
 
         bits = [f"{len(matched)} found"]
         if self._unmatched:
@@ -625,6 +750,7 @@ class VaultTab(ctk.CTkFrame):
             self.focused_info.configure(text="")
             self.project_tree.delete(*self.project_tree.get_children())
             self._project_rows = {}
+            self._show_in_player(None)
             return
         count = len(self._project_clips)
         self.detail_header.configure(
@@ -634,9 +760,14 @@ class VaultTab(ctk.CTkFrame):
         if not self._project_clips:
             self._draw_strip_placeholder("Nothing marked used in this project yet")
             self.focused_info.configure(text="")
+            self._show_in_player(None)
             return
         self._draw_strip()
         self._update_focused_info()
+        # The first clip is already the focused one, so the player should
+        # be holding it rather than sitting empty next to a full list.
+        if self._focused_index is not None:
+            self._show_in_player(self._project_clips[self._focused_index])
 
     def _fill_project_tree(self) -> None:
         self.project_tree.delete(*self.project_tree.get_children())
@@ -645,7 +776,7 @@ class VaultTab(ctk.CTkFrame):
             iid = f"p{index}"
             self._project_rows[iid] = rec
             self.project_tree.insert("", "end", iid=iid, values=(
-                rec.name, ", ".join(rec.artists[:2]) or "--", fmt_len(rec.duration)))
+                rec.name, fmt_short(rec.duration)))
         if self._focused_index is not None and self._project_clips:
             self.project_tree.selection_set(f"p{self._focused_index}")
 
@@ -662,6 +793,7 @@ class VaultTab(ctk.CTkFrame):
             self._focused_index = index
             self._update_strip_highlight(old, index)
             self._update_focused_info()
+            self._show_in_player(rec)
 
     def _open_focused(self) -> None:
         if self._focused_index is None:
@@ -675,14 +807,14 @@ class VaultTab(ctk.CTkFrame):
             self.focused_info.configure(text="")
             return
         rec = self._project_clips[self._focused_index]
-        bits = [rec.name, f"{rec.width}x{rec.height}" if rec.width else "--",
-               fmt_clock(rec.duration), fmt_size(rec.size)]
-        if rec.artists:
-            bits.append(", ".join(rec.artists[:3]))
+        # What the caption under the player doesn't already say. Repeating
+        # the name, size and length either side of the same panel is two
+        # lines doing one line's work.
+        bits = [fmt_size(rec.size), rec.folder or ""]
         if len(rec.used_projects) > 1:
             others = [p for p in rec.used_projects if p != self._selected_project]
             bits.append("also used: " + ", ".join(others))
-        self.focused_info.configure(text="  ·  ".join(bits))
+        self.focused_info.configure(text="  ·  ".join(b for b in bits if b))
 
     # ── thumbnail roll ───────────────────────────────────────────────────
 
@@ -753,6 +885,7 @@ class VaultTab(ctk.CTkFrame):
         self._focused_index = index
         self._update_strip_highlight(old, index)
         self._update_focused_info()
+        self._show_in_player(self._project_clips[index])
         iid = f"p{index}"
         if iid in self._project_rows:
             self.project_tree.selection_set(iid)
@@ -797,6 +930,16 @@ class VaultTab(ctk.CTkFrame):
         self._run_lookup()
 
     def on_app_close(self) -> bool:
+        # mpv and VLC are separate processes embedded in our window.
+        # Killing the window usually takes them with it, but "usually" is
+        # not a shutdown.
+        player = getattr(self, "player", None)
+        shutdown = getattr(getattr(player, "engine", None), "shutdown", None)
+        if shutdown is not None:
+            try:
+                shutdown()
+            except Exception:
+                pass
         return True
 
     def after_settings_saved(self) -> None:

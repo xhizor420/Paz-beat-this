@@ -1,4 +1,4 @@
-"""The embedded clip player for the Library tab.
+"""The embedded clip player, used by the Library and the Vault.
 
 Idle it shows the selected clip's thumbnail. Press Play and the shared
 :class:`~paz_suite.player_engine.ClipPlayer` engine takes over — seek bar,
@@ -21,7 +21,7 @@ from .theme import T, font, pt, px
 from .format import fmt_clock, fmt_short
 from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
-from .player_engine import ClipPlayer, HAS_AUDIO
+from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback, joins_playback
 from .mpv_player import MpvPlayer, available as mpv_available
 from .vlc_player import VlcPlayer, available as vlc_available
 from . import uithread
@@ -35,6 +35,9 @@ class InlinePlayer:
     def __init__(self, parent, tab):
         self.tab = tab
         self.rec = None
+        # One clip plays at a time, across the whole app - see
+        # player_engine.claim_playback.
+        joins_playback(self)
         self._dragging = False
         self._peek_after = None
         self._peek_token = 0
@@ -597,6 +600,7 @@ class InlinePlayer:
         if self.rec is None:
             return
         self._warn_if_sound_will_drift()
+        claim_playback(self)
         self.engine.play()
 
     def pause(self) -> None:
@@ -605,6 +609,8 @@ class InlinePlayer:
     def toggle(self) -> None:
         if self.rec is None:
             return
+        if not self.playing:
+            claim_playback(self)
         self.engine.toggle()
 
     def toggle_loop(self) -> None:
