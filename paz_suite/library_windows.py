@@ -124,8 +124,10 @@ class HelpWindow(ctk.CTkToplevel):
          "more than one - so browsing later shows at a glance what's "
          "already been spent. The PROJECTS group in the sidebar lists every "
          "project; click one to jump straight to its clips."),
-        ("Player", "Scales with the window; Theater mode (Ctrl+T) gives it "
-         "about half the window and collapses the tag rail. Playback uses "
+        ("Player", "Drag the handle down the left edge of this column to set "
+         "how big the player is; double-click it to go back to automatic, "
+         "which fills the column. Theater mode (Ctrl+T) gives it "
+         "about half the window and puts the tag list away. Playback uses "
          "the converted copy, which is far cheaper to decode; when a clip "
          "also has a 4K/60+ copy in the edit pool, the 4K button next to "
          "Loop switches to it and remembers the choice."),

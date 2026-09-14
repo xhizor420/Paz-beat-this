@@ -139,6 +139,10 @@ class AppConfig:
     # quietly stay current without ever re-checking the whole library
     # at once. 0 disables the ambient refresh (manual only).
     library_stale_refresh_budget: int = 40
+    # Width of the Library's inspector column in pixels, as dragged by its
+    # handle. 0 means "work it out from the window", which is the default
+    # and what the handle's double-click restores.
+    panel_width_px: int = 0
 
     # ── Performance (tune upward as the library grows) ──────────────────
     # In-memory ffprobe result cache, shared by both tabs. Each entry is a

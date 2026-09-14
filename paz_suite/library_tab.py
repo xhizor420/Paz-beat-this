@@ -242,7 +242,7 @@ class LibraryTab(ctk.CTkFrame):
         controls for something most searches never touch.
         """
         bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0)
-        bar.grid(row=0, column=0, columnspan=3, sticky="ew")
+        bar.grid(row=0, column=0, columnspan=4, sticky="ew")
         bar.grid_columnconfigure(1, weight=1)
 
         # The search field rests small and takes the row when you use it -
@@ -691,7 +691,19 @@ class LibraryTab(ctk.CTkFrame):
         # screen: the share said 26% of a 3840px window, the cap said
         # 660px, and the cap won - so the panel stopped growing while the
         # window kept going and the video sat in the middle of it.
-        return px(1000)
+        return px(1400)
+
+    # The most of the window the inspector may take when it grows to use
+    # the height below the picture (see panel_width). The gallery still
+    # has to be a gallery.
+    PANEL_SHARE_MAX = 0.42
+    # Room kept for the tag list when the panel grows. Tags are how a
+    # clip gets found again; a player that ate them would be a worse tab,
+    # not a better one.
+    TAGS_MIN_H = 190
+    # What the tag list keeps when the width was dragged by hand - see
+    # _picture_height. Less, because that drag said what it wanted.
+    TAGS_DRAGGED_H = 120
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -721,14 +733,130 @@ class LibraryTab(ctk.CTkFrame):
         # theater, which exists precisely to be the big one.
         base = int(max(px(self.PANEL_MIN), min(total * 0.28, self.panel_cap)))
         if not self.cfg.theater:
-            return base
+            # A width dragged by hand outranks every rule here: it is the
+            # one number that knows what this person wants on this screen.
+            chosen = int(getattr(self.cfg, "panel_width_px", 0) or 0)
+            if chosen:
+                return max(px(self.PANEL_MIN),
+                           min(chosen, int(total * 0.60), self.PANEL_MAX))
+            return min(max(base, self._width_that_uses_the_height()),
+                       int(total * self.PANEL_SHARE_MAX), self.panel_cap)
         theater = max(base + self.THEATER_BONUS, int(total * 0.60))
         return min(theater, self.PANEL_MAX)
 
+    def _width_that_uses_the_height(self) -> int:
+        """How wide the panel would have to be for the picture to fill the
+        height the column actually has.
+
+        A 16:9 picture in a fixed-width column is as tall as that width
+        allows and not a pixel more, so a tall window left a band of empty
+        panel under the card - the picture was a third of the height of
+        the box it sat in. Width is what buys height here: the panel grows
+        until the picture, its controls, the caption and a usable tag list
+        fill the column, and no further. Everything below is measured off
+        the live widgets rather than guessed, so it stays right when any
+        of them changes.
+        """
+        try:
+            room = int(self.detail_panel.winfo_height())
+            card = int(self.player.frame.master.winfo_height())
+            picture = int(self.player.stack.winfo_height())
+            head = int(self.detail_head.master.winfo_height())
+        except (AttributeError, tk.TclError):
+            return 0
+        if room < 200 or picture < 50 or card < picture:
+            return 0
+        # Everything in the column that is not the picture: the player's
+        # own bar and buttons, the name and meta lines, the action row,
+        # the header strip, the TAGS heading, and the tag list itself.
+        chrome = (card - picture) + head + px(46) + px(self.TAGS_MIN_H)
+        usable = room - chrome
+        if usable <= 0:
+            return 0
+        return int(usable * 16 / 9) + 26
+
+    # ── the handle between the gallery and the inspector ─────────────────
+    #
+    # Every rule for how wide this column should be is a guess about
+    # somebody else's screen, their library and what they are doing right
+    # now. The handle ends the guessing: drag it and the player is the
+    # size you want it, on your monitor. Double-click goes back to the
+    # worked-out width.
+
+    GRIP_W = 7
+
+    def _build_grip(self):
+        grip = tk.Frame(self, width=self.GRIP_W, bg=T.BG, cursor="sb_h_double_arrow",
+                        bd=0, highlightthickness=0)
+        grip.grid(row=1, column=2, sticky="ns", pady=(10, 0))
+        grip.grid_propagate(False)
+        self._grip = grip
+        if self.cfg.theater:
+            grip.grid_remove()
+        # A line down the middle, so the handle reads as something to take
+        # hold of rather than a gap between two panels.
+        bar = tk.Frame(grip, width=1, bg=T.LINE, bd=0, highlightthickness=0)
+        bar.place(relx=0.5, rely=0.0, relheight=1.0, anchor="n")
+        self._grip_bar = bar
+        for widget in (grip, bar):
+            widget.configure(cursor="sb_h_double_arrow")
+            widget.bind("<Enter>", lambda e: self._grip_glow(True))
+            widget.bind("<Leave>", lambda e: self._grip_glow(False))
+            widget.bind("<B1-Motion>", self._grip_drag)
+            widget.bind("<ButtonRelease-1>", self._grip_release)
+            widget.bind("<Double-Button-1>", self._grip_reset)
+
+    def _show_grip(self, shown: bool) -> None:
+        """Theater sets its own width, so there is nothing to drag."""
+        try:
+            self._grip.grid() if shown else self._grip.grid_remove()
+        except tk.TclError:
+            pass
+
+    def _grip_glow(self, on: bool) -> None:
+        try:
+            self._grip_bar.configure(bg=T.ACCENT if on else T.LINE,
+                                     width=2 if on else 1)
+        except tk.TclError:
+            pass
+
+    def _grip_limits(self) -> tuple:
+        try:
+            total = int(self.root.winfo_width())
+        except tk.TclError:
+            total = 1680
+        return px(self.PANEL_MIN), min(int(total * 0.60), self.PANEL_MAX)
+
+    def _grip_drag(self, event) -> None:
+        """Dragging left widens the inspector, dragging right gives the
+        room back to the gallery."""
+        if self.cfg.theater:
+            return
+        try:
+            right = self.winfo_rootx() + self.winfo_width() - px(12)
+        except tk.TclError:
+            return
+        low, high = self._grip_limits()
+        self.cfg.panel_width_px = int(max(low, min(right - event.x_root, high)))
+        self._fit_panel()
+
+    def _grip_release(self, _event=None) -> None:
+        if self.cfg.panel_width_px:
+            self.cfg.save()
+
+    def _grip_reset(self, _event=None) -> None:
+        """Back to the width the window works out for itself."""
+        self.cfg.panel_width_px = 0
+        self.cfg.save()
+        self._fit_panel()
+        self.set_status("Inspector width back to automatic - drag the handle "
+                        "to set your own.", T.DIM)
+
     def _build_details(self):
+        self._build_grip()
         panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0, width=px(self.PANEL_MIN))
         self.detail_panel = panel
-        panel.grid(row=1, column=2, sticky="nse", padx=(0, 12), pady=(10, 0))
+        panel.grid(row=1, column=3, sticky="nse", padx=(0, 12), pady=(10, 0))
         panel.grid_propagate(False)
         panel.grid_rowconfigure(3, weight=1)
         panel.grid_columnconfigure(0, weight=1)
@@ -782,9 +910,10 @@ class LibraryTab(ctk.CTkFrame):
         dbtn("Copy name", lambda: self._copy(self.selected.name)
              if self.selected else None, T.DIM, 96)
 
-        ctk.CTkLabel(panel, text="TAGS · click to search · right-click for more",
-                     font=font(11, "bold"), text_color=T.FAINT, anchor="w"
-                     ).grid(row=2, column=0, sticky="ew", padx=6, pady=(14, 5))
+        self.detail_tags_head = ctk.CTkLabel(
+            panel, text="TAGS · click to search · right-click for more",
+            font=font(11, "bold"), text_color=T.FAINT, anchor="w")
+        self.detail_tags_head.grid(row=2, column=0, sticky="ew", padx=6, pady=(14, 5))
 
         self.detail_tags = ctk.CTkScrollableFrame(
             panel, fg_color=T.SURFACE, corner_radius=12, border_width=1,
@@ -792,6 +921,13 @@ class LibraryTab(ctk.CTkFrame):
             scrollbar_button_hover_color=T.FAINT)
         self.detail_tags.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
         self.detail_tags.grid_columnconfigure(0, weight=1)
+        # Theater is remembered between runs, so the column has to open in
+        # whichever state it was left in.
+        self._show_tags_panel(not self.cfg.theater)
+        # The column's own height is what decides how big the picture can
+        # be, and that is not known until it has been laid out - nor after
+        # the window changes shape. Re-fit whenever it does.
+        panel.bind("<Configure>", lambda e: self.on_root_resize(), add="+")
 
     def _apply_brand(self):
         """Nothing to relabel any more: the actions live in the ⋯ menu,
@@ -2521,14 +2657,55 @@ class LibraryTab(ctk.CTkFrame):
 
     def _fit_panel(self, _event=None):
         width = self.panel_width()
+        inner = width - 26
+        height = self._picture_height(inner)
+        # Both numbers are read off the live column, and setting them
+        # changes the column - so a fit that would change nothing stops
+        # here rather than going round again.
+        if (width, height) == getattr(self, "_panel_fit", None):
+            return
+        self._panel_fit = (width, height)
         try:
             self.detail_panel.configure(width=width)
         except tk.TclError:
             return
-        inner = width - 26
-        self.player.set_size(inner)
+        # Fit the height too. In theater the column is shorter than a
+        # full-width 16:9 picture needs, and sizing on width alone pushed
+        # the transport buttons and the tag list off the bottom of the
+        # window - the controls for the thing you had just made bigger.
+        #
+        # And when it is the height that runs out first, the picture stops
+        # at the width that height can fill. A black box wider than the
+        # picture in it is not a bigger picture, it is bars either side of
+        # the same one - which is what dragging the handle past the useful
+        # point would otherwise produce.
+        self.player.set_size(min(inner, int(height * 16 / 9)), height)
         for label in (self.detail_name, self.detail_meta):
             label.configure(wraplength=inner - 22)
+
+    def _picture_height(self, inner: int) -> int:
+        """The tallest the picture may be at this width: 16:9, unless the
+        column is too short for that, in which case what the column has."""
+        ideal = int(inner * 9 / 16)
+        try:
+            room = int(self.detail_panel.winfo_height())
+            card = int(self.player.frame.master.winfo_height())
+            picture = int(self.player.stack.winfo_height())
+            head = int(self.detail_head.master.winfo_height())
+        except (AttributeError, tk.TclError):
+            return ideal
+        if room < 200 or picture < 50 or card < picture:
+            return ideal
+        chrome = (card - picture) + head + px(10)
+        if not self.cfg.theater:
+            # A width set by hand is a request for a bigger picture, so the
+            # tag list gives up most of what it keeps in reserve - but not
+            # all of it: a tag list two chips tall is worse than useless,
+            # and this is still the panel clips get found from.
+            reserve = (self.TAGS_DRAGGED_H if getattr(self.cfg, "panel_width_px", 0)
+                       else self.TAGS_MIN_H)
+            chrome += px(46) + px(reserve)
+        return max(min(ideal, room - chrome), 135)
 
     def on_root_resize(self):
         if getattr(self, "_panel_job", None):
@@ -2543,11 +2720,27 @@ class LibraryTab(ctk.CTkFrame):
         self.cfg.save()
         if self.cfg.theater and self.cfg.sidebar_open:
             self.toggle_sidebar(force=False)
+        self._show_tags_panel(not self.cfg.theater)
+        self._show_grip(not self.cfg.theater)
         self.theater_btn.configure(
             fg_color=T.ACCENT_DEEP if self.cfg.theater else T.BTN,
             text_color=T.ACCENT if self.cfg.theater else T.DIM)
         self._fit_panel()
         self.after(150, self.render_page)
+
+    def _show_tags_panel(self, shown: bool) -> None:
+        """Theater gives the whole column to the picture.
+
+        The tag list does not shrink gracefully - squeezed into the
+        fifty pixels theater left it, it was a scrollbar with a sliver of
+        chips beside it, which is neither a tag list nor more room for the
+        video. So it stands down entirely while theater is on, and comes
+        back the moment it is off."""
+        for widget in (self.detail_tags_head, self.detail_tags):
+            try:
+                widget.grid() if shown else widget.grid_remove()
+            except tk.TclError:
+                pass
 
     def _render_details(self):
         for child in self.detail_tags.winfo_children():
@@ -3239,6 +3432,18 @@ class LibraryTab(ctk.CTkFrame):
                 todo.append(rec.pid)
 
         budget = len(all_pids) if full else self.cfg.library_stale_refresh_budget
+        # The ambient fetch is budgeted on BOTH halves, not just the
+        # refreshes. An untagged batch is however big it is - a first run
+        # against this library is ten thousand posts, which at the rate
+        # e621 allows is hours - and while it runs the tab is busy, which
+        # means Sync and Fetch are both refused. Quietly tagging what is
+        # new must not lock the tab for an evening: take a batch now, the
+        # rest next time, and say how many are left. Pressing Fetch
+        # (full=True) is the unbudgeted way, and is still there.
+        waiting = 0
+        if not full and len(todo) > budget:
+            waiting = len(todo) - budget
+            todo = todo[:budget]
         refreshing = self.emeta.due_for_refresh(all_pids, budget, exclude=todo)
         todo.extend(refreshing)
 
@@ -3246,7 +3451,8 @@ class LibraryTab(ctk.CTkFrame):
             self.set_status("Every post ID is already tagged or cached, and "
                             "nothing is due for a refresh yet.", T.OK)
             return
-        self._run_fetch(todo, len(refreshing))
+        note = f"{len(todo)} posts · {waiting:,} more next time" if waiting else ""
+        self._run_fetch(todo, len(refreshing), note)
 
     # ── fetching a few, on demand ───────────────────────────────────────
     #

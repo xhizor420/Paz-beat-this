@@ -209,7 +209,6 @@ def test_starting_mpv_never_blocks_the_caller(player, monkeypatch):
 
 
 def test_a_failed_start_reports_back_instead_of_hanging(player, monkeypatch):
-    import time as _t
     told = []
     player.on_unavailable = told.append
     player._post = lambda fn, *a: fn(*a)

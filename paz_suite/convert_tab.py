@@ -1256,7 +1256,7 @@ class ConvertTab(ctk.CTkFrame):
             ok, error, encoder = convert(
                 task.source, task.target, self.cfg,
                 progress_cb=on_progress, cancel=self.cancel,
-                log=lambda m, l="info": self.log(f"  {task.name}: {m}", l))
+                log=lambda m, level="info": self.log(f"  {task.name}: {m}", level))
         except Cancelled:
             task.state = "cancelled"
             self.ui(self.table.set_row, task.iid, state="cancelled")

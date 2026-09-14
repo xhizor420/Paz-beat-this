@@ -184,7 +184,8 @@ def term_hits(rec: Rec, kind: str, value: str) -> bool:
     if kind in ("copyright", "series"):
         return any(value == c or fnmatch.fnmatch(c, value) for c in rec.copyrights)
     if kind == "lore":
-        return any(value == l or fnmatch.fnmatch(l, value) for l in rec.lore)
+        return any(value == item or fnmatch.fnmatch(item, value)
+                   for item in rec.lore)
     if kind == "rating":
         return rec.rating == value[:1]
     if kind == "folder":
