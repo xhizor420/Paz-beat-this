@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .theme import T, font, px
+from .theme import T, font, px, unscaled
 from .files import is_ignored_dir, open_in_explorer
 from .convert_engine import verify
 from . import uithread
@@ -192,7 +192,8 @@ class HelpWindow(ctk.CTkToplevel):
             return
         self._wrapped_at = width
         for label in self._paragraphs:
-            label.configure(wraplength=width)
+            # The window measured itself in real pixels; CTk wants its own.
+            label.configure(wraplength=unscaled(width))
 
 
 class FoldersWindow(ctk.CTkToplevel):

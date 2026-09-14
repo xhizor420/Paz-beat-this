@@ -29,7 +29,7 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, VAULT_LABELS
+from .theme import T, font, unscaled, VAULT_LABELS
 from .format import fmt_clock, fmt_short, fmt_size
 from .config import THUMB_DIR
 from .media import fit_frame, round_corners, thumb_key
@@ -328,7 +328,11 @@ class VaultTab(ctk.CTkFrame):
     def _build_player(self, parent) -> None:
         card = ctk.CTkFrame(parent, fg_color=T.SURFACE, corner_radius=10,
                             border_width=1, border_color=T.ACCENT3_DEEP)
-        card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        # "new", not "nsew": a 16:9 picture cannot use the height a tall
+        # window gives this row, and a card stretched down to fill it is an
+        # empty box under the caption. It hugs its contents, and the height
+        # goes to the clip list beside it, which can always use more rows.
+        card.grid(row=0, column=1, sticky="new", padx=(10, 0))
         card.grid_columnconfigure(0, weight=1)
         self._player_card = card
 
@@ -370,7 +374,10 @@ class VaultTab(ctk.CTkFrame):
         if room <= 1:
             self.after(300, self._fit_player)
             return
-        width = max(min(room - self.LIST_MIN_W, int(room * 0.62)), 300)
+        # As wide as the row can spare once the clip list has its minimum.
+        # A share of the row was the old rule and it left the picture small
+        # on a wide window while the space went nowhere.
+        width = max(room - self.LIST_MIN_W, 300)
         # Everything in the card that isn't the picture - seek bar,
         # buttons, caption, padding - measured rather than guessed, so
         # the fit survives a change to any of them.
@@ -378,7 +385,9 @@ class VaultTab(ctk.CTkFrame):
         picture = max(tall - chrome, 135)
         width = max(min(width, int(picture * 16 / 9)), 300)
         self.player.set_size(width - 20)
-        self.player_caption.configure(wraplength=width - 30)
+        # unscaled(): the width came off the screen, and CTk scales what
+        # it is given a second time.
+        self.player_caption.configure(wraplength=unscaled(width - 30))
 
     def _player_chrome(self) -> int:
         try:
