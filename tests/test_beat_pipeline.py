@@ -130,10 +130,10 @@ def test_edl_is_one_event_per_beat_in_resolve_marker_form(track, stubbed):
 
     assert edl.startswith("TITLE: ")
     assert "FCM: NON-DROP FRAME" in edl
-    comments = [l for l in edl.splitlines() if l.startswith(" |C:")]
+    comments = [line for line in edl.splitlines() if line.startswith(" |C:")]
     assert len(comments) == len(result.beats)
-    assert all("|M:" in l and "|D:1" in l for l in comments)
-    assert all("ResolveColor" in l for l in comments)
+    assert all("|M:" in line and "|D:1" in line for line in comments)
+    assert all("ResolveColor" in line for line in comments)
     # No `* LOC:` lines - Resolve's marker import does not read them.
     assert "* LOC:" not in edl
 
