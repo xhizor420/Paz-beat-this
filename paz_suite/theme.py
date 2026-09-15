@@ -199,6 +199,27 @@ def px(value: float) -> int:
     return int(round(value * T.SCALE))
 
 
+def unscaled(value: float) -> int:
+    """Real screen pixels -> the units CustomTkinter wants.
+
+    CTk multiplies every geometry option it is handed by the widget
+    scaling, so a size that came off the screen (winfo_width) or was built
+    with px() gets scaled a SECOND time on the way back into a CTk widget:
+    at 150% the widget comes out half as wide again as the number asked
+    for. That is how the inspector column ended up far wider than the
+    picture inside it, with a band of empty panel either side, and how
+    theater pushed its own button off the edge of the window.
+
+    Raw Tk widgets - canvases, plain frames - are not scaled and take real
+    pixels as they are. This is only for CTk's own width, height and
+    wraplength options, and only when the number has to line up with
+    something measured. A hand-drawn design number still goes in as it is
+    and lets CTk do the one scaling it expects to do.
+    """
+    scale = T.SCALE or 1.0
+    return max(int(round(value / scale)), 1)
+
+
 def font(size: int = 12, weight: str = "normal", mono: bool = False,
          display: bool = False) -> ctk.CTkFont:
     if mono:

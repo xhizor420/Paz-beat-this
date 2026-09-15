@@ -18,7 +18,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, lens_photo, mix, pt, px, LIBRARY_LABELS
+from .theme import T, font, lens_photo, mix, pt, px, unscaled, LIBRARY_LABELS
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
@@ -314,7 +314,9 @@ class LibraryTab(ctk.CTkFrame):
         if not opening:
             return px(self.SEARCH_REST)
         try:
-            room = self.search_box.master.winfo_width()
+            # The row is measured in real pixels; everything else here is
+            # in CTk's units, which is what the field's width option takes.
+            room = unscaled(self.search_box.master.winfo_width())
         except tk.TclError:
             room = px(self.SEARCH_REST)
         reserved = px(self.SEARCH_REST) + px(240)
@@ -340,7 +342,9 @@ class LibraryTab(ctk.CTkFrame):
                 pass
             self._search_anim = None
         try:
-            current = self.search_box.winfo_width()
+            # In CTk's units, like the target - mixing the two made the
+            # field jump wider before it shrank.
+            current = unscaled(self.search_box.winfo_width())
         except tk.TclError:
             return
         if step >= 8 or abs(target - current) <= 2:
@@ -522,6 +526,12 @@ class LibraryTab(ctk.CTkFrame):
         # to rebuild them.
         self._rebuild_saved_chips()
         self.quick_chips = {}
+        self._quick_hidden: set = set()
+        # Chips with something to show, in row order. Kept explicitly
+        # rather than read back off the widgets: a chip that was packed a
+        # moment ago does not report itself as mapped until the geometry
+        # manager has run, so asking Tk would drop it from the fit.
+        self._quick_live: list = []
         for key, text, token in (
                 # Unused leads: on a library this size the question is
                 # almost always "what haven't I already spent".
@@ -536,7 +546,16 @@ class LibraryTab(ctk.CTkFrame):
                                  text_color=T.DIM,
                                  command=lambda t=token: self.add_token(t))
             chip.pack(side="left", padx=(0, px(6)))
-            self.quick_chips[key] = (chip, text)
+            self.quick_chips[key] = (chip, text, token)
+
+        # Everything that did not fit lives behind this - see
+        # _fit_quick_chips. A chip sliced in half by the edge of the panel
+        # is not a filter, it is a rendering fault.
+        self._quick_more = ctk.CTkButton(
+            self._quick_row, text="⋯", height=22, width=px(34),
+            corner_radius=11, font=font(10), fg_color=T.BTN,
+            hover_color=T.BTN_HOV, text_color=T.FAINT,
+            command=self._quick_menu)
 
         pager = ctk.CTkFrame(info, fg_color="transparent")
         pager.grid(row=0, column=2, sticky="e", padx=(14, 0))
@@ -697,6 +716,10 @@ class LibraryTab(ctk.CTkFrame):
     # the height below the picture (see panel_width). The gallery still
     # has to be a gallery.
     PANEL_SHARE_MAX = 0.42
+    # The same, for theater. Wide enough to be the point of theater,
+    # narrow enough that the gallery and this panel's own way out are
+    # both still on the screen.
+    THEATER_SHARE_MAX = 0.72
     # Room kept for the tag list when the panel grows. Tags are how a
     # clip gets found again; a player that ate them would be a worse tab,
     # not a better one.
@@ -741,8 +764,18 @@ class LibraryTab(ctk.CTkFrame):
                            min(chosen, int(total * 0.60), self.PANEL_MAX))
             return min(max(base, self._width_that_uses_the_height()),
                        int(total * self.PANEL_SHARE_MAX), self.panel_cap)
-        theater = max(base + self.THEATER_BONUS, int(total * 0.60))
-        return min(theater, self.PANEL_MAX)
+        # Theater fills the height too, for the same reason the normal
+        # width does: a 16:9 picture as wide as 60% of the window still
+        # left a band of empty column under the buttons on a tall screen.
+        theater = max(base + self.THEATER_BONUS, int(total * 0.60),
+                      self._width_that_uses_the_height())
+        # A share of the window, not a fixed number of pixels: 1900px is
+        # most of a laptop screen and half of a 4K one, so a fixed ceiling
+        # either swallows the window or stops theater being the big one,
+        # depending on whose desk it is. The share leaves the gallery
+        # enough to stay a gallery - and leaves this panel's own Theater
+        # button on screen, which is the way back out.
+        return min(theater, int(total * self.THEATER_SHARE_MAX))
 
     def _width_that_uses_the_height(self) -> int:
         """How wide the panel would have to be for the picture to fill the
@@ -768,8 +801,11 @@ class LibraryTab(ctk.CTkFrame):
             return 0
         # Everything in the column that is not the picture: the player's
         # own bar and buttons, the name and meta lines, the action row,
-        # the header strip, the TAGS heading, and the tag list itself.
-        chrome = (card - picture) + head + px(46) + px(self.TAGS_MIN_H)
+        # the header strip, and - unless theater has put it away - the
+        # TAGS heading and the tag list under it.
+        chrome = (card - picture) + head
+        if not self.cfg.theater:
+            chrome += px(46) + px(self.TAGS_MIN_H)
         usable = room - chrome
         if usable <= 0:
             return 0
@@ -854,7 +890,11 @@ class LibraryTab(ctk.CTkFrame):
 
     def _build_details(self):
         self._build_grip()
-        panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0, width=px(self.PANEL_MIN))
+        # PANEL_MIN, not px(PANEL_MIN): CTk scales what it is handed, so
+        # the px() would be applied twice and the column would open wider
+        # than the first real fit is about to make it.
+        panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0,
+                             width=self.PANEL_MIN)
         self.detail_panel = panel
         panel.grid(row=1, column=3, sticky="nse", padx=(0, 12), pady=(10, 0))
         panel.grid_propagate(False)
@@ -1206,7 +1246,8 @@ class LibraryTab(ctk.CTkFrame):
             "widescreen": sum(1 for r in self.records if r.orientation == "widescreen"),
             "square": sum(1 for r in self.records if r.orientation == "square"),
         }
-        for key, (chip, label) in self.quick_chips.items():
+        self._quick_live = []
+        for key, (chip, label, _token) in self.quick_chips.items():
             count = counts.get(key)
             if count is None:
                 continue
@@ -1223,8 +1264,10 @@ class LibraryTab(ctk.CTkFrame):
             text = f"{label}  {count}"
             chip.configure(text=text, text_color=T.DIM, state="normal",
                            width=self._quick_font.measure(text) + px(26))
+            self._quick_live.append(key)
             if not chip.winfo_ismapped():
                 chip.pack(side="left", padx=(0, px(6)))
+        self._fit_quick_chips()
 
     def _load_library(self):
         conn = db_connect()
@@ -1477,6 +1520,72 @@ class LibraryTab(ctk.CTkFrame):
         self._saved_overflow = max(len(saved) - SAVED_CHIPS_MAX, 0)
         self._fit_saved_chips()
 
+    def _fit_quick_chips(self) -> None:
+        """Show the count chips that fit, and put the rest behind a ⋯.
+
+        How many fit depends on the window, the display scaling, the size
+        of the library (a five-figure count is a wider chip than a
+        three-figure one) and whether theater has taken most of the row.
+        Unmeasured, the last one or two were sliced off by the edge of the
+        panel - a chip reading "4K ✓ 36" with the rest of the number gone.
+        """
+        chips = getattr(self, "quick_chips", None)
+        more = getattr(self, "_quick_more", None)
+        if not chips or more is None:
+            return
+        # Measured against the row these chips SIT IN, never against their
+        # own frame: that frame is sized by the chips, so measuring it and
+        # then hiding a chip shrinks the very number the next pass reads,
+        # and the row empties itself one chip at a time.
+        try:
+            available = self._info_row.winfo_width()
+        except tk.TclError:
+            return
+        if available <= 1:
+            return
+        if not self._info_stacked:
+            available -= self._info_pager.winfo_reqwidth()
+        saved = getattr(self, "_saved_row", None)
+        if saved is not None and saved.winfo_ismapped():
+            available -= saved.winfo_reqwidth()
+        available -= px(30)
+        live = [(key, chips[key][0]) for key in self._quick_live]
+        self._quick_hidden = set()
+        used = 0
+        room_for_more = more.winfo_reqwidth() + px(6)
+        for index, (key, chip) in enumerate(live):
+            width = chip.winfo_reqwidth() + px(6)
+            last = index == len(live) - 1
+            # Once one has run out of room the rest go with it, rather
+            # than skipping to whichever happens to be narrow enough: a row
+            # that drops its middle chip and keeps the one after reads as a
+            # glitch, not as a row that ran out of space.
+            if self._quick_hidden or \
+                    used + width + (0 if last else room_for_more) > available:
+                self._quick_hidden.add(key)
+                chip.pack_forget()
+                continue
+            used += width
+            if not chip.winfo_ismapped():
+                chip.pack(side="left", padx=(0, px(6)))
+        more.pack_forget()
+        if self._quick_hidden:
+            more.pack(side="left", padx=(0, px(6)))
+
+    def _quick_menu(self) -> None:
+        """The filters there was no room for."""
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        for key in self._quick_hidden:
+            chip, _label, token = self.quick_chips[key]
+            menu.add_command(label=chip.cget("text"),
+                             command=lambda t=token: self.add_token(t))
+        try:
+            menu.tk_popup(self._quick_more.winfo_rootx(),
+                          self._quick_more.winfo_rooty() + px(26))
+        finally:
+            menu.grab_release()
+
     def _fit_saved_chips(self) -> None:
         """Show as many saved chips as there is room for, and put the rest
         behind a +N button.
@@ -1598,9 +1707,11 @@ class LibraryTab(ctk.CTkFrame):
         stack = needed > event.width
         if stack == self._info_stacked:
             self.after_idle(self._fit_saved_chips)
+            self.after_idle(self._fit_quick_chips)
             return
         self._info_stacked = stack
         self.after_idle(self._fit_saved_chips)
+        self.after_idle(self._fit_quick_chips)
         if stack:
             self._info_chips.grid(row=1, column=0, columnspan=3, sticky="w",
                                   pady=(6, 0))
@@ -2666,7 +2777,10 @@ class LibraryTab(ctk.CTkFrame):
             return
         self._panel_fit = (width, height)
         try:
-            self.detail_panel.configure(width=width)
+            # unscaled(): `width` is real screen pixels, worked out against
+            # the column's measured height and the picture that has to fit
+            # in it. CTk would scale it again.
+            self.detail_panel.configure(width=unscaled(width))
         except tk.TclError:
             return
         # Fit the height too. In theater the column is shorter than a
@@ -2681,7 +2795,7 @@ class LibraryTab(ctk.CTkFrame):
         # point would otherwise produce.
         self.player.set_size(min(inner, int(height * 16 / 9)), height)
         for label in (self.detail_name, self.detail_meta):
-            label.configure(wraplength=inner - 22)
+            label.configure(wraplength=unscaled(inner - 22))
 
     def _picture_height(self, inner: int) -> int:
         """The tallest the picture may be at this width: 16:9, unless the

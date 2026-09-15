@@ -39,6 +39,7 @@ class FakeTab:
     PANEL_MIN = LibraryTab.PANEL_MIN
     PANEL_MAX = LibraryTab.PANEL_MAX
     PANEL_SHARE_MAX = LibraryTab.PANEL_SHARE_MAX
+    THEATER_SHARE_MAX = LibraryTab.THEATER_SHARE_MAX
     THEATER_BONUS = LibraryTab.THEATER_BONUS
     panel_cap = LibraryTab.panel_cap
     panel_width = LibraryTab.panel_width
@@ -87,6 +88,17 @@ def test_theater_ignores_a_dragged_width():
     """Theater has one job - be the big one - and its own width for it."""
     tab = FakeTab(window=1760, panel_width_px=520, theater=True)
     assert tab.panel_width() == int(1760 * 0.60)
+
+
+def test_theater_leaves_the_gallery_and_its_own_way_out_on_screen():
+    """It swallowed the window whole, taking the Theater button with it."""
+    tab = FakeTab(window=1760, wants=9999, theater=True)
+    assert tab.panel_width() == int(1760 * LibraryTab.THEATER_SHARE_MAX)
+
+
+def test_theater_grows_to_use_the_height_as_well():
+    tab = FakeTab(window=1760, wants=1200, theater=True)
+    assert tab.panel_width() == 1200
 
 
 def test_theater_is_always_wider_than_the_normal_width():
