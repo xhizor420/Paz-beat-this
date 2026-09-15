@@ -41,6 +41,11 @@ class Meta:
 
 class FakeTab:
     _fetch_tags = LibraryTab._fetch_tags
+    tagging = False
+    cancelled = False
+
+    def cancel_tag_fetch(self):
+        self.cancelled = True
 
     def __init__(self, count=10_000, cached=()):
         self.busy = False
@@ -53,8 +58,9 @@ class FakeTab:
     def set_status(self, text, colour=None):
         self.status.append(text)
 
-    def _run_fetch(self, todo, refreshing, note=""):
+    def _run_fetch(self, todo, refreshing, note="", ambient=False):
         self.fetched = (list(todo), refreshing, note)
+        self.ambient = ambient
 
     def F(self, key, **fmt):
         return key
@@ -96,3 +102,87 @@ def test_a_busy_tab_is_left_alone():
     tab.busy = True
     tab._fetch_tags()
     assert tab.fetched is None
+
+
+# ── ambient work must not stand in the user's way ───────────────────────
+
+def test_the_tab_opening_starts_an_ambient_batch():
+    tab = FakeTab(count=100)
+    tab._fetch_tags()
+    assert tab.ambient is True
+
+
+def test_pressing_fetch_is_not_ambient():
+    tab = FakeTab(count=100)
+    tab._fetch_tags(full=True)
+    assert tab.ambient is False
+
+
+def test_ambient_work_does_not_start_on_top_of_itself():
+    tab = FakeTab(count=100)
+    tab.tagging = True
+    tab._fetch_tags()
+    assert tab.fetched is None
+
+
+def test_pressing_fetch_cuts_in_on_ambient_work():
+    """e621 allows two requests a second, so a batch runs for a while. The
+    button must not have to queue behind one the app started itself."""
+    tab = FakeTab(count=100)
+    tab.tagging = True
+    tab._fetch_tags(full=True)
+    assert tab.cancelled
+    assert tab.fetched is not None
+
+
+# ── a finished run must not tidy away the one that replaced it ──────────
+
+class Button:
+    def __init__(self):
+        self.state = "disabled"
+
+    def configure(self, state=None, **kw):
+        if state:
+            self.state = state
+
+
+class Runner:
+    _fetch_release = LibraryTab._fetch_release
+
+    def __init__(self):
+        self.busy = True
+        self._fetch_running = True
+        self.more_btn = Button()
+        self._fetch_stop = object()
+
+    def ui(self, fn, *a, **kw):
+        fn(*a, **kw)
+
+
+def test_a_finished_run_hands_back_what_it_was_holding():
+    tab = Runner()
+    assert tab._fetch_release(tab._fetch_stop, ambient=False) is True
+    assert tab.busy is False
+    assert tab._fetch_running is False
+    assert tab.more_btn.state == "normal"
+
+
+def test_a_cancelled_run_does_not_release_its_replacement():
+    """It finishes a moment after the thing that cancelled it started, so
+    an unconditional release unlocks the new run's buttons and tells the
+    app nothing is fetching while a fetch is underway."""
+    tab = Runner()
+    stale = tab._fetch_stop
+    tab._fetch_stop = object()            # the replacement claims the slot
+    assert tab._fetch_release(stale, ambient=True) is False
+    assert tab.busy is True
+    assert tab._fetch_running is True
+    assert tab.more_btn.state == "disabled"
+
+
+def test_an_ambient_run_never_touches_the_buttons():
+    tab = Runner()
+    tab.busy = False
+    tab._fetch_release(tab._fetch_stop, ambient=True)
+    assert tab._fetch_running is False
+    assert tab.more_btn.state == "disabled"   # left exactly as it found it

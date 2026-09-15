@@ -1,0 +1,138 @@
+"""The handle between the gallery and the inspector.
+
+Two ways it can misbehave, both of which it did: taking hold of it moves
+the layout before you have dragged anywhere (the width was read from the
+pointer's absolute position, so grabbing the left edge of the handle and
+grabbing the right edge meant two different widths), and a plain click -
+or the first press of a double-click, which is how you reset it - counts
+as a resize.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from paz_suite.library_tab import LibraryTab      # noqa: E402
+
+
+class Cfg:
+    def __init__(self, width=0, theater=False):
+        self.panel_width_px = width
+        self.theater = theater
+        self.saves = 0
+
+    def save(self):
+        self.saves += 1
+
+
+class Panel:
+    def __init__(self, width):
+        self._w = width
+
+    def winfo_width(self):
+        return self._w
+
+
+class Root:
+    def winfo_width(self):
+        return 2000
+
+
+class Event:
+    def __init__(self, x_root):
+        self.x_root = x_root
+
+
+class FakeTab:
+    PANEL_MIN = LibraryTab.PANEL_MIN
+    PANEL_MAX = LibraryTab.PANEL_MAX
+    GRIP_SLOP = LibraryTab.GRIP_SLOP
+    _grip_press = LibraryTab._grip_press
+    _grip_drag = LibraryTab._grip_drag
+    _grip_release = LibraryTab._grip_release
+    _grip_limits = LibraryTab._grip_limits
+
+    def __init__(self, panel=600, **cfg):
+        self.cfg = Cfg(**cfg)
+        self.detail_panel = Panel(panel)
+        self.root = Root()
+        self._grip_from = None
+        self._grip_moved = False
+        self.fits = 0
+
+    def _fit_panel(self):
+        self.fits += 1
+        self.detail_panel._w = self.cfg.panel_width_px
+
+
+def test_taking_hold_of_the_handle_moves_nothing():
+    tab = FakeTab(panel=600)
+    tab._grip_press(Event(1400))
+    assert tab.cfg.panel_width_px == 0
+    assert tab.fits == 0
+
+
+def test_a_click_that_never_moves_is_not_a_resize():
+    """The first press of a double-click is this. Double-click is how the
+    width is put back to automatic, so it must not resize on the way."""
+    tab = FakeTab(panel=600)
+    tab._grip_press(Event(1400))
+    tab._grip_drag(Event(1401))
+    tab._grip_release()
+    assert tab.cfg.panel_width_px == 0
+    assert tab.cfg.saves == 0
+
+
+def test_the_width_follows_the_travel_not_the_pointer():
+    """Wherever in the handle you took hold is where it stays."""
+    tab = FakeTab(panel=600)
+    tab._grip_press(Event(1400))
+    tab._grip_drag(Event(1300))          # 100px left
+    assert tab.cfg.panel_width_px == 700
+
+
+def test_dragging_right_gives_the_room_back():
+    tab = FakeTab(panel=900)
+    tab._grip_press(Event(1000))
+    tab._grip_drag(Event(1150))
+    assert tab.cfg.panel_width_px == 750
+
+
+def test_the_drag_cannot_swallow_the_window_or_vanish():
+    tab = FakeTab(panel=600)
+    tab._grip_press(Event(1400))
+    tab._grip_drag(Event(0))             # yank it all the way left
+    assert tab.cfg.panel_width_px == min(int(2000 * 0.60), LibraryTab.PANEL_MAX)
+    tab = FakeTab(panel=600)
+    tab._grip_press(Event(1400))
+    tab._grip_drag(Event(9000))          # and all the way right
+    assert tab.cfg.panel_width_px == LibraryTab.PANEL_MIN
+
+
+def test_a_real_drag_is_remembered():
+    tab = FakeTab(panel=600)
+    tab._grip_press(Event(1400))
+    tab._grip_drag(Event(1300))
+    tab._grip_release()
+    assert tab.cfg.saves == 1
+
+
+def test_the_handle_does_nothing_in_theater():
+    """Theater sets its own width; the handle is hidden, and a stray event
+    must not reintroduce a width it would then ignore."""
+    tab = FakeTab(panel=600, theater=True)
+    tab._grip_press(Event(1400))
+    tab._grip_drag(Event(1200))
+    assert tab.cfg.panel_width_px == 0
+
+
+def test_dragging_past_the_slop_stays_smooth_from_there():
+    tab = FakeTab(panel=600)
+    tab._grip_press(Event(1400))
+    for x in (1399, 1396, 1390, 1380, 1360):
+        tab._grip_drag(Event(x))
+    assert tab.cfg.panel_width_px == 640          # 1400 - 1360
+    assert tab.fits == 4                          # the 1px move changed nothing

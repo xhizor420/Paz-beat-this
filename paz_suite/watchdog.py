@@ -34,6 +34,15 @@ STUCK_AFTER = 6.0
 BEAT_EVERY_MS = 500
 # One dump per hang, not one every tick while it stays hung.
 REARM_AFTER = 60.0
+
+# An app does not have to freeze to feel broken. A second of stillness
+# here and there - a thumbnail sheet built on the wrong thread, a big
+# file written while the window waits - reads as "buggy", and until now
+# left no trace at all, because the only thing recorded was death. This
+# is the lighter rule: a pause long enough to be felt gets one line
+# naming where the thread was, so a session that felt bad can say why.
+LAGGY_AFTER = 1.5
+LAG_REARM_AFTER = 15.0
 MAX_LOG_BYTES = 2 * 1024 * 1024
 
 
@@ -43,6 +52,8 @@ class Watchdog:
         self.log_path = log_path
         self._beat = time.monotonic()
         self._reported_at = 0.0
+        self._lagged_at = 0.0
+        self._lags = 0
         self._stop = threading.Event()
         self._thread = None
 
@@ -97,14 +108,36 @@ class Watchdog:
             pass
 
     def _watch(self) -> None:
-        while not self._stop.wait(1.0):
+        while not self._stop.wait(0.5):
             quiet = time.monotonic() - self._beat
+            if quiet < LAGGY_AFTER:
+                continue
+            now = time.monotonic()
             if quiet < STUCK_AFTER:
+                if now - self._lagged_at >= LAG_REARM_AFTER:
+                    self._lagged_at = now
+                    self._lag(quiet)
                 continue
-            if time.monotonic() - self._reported_at < REARM_AFTER:
+            if now - self._reported_at < REARM_AFTER:
                 continue
-            self._reported_at = time.monotonic()
+            self._reported_at = now
             self._dump(quiet)
+
+    def _main_frames(self, depth: int = 4) -> list:
+        """The top of the UI thread's stack - where it is, right now."""
+        frame = sys._current_frames().get(threading.main_thread().ident)
+        if frame is None:
+            return []
+        return [piece.rstrip()
+                for piece in traceback.format_stack(frame)[-depth:]]
+
+    def _lag(self, quiet: float) -> None:
+        """A pause worth noticing, in one line plus where it happened."""
+        self._lags += 1
+        where = self._main_frames()
+        self._note("LAGGY", f"the window paused for {quiet:.1f}s "
+                            f"(pause #{self._lags} this session)\n"
+                            + "\n".join("    " + line for line in where))
 
     # ── the report ──────────────────────────────────────────────────────
 

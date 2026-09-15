@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from paz_suite import watchdog                             # noqa: E402
 from paz_suite.watchdog import Watchdog                    # noqa: E402
 
 
@@ -149,3 +150,42 @@ def test_the_watcher_thread_does_not_outlive_stop(dog, monkeypatch):
     time.sleep(1.5)
     names = [t.name for t in threading.enumerate() if "_watch" in t.name]
     assert not names, f"watcher thread still running: {names}"
+
+
+# ── a pause worth noticing, short of a hang ─────────────────────────────
+
+def test_a_pause_is_recorded_without_waiting_for_a_freeze(tmp_path):
+    """An app does not have to freeze to feel broken. Until now only death
+    was recorded, so a session that stuttered left nothing to read."""
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._beat = time.monotonic() - 2.0          # two seconds of stillness
+    dog._lag(2.0)
+    text = log.read_text()
+    assert "LAGGY" in text
+    assert "paused for 2.0s" in text
+
+
+def test_pauses_are_counted_so_a_bad_session_is_obvious(tmp_path):
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    for _ in range(3):
+        dog._lag(1.8)
+    assert "pause #3 this session" in log.read_text()
+
+
+def test_a_pause_says_where_the_thread_was(tmp_path):
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+
+    def somewhere_specific():
+        dog._lag(1.6)
+
+    somewhere_specific()
+    assert "somewhere_specific" in log.read_text()
+
+
+def test_a_freeze_is_still_a_freeze_not_just_a_pause():
+    assert watchdog.LAGGY_AFTER < watchdog.STUCK_AFTER
+    # And a stutter must not drown out the full report for a real hang.
+    assert watchdog.LAG_REARM_AFTER < watchdog.REARM_AFTER
