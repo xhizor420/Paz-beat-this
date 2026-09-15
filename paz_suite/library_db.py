@@ -217,12 +217,18 @@ def rec_matches(rec: Rec, includes: list, excludes: list) -> bool:
     return True
 
 
+SIMILAR_SORT = "Like this"
+
 SORTS = {
     "Newest":  lambda r: -r.mtime,
     "Name":    lambda r: r.name.lower(),
     "Longest": lambda r: -r.duration,
     "Largest": lambda r: -r.size,
     "Score":   lambda r: (-r.score, r.name.lower()),
+    # Ranked against the clip you have selected rather than by any field
+    # of its own - see similar.rank(), and run_search() which applies it.
+    # The key here is only what happens when nothing is selected.
+    SIMILAR_SORT: lambda r: -r.mtime,
 }
 
 

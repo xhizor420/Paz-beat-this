@@ -110,6 +110,13 @@ class HelpWindow(ctk.CTkToplevel):
          "tag."),
         ("Grid", "A contact sheet of twelve evenly-spaced frames from the "
          "selected clip. Click any frame to jump the player there."),
+        ("Like this", "The button under the player, and the sort of the same "
+         "name: ranks everything on screen by how much it shares with the "
+         "clip you have selected. Rarity decides what counts - a tag half "
+         "the library carries counts for nothing, a tag a dozen clips carry "
+         "counts for a lot - and artists and characters count for most. It "
+         "is the question the search box can't ask, because you would have "
+         "to know which of a clip's forty tags are the ones that matter."),
         ("Search", "Terms AND together, -term excludes. Prefixes: artist: "
          "character: species: rating: folder: id: is: used:. Wildcards: "
          "dragon*. is:untagged, is:noid, is:4k, is:portrait, is:widescreen, "

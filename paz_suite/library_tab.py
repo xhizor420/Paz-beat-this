@@ -9,7 +9,6 @@ import collections
 import io
 import os
 import threading
-import time
 import tkinter as tk
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,8 +25,9 @@ from .files import (
 from .config import THUMB_DIR
 from .media import fit_frame, round_corners, thumb_key, make_thumb, probe
 from .e621 import E621_POST
+from .similar import rank as rank_similar, tag_weights
 from .library_db import (
-    db_connect, Rec, parse_query, rec_matches, SORTS,
+    db_connect, Rec, parse_query, rec_matches, SORTS, SIMILAR_SORT,
     vault_marks_by_path, vault_unmark, vault_projects_list, vault_ensure_project, vault_mark,
 )
 from .library_player import InlinePlayer
@@ -725,7 +725,7 @@ class LibraryTab(ctk.CTkFrame):
     # not a better one.
     TAGS_MIN_H = 190
     # What the tag list keeps when the width was dragged by hand - see
-    # _picture_height. Less, because that drag said what it wanted.
+    # _picture_room. Less, because that drag said what it wanted.
     TAGS_DRAGGED_H = 120
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
@@ -827,6 +827,8 @@ class LibraryTab(ctk.CTkFrame):
         grip.grid(row=1, column=2, sticky="ns", pady=(10, 0))
         grip.grid_propagate(False)
         self._grip = grip
+        self._grip_from = None
+        self._grip_moved = False
         if self.cfg.theater:
             grip.grid_remove()
         # A line down the middle, so the handle reads as something to take
@@ -838,6 +840,7 @@ class LibraryTab(ctk.CTkFrame):
             widget.configure(cursor="sb_h_double_arrow")
             widget.bind("<Enter>", lambda e: self._grip_glow(True))
             widget.bind("<Leave>", lambda e: self._grip_glow(False))
+            widget.bind("<Button-1>", self._grip_press)
             widget.bind("<B1-Motion>", self._grip_drag)
             widget.bind("<ButtonRelease-1>", self._grip_release)
             widget.bind("<Double-Button-1>", self._grip_reset)
@@ -863,21 +866,44 @@ class LibraryTab(ctk.CTkFrame):
             total = 1680
         return px(self.PANEL_MIN), min(int(total * 0.60), self.PANEL_MAX)
 
+    # How far the pointer has to travel before a press counts as a drag.
+    # Without it, pressing the handle was itself a resize: the column
+    # jumped to wherever the cursor happened to be inside the handle, so a
+    # click - or the first pixel of a double-click - moved the layout.
+    GRIP_SLOP = 3
+
+    def _grip_press(self, event) -> None:
+        """Remember where the drag started and how wide the column was.
+
+        The width follows the pointer's TRAVEL from here, not its absolute
+        position, so wherever in the handle you took hold is where it
+        stays under your finger."""
+        if self.cfg.theater:
+            return
+        self._grip_from = (event.x_root, self.detail_panel.winfo_width())
+        self._grip_moved = False
+
     def _grip_drag(self, event) -> None:
         """Dragging left widens the inspector, dragging right gives the
         room back to the gallery."""
-        if self.cfg.theater:
+        if self.cfg.theater or self._grip_from is None:
             return
-        try:
-            right = self.winfo_rootx() + self.winfo_width() - px(12)
-        except tk.TclError:
+        start_x, start_w = self._grip_from
+        travelled = start_x - event.x_root
+        if not self._grip_moved and abs(travelled) < px(self.GRIP_SLOP):
             return
+        self._grip_moved = True
         low, high = self._grip_limits()
-        self.cfg.panel_width_px = int(max(low, min(right - event.x_root, high)))
+        want = int(max(low, min(start_w + travelled, high)))
+        if want == self.cfg.panel_width_px:
+            return
+        self.cfg.panel_width_px = want
         self._fit_panel()
 
     def _grip_release(self, _event=None) -> None:
-        if self.cfg.panel_width_px:
+        moved, self._grip_moved = self._grip_moved, False
+        self._grip_from = None
+        if moved and self.cfg.panel_width_px:
             self.cfg.save()
 
     def _grip_reset(self, _event=None) -> None:
@@ -947,6 +973,9 @@ class LibraryTab(ctk.CTkFrame):
              T.ACCENT3, 92)
         self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 58)
         dbtn("Grid", self._grid, T.ACCENT, 62)
+        # The search box cannot ask "more of this" - you would have to
+        # know which of a clip's forty tags are the ones that matter.
+        dbtn("Like this", self.sort_by_similarity, T.ACCENT2, 84)
         dbtn("Copy name", lambda: self._copy(self.selected.name)
              if self.selected else None, T.DIM, 96)
 
@@ -1281,6 +1310,8 @@ class LibraryTab(ctk.CTkFrame):
         self.records = []
         self.by_path = {}
         self.tag_universe = set()
+        # Built from the whole library, so it cannot outlive this load.
+        self._weights = None
 
         premium: dict = {}
         if self.cfg.premium_root and os.path.isdir(self.cfg.premium_root):
@@ -1676,13 +1707,46 @@ class LibraryTab(ctk.CTkFrame):
         query = self.search.get().strip()
         includes, excludes = parse_query(query)
         self.filtered = [r for r in self.records if rec_matches(r, includes, excludes)]
-        key = SORTS.get(self.sort_menu.get(), SORTS["Newest"])
-        self.filtered.sort(key=key)
+        self._apply_sort()
         self.page = 0
         self._remember_state()
         self._render_chips(query)
         self.queue_tagpanel()
         self.render_page()
+
+    def _apply_sort(self) -> None:
+        """Order the results. Every sort but one is a field on the clip;
+        "Like this" is a ranking against the clip you have selected, which
+        is the one question the search box cannot express - you would have
+        to know which of a clip's forty tags are the ones that matter."""
+        choice = self.sort_menu.get()
+        if choice == SIMILAR_SORT and self.selected is not None:
+            self.filtered = rank_similar(self.filtered, self.selected,
+                                         self._tag_weights())
+            return
+        self.filtered.sort(key=SORTS.get(choice, SORTS["Newest"]))
+
+    def _tag_weights(self) -> dict:
+        """How much each tag is worth as a similarity signal, for this
+        library. Depends on the whole collection, so it is built once per
+        load and thrown away when the library is reloaded."""
+        weights = getattr(self, "_weights", None)
+        if weights is None:
+            weights = tag_weights(self.records)
+            self._weights = weights
+        return weights
+
+    def sort_by_similarity(self) -> None:
+        """The "Like this" button: what else have I got that is this?"""
+        if self.selected is None:
+            self.set_status("Pick a clip first - Like this ranks the library "
+                            "against the one you have selected.", T.WARN)
+            return
+        self.sort_menu.set(SIMILAR_SORT)
+        self.run_search()
+        self.set_status(f"Sorted by how much they share with {self.selected.name} - "
+                        "artists and characters count for most, and a tag half "
+                        "the library carries counts for nothing.", T.ACCENT2)
 
     def _render_chips(self, query: str):
         for child in self.chips.winfo_children():
@@ -2769,7 +2833,8 @@ class LibraryTab(ctk.CTkFrame):
     def _fit_panel(self, _event=None):
         width = self.panel_width()
         inner = width - 26
-        height = self._picture_height(inner)
+        box = self._picture_box(inner)
+        height = box[1]
         # Both numbers are read off the live column, and setting them
         # changes the column - so a fit that would change nothing stops
         # here rather than going round again.
@@ -2783,33 +2848,43 @@ class LibraryTab(ctk.CTkFrame):
             self.detail_panel.configure(width=unscaled(width))
         except tk.TclError:
             return
-        # Fit the height too. In theater the column is shorter than a
-        # full-width 16:9 picture needs, and sizing on width alone pushed
-        # the transport buttons and the tag list off the bottom of the
-        # window - the controls for the thing you had just made bigger.
-        #
-        # And when it is the height that runs out first, the picture stops
-        # at the width that height can fill. A black box wider than the
-        # picture in it is not a bigger picture, it is bars either side of
-        # the same one - which is what dragging the handle past the useful
-        # point would otherwise produce.
-        self.player.set_size(min(inner, int(height * 16 / 9)), height)
+        self.player.set_size(*box)
         for label in (self.detail_name, self.detail_meta):
             label.configure(wraplength=unscaled(inner - 22))
 
-    def _picture_height(self, inner: int) -> int:
-        """The tallest the picture may be at this width: 16:9, unless the
-        column is too short for that, in which case what the column has."""
-        ideal = int(inner * 9 / 16)
+    DEFAULT_ASPECT = 16 / 9
+
+    def clip_aspect(self) -> float:
+        """The shape of the clip on screen, width over height.
+
+        The picture box is built to this rather than to a fixed 16:9, so a
+        widescreen clip fills the column edge to edge and a vertical one
+        stands up in it. Either way the video fills the box exactly: no
+        bars around it, and nothing cropped off it.
+        """
+        rec = self.selected
+        width = getattr(rec, "width", 0) or 0
+        height = getattr(rec, "height", 0) or 0
+        if width > 0 and height > 0:
+            ratio = width / height
+            # A clip whose stored dimensions are nonsense would otherwise
+            # turn the column into a letterbox slot or a pillar.
+            if 0.3 <= ratio <= 4.0:
+                return ratio
+        return self.DEFAULT_ASPECT
+
+    def _picture_room(self) -> int:
+        """How much height the column can give the picture, or 0 when the
+        column has not been laid out yet and there is nothing to measure."""
         try:
             room = int(self.detail_panel.winfo_height())
             card = int(self.player.frame.master.winfo_height())
             picture = int(self.player.stack.winfo_height())
             head = int(self.detail_head.master.winfo_height())
         except (AttributeError, tk.TclError):
-            return ideal
+            return 0
         if room < 200 or picture < 50 or card < picture:
-            return ideal
+            return 0
         chrome = (card - picture) + head + px(10)
         if not self.cfg.theater:
             # A width set by hand is a request for a bigger picture, so the
@@ -2819,7 +2894,22 @@ class LibraryTab(ctk.CTkFrame):
             reserve = (self.TAGS_DRAGGED_H if getattr(self.cfg, "panel_width_px", 0)
                        else self.TAGS_MIN_H)
             chrome += px(46) + px(reserve)
-        return max(min(ideal, room - chrome), 135)
+        return max(room - chrome, 0)
+
+    def _picture_box(self, inner: int) -> tuple:
+        """The biggest box of the clip's own shape that fits this column.
+
+        Width first, height only when the height is what runs out - a
+        black box wider than the picture in it is not a bigger picture,
+        it is bars either side of the same one.
+        """
+        aspect = self.clip_aspect()
+        width = max(int(inner), 240)
+        room = self._picture_room()
+        if room:
+            width = min(width, int(room * aspect))
+        height = max(int(round(width / aspect)), 135)
+        return max(width, 240), height
 
     def on_root_resize(self):
         if getattr(self, "_panel_job", None):
@@ -2861,6 +2951,9 @@ class LibraryTab(ctk.CTkFrame):
             child.destroy()
         rec = self.selected
         self.player.show_rec(rec)
+        # A different clip can be a different shape, and the box is built
+        # to the clip - see clip_aspect().
+        self._fit_panel()
         if not rec:
             self.detail_name.configure(text="Nothing selected")
             self.detail_meta.configure(text="")
@@ -3210,6 +3303,9 @@ class LibraryTab(ctk.CTkFrame):
     def _sync(self, full: bool = False):
         if self.busy:
             return
+        # A background tag trickle must not stand between the user and a
+        # sync - and the sync tops the tags up again when it is done.
+        self.cancel_tag_fetch()
         if not self.library_dirs():
             self.set_status("Nothing to index - open Folders and pick the "
                             "converted library plus its categories.", T.WARN)
@@ -3516,6 +3612,9 @@ class LibraryTab(ctk.CTkFrame):
             self._fetch_tags()
 
     def _fetch_tags(self, full: bool = False):
+        # Docstring below; this guard is the one thing that has to happen
+        # before it: the button cuts in on ambient work, ambient work
+        # never cuts in on itself.
         """
         Fetch every uncached post ID, then fold in posts that are "due" for
         a soft refresh (see E621Meta.is_stale) - fresh posts recheck every
@@ -3530,6 +3629,10 @@ class LibraryTab(ctk.CTkFrame):
         """
         if self.busy:
             return
+        if self.tagging:
+            if not full:
+                return
+            self.cancel_tag_fetch()
         if not self.cfg.e621_enabled:
             self.set_status("e621 lookups are switched off - turn them back on "
                             "in Settings.", T.WARN)
@@ -3566,7 +3669,8 @@ class LibraryTab(ctk.CTkFrame):
                             "nothing is due for a refresh yet.", T.OK)
             return
         note = f"{len(todo)} posts · {waiting:,} more next time" if waiting else ""
-        self._run_fetch(todo, len(refreshing), note)
+        # Ambient unless the user pressed the button: see _run_fetch.
+        self._run_fetch(todo, len(refreshing), note, ambient=not full)
 
     # ── fetching a few, on demand ───────────────────────────────────────
     #
@@ -3608,23 +3712,77 @@ class LibraryTab(ctk.CTkFrame):
             note += f" ({len(without)} skipped, no post ID)"
         self._run_fetch(pids, 0, note)
 
-    def _run_fetch(self, todo: list, refreshing: int, note: str = "") -> None:
-        self.busy = True
-        self.more_btn.configure(state="disabled")
+    def cancel_tag_fetch(self) -> None:
+        """Tell a fetch in flight to stop at the next post.
+
+        e621 allows about two requests a second, so any real batch runs
+        for a while. Something the user asks for now must not have to
+        queue behind a batch the app started on its own."""
+        stop = getattr(self, "_fetch_stop", None)
+        if stop is not None:
+            stop.set()
+
+    @property
+    def tagging(self) -> bool:
+        return bool(getattr(self, "_fetch_running", False))
+
+    def _fetch_release(self, stop, ambient: bool) -> bool:
+        """Hand back what a finished run was holding - unless it has been
+        replaced already.
+
+        A cancelled batch finishes a moment AFTER the thing that cancelled
+        it has started, so an unconditional release clears the NEW run's
+        flags: the app then believes nothing is fetching while a fetch is
+        underway, and a user-requested pass has its buttons unlocked by
+        the ambient batch it interrupted.
+        """
+        if getattr(self, "_fetch_stop", None) is not stop:
+            return False
+        self._fetch_running = False
+        if not ambient:
+            self.busy = False
+            self.ui(self.more_btn.configure, state="normal")
+        return True
+
+    def _run_fetch(self, todo: list, refreshing: int, note: str = "",
+                    ambient: bool = False) -> None:
+        """Fetch these posts, one at a time, off the UI thread.
+
+        `ambient` marks the batch the app started by itself on opening the
+        tab. That one does NOT make the tab busy: busy refuses Sync and
+        Fetch, and a background trickle holding those hostage - for hours,
+        on a library this size, with the status bar and progress bar
+        narrating it the whole time - is the app looking broken while it
+        is in fact working. It yields instead: anything the user asks for
+        cancels it, and the sync that follows will pick the rest up.
+        """
+        self.cancel_tag_fetch()
+        self._fetch_stop = threading.Event()
+        stop = self._fetch_stop
+        self._fetch_running = True
+        if not ambient:
+            self.busy = True
+            self.more_btn.configure(state="disabled")
         delay = max(float(self.cfg.e621_fetch_delay), 0.5)
         status = f"{self.F('fetching')} · {note or f'{len(todo)} posts'}"
         if refreshing:
             status += f" ({refreshing} refreshed for freshness)"
         status += f" (~{fmt_len(len(todo) * (delay + 0.1))})"
-        self.set_status(status, T.ACCENT2)
+        # Ambient work speaks quietly: the status line is how the app
+        # answers the user, not a place for a background job to shout.
+        self.set_status(status, T.FAINT if ambient else T.ACCENT2)
         self.progress.set(0)
 
         def work():
             hits = missing = failed = 0
             last_error = ""
+            done = 0
             try:
                 for index, pid in enumerate(todo):
+                    if stop.is_set():
+                        break
                     record = self.emeta.fetch(pid, self.cfg.e621_user, self.cfg.e621_key)
+                    done = index + 1
                     if record.get("missing"):
                         missing += 1
                     elif record.get("error"):
@@ -3632,26 +3790,29 @@ class LibraryTab(ctk.CTkFrame):
                         last_error = record["error"]
                     else:
                         hits += 1
-                    self.ui(self.progress.set, (index + 1) / len(todo))
+                    self.ui(self.progress.set, done / len(todo))
                     if index % 5 == 0:
-                        self.ui(self.set_status, f"{self.F('fetching')} {index + 1}/{len(todo)}",
-                                T.ACCENT2)
+                        self.ui(self.set_status,
+                                f"{self.F('fetching')} {done}/{len(todo)}",
+                                T.FAINT if ambient else T.ACCENT2)
                     if index % 10 == 9:
                         self.emeta.save()
+                    # wait(), not sleep(): a cancel lands at once rather
+                    # than after the pause e621's rate limit asks for.
                     if index + 1 < len(todo):
-                        time.sleep(delay)
+                        stop.wait(delay)
             finally:
                 self.emeta.save()
-                self.busy = False
-                self.ui(self.more_btn.configure, state="normal")
+                self._fetch_release(stop, ambient)
                 self.ui(self._fetch_done, hits, missing, failed, last_error,
-                        refreshing, list(todo))
+                        refreshing, list(todo[:done]), stop.is_set(), ambient)
 
         threading.Thread(target=work, daemon=True).start()
 
     def _fetch_done(self, hits: int, missing: int, failed: int = 0,
                     last_error: str = "", refreshed: int = 0,
-                    pids=None) -> None:
+                    pids=None, cancelled: bool = False,
+                    ambient: bool = False) -> None:
         # Only the posts that were fetched can have changed, so re-reading
         # the whole library here costs over a second on a big one for no
         # reason. Nothing on disk moved; only the tag cache did.
@@ -3668,6 +3829,11 @@ class LibraryTab(ctk.CTkFrame):
         # it's retried the next time Fix missing / Fetch tags runs) look the
         # same from the outside if lumped together - a permanently stuck
         # count with no way to tell why is worse than no count at all.
+        if cancelled and not hits:
+            # Stood aside for something the user asked for; that something
+            # is about to say what it is doing, and two status lines
+            # fighting over one row is how a working app looks broken.
+            return
         bits = [f"{hits} tagged"]
         if missing:
             bits.append(f"{missing} gone on e621")
@@ -3676,6 +3842,9 @@ class LibraryTab(ctk.CTkFrame):
             bits.append(f"{failed} failed, will retry{reason}")
         if refreshed:
             bits.append(f"{refreshed} refreshed")
+        if cancelled:
+            bits.append("stopped for something else")
         self.set_status("Tags fetched: " + " · ".join(bits),
-                        T.OK if hits else (T.WARN if (missing or failed) else T.OK))
+                        T.FAINT if ambient else
+                        (T.OK if hits else (T.WARN if (missing or failed) else T.OK)))
 
