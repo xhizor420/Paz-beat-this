@@ -62,10 +62,17 @@ class FakeTab:
         self._grip_from = None
         self._grip_moved = False
         self.fits = 0
+        self.reserves = []
 
     def _fit_panel(self):
         self.fits += 1
         self.detail_panel._w = self.cfg.panel_width_px
+
+    def _reserve_for_width(self, want):
+        # The real one trades tag-list height for picture height; here we
+        # only care that the drag asks for it.
+        self.reserves.append(want)
+        return 120
 
 
 def test_taking_hold_of_the_handle_moves_nothing():
@@ -197,3 +204,14 @@ def test_escape_still_clears_marks_when_theater_is_off():
     tab.key_escape(KeyEvent())
     assert tab.toggled == 0
     assert not tab.marked
+
+
+def test_dragging_wider_pays_for_the_picture_out_of_the_tag_list():
+    """A wider column is a taller picture, and that height has to come
+    from somewhere. Without this the drag stopped dead the moment the
+    height ran out, which reads as a broken handle."""
+    tab = FakeTab(panel=600)
+    tab._grip_press(Event(1400))
+    tab._grip_drag(Event(1300))
+    assert tab.reserves == [700]
+    assert tab.cfg.tags_height_px == 120

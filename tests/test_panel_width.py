@@ -96,12 +96,27 @@ def test_theater_ignores_a_dragged_width():
 def test_theater_leaves_the_gallery_and_its_own_way_out_on_screen():
     """It swallowed the window whole, taking the Theater button with it."""
     tab = FakeTab(window=1760, wants=9999, theater=True)
-    assert tab.panel_width() == int(1760 * LibraryTab.THEATER_SHARE_MAX)
+    panel = tab.panel_width()
+    assert panel <= int(1760 * LibraryTab.THEATER_SHARE_MAX)
+    assert 1760 - panel >= LibraryTab.GALLERY_MIN_W - 1
 
 
-def test_theater_grows_to_use_the_height_as_well():
-    tab = FakeTab(window=1760, wants=1200, theater=True)
-    assert tab.panel_width() == 1200
+def test_theater_takes_only_the_width_the_picture_can_use():
+    """On a short window the column runs out of height first, and the
+    extra width then goes into empty card either side of the picture
+    while the gallery starves for it."""
+    tall = FakeTab(window=1760, wants=1400, theater=True).panel_width()
+    short = FakeTab(window=1760, wants=900, theater=True).panel_width()
+    assert short < tall
+    assert short == 900
+
+
+def test_theater_is_still_wider_than_normal_on_the_shortest_window():
+    """However little height there is - the button has one job."""
+    for wants in (0, 200, 600, 5000):
+        normal = FakeTab(window=1760, wants=wants).panel_width()
+        theater = FakeTab(window=1760, wants=wants, theater=True).panel_width()
+        assert theater > normal, wants
 
 
 def test_theater_is_always_wider_than_the_normal_width():
