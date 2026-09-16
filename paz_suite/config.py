@@ -20,6 +20,11 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "paz_config.json")
 DB_PATH = os.path.join(CONFIG_DIR, "paz_library.sqlite3")
 THUMB_DIR = os.path.join(CONFIG_DIR, "paz_thumbs")
 E621_META_PATH = os.path.join(CONFIG_DIR, "e621_meta.json")
+# Records fetched since the last full rewrite, one JSON object per line.
+# See E621Meta.checkpoint for why the cache is not rewritten whole every
+# ten posts. Folded back into E621_META_PATH and deleted on the next
+# full save, so it only exists mid-fetch or after a crash.
+E621_META_LOG = E621_META_PATH + ".log"
 
 # Legacy per-app files, from before the two tools were combined.
 _LEGACY_STUDIO_CONFIG = os.path.join(CONFIG_DIR, "config.json")

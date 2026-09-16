@@ -581,7 +581,7 @@ class ConvertTab(ctk.CTkFrame):
                         self.ui(self._set_status,
                                 f"{self.F('fetching')} {index + 1}/{len(todo)}", T.ACCENT2)
                     if index % 10 == 9:
-                        self.emeta.save()
+                        self.emeta.checkpoint()
                     if index + 1 < len(todo):
                         time.sleep(delay)
             finally:
