@@ -2748,7 +2748,7 @@ class LibraryTab(ctk.CTkFrame):
         visible = max(canvas.winfo_height(), 1)
         canvas.configure(scrollregion=(0, 0, width, max(content, visible)))
         canvas.yview_moveto(0)
-        threading.Thread(target=self._load_thumbs, args=(list(batch), token), daemon=True).start()
+        self._start_thumbs(list(batch), token)
 
     def _draw_card(self, index: int, rec: Rec, x: int, y: int):
         canvas = self.gallery
@@ -3345,18 +3345,39 @@ class LibraryTab(ctk.CTkFrame):
             # page that stops loading at the clip before it.
             return None
 
-    def _load_thumbs(self, batch: list, token: int):
+    # How many threads compose a page's tiles. A page is forty-eight
+    # independent pictures and composing them one after another was most
+    # of the wait for a page nobody had visited before. Bounded well
+    # under the core count: the point is to overlap the work, not to take
+    # the machine away from whatever else is running on it - which for
+    # this app's user is Topaz on a 4K file.
+    TILE_WORKERS = max(2, min(4, (os.cpu_count() or 4) // 2))
+
+    def _start_thumbs(self, batch: list, token: int) -> None:
+        """Set the page's thumbnails going, striped across a few threads."""
+        workers = max(min(self.TILE_WORKERS, len(batch)), 1)
+        for start in range(workers):
+            threading.Thread(target=self._load_thumbs,
+                             args=(batch, token, start, workers),
+                             daemon=True).start()
+
+    def _load_thumbs(self, batch: list, token: int,
+                     start: int = 0, step: int = 1):
         """Put a page's thumbnails on screen, off the UI thread.
 
-        The preparing is the point: only the PhotoImage is left for the UI
-        thread, because that is the part that must be there. Anything
-        already prepared - a page revisited, or one the prefetch reached
-        first - skips straight to that.
+        Handles the cards where `index % step == start`, so several of
+        these share a page without needing to coordinate. The preparing
+        is the point: only the PhotoImage is left for the UI thread,
+        because that is the part that must be there. Anything already
+        prepared - a page revisited, or one the prefetch reached first -
+        skips straight to that.
         """
         width, height, fit = self.CARD_W, self.IMG_H, self.cfg.thumb_fit
         for index, rec in enumerate(batch):
             if token != self._page_token:
                 return
+            if index % step != start:
+                continue
             key = (rec.path, width, height, fit)
             # A finished Tk image already exists for this card: there is
             # nothing to compose, and _place_thumb will find it by key.
@@ -3370,7 +3391,10 @@ class LibraryTab(ctk.CTkFrame):
                 image = self._tile_build(rec, width, height, fit)
                 self._tile_put(key, image)
             self.ui(self._place_thumb, index, rec, image, token, key)
-        if token == self._page_token:
+        # One of the stripes asks for the pages either side, not all of
+        # them. It waits before starting anyway, so there is no need to
+        # know which stripe finished last.
+        if start == 0 and token == self._page_token:
             self.ui(self._prefetch_pages)
 
     # A pause between prepared tiles, and a wait before starting at all.

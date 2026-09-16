@@ -39,6 +39,8 @@ class Cfg:
 class FakeTab:
     TILE_CACHE = 6
     PHOTO_CACHE = 6
+    TILE_WORKERS = LibraryTab.TILE_WORKERS
+    _start_thumbs = LibraryTab._start_thumbs
     PREFETCH_PAUSE = 0.0          # no need to be polite in a test
     PREFETCH_AFTER_MS = LibraryTab.PREFETCH_AFTER_MS
     _tile_get = LibraryTab._tile_get
@@ -97,8 +99,11 @@ def patch_threads(tab, monkeypatch):
     import paz_suite.library_tab as lt
 
     class Fake:
-        def __init__(self, target=None, daemon=False, **kw):
-            tab.spawned.append(target)
+        """Captures the thread body with its arguments already bound, so a
+        test can run it by calling it."""
+
+        def __init__(self, target=None, args=(), daemon=False, **kw):
+            tab.spawned.append(lambda: target(*args))
 
         def start(self):
             pass
@@ -323,3 +328,54 @@ def test_it_prepares_one_page_either_side_not_more(monkeypatch):
     tab._prefetch_pages()
     tab.start_prefetch()
     assert len(tab.built) == 8
+
+
+# ── a page is composed by several threads at once ──────────────────────
+
+def test_the_stripes_between_them_cover_every_card():
+    """Each loader handles index % step == start, so a wrong stripe
+    silently leaves cards blank."""
+    tab = FakeTab(clips=12, page_size=12)
+    batch = tab.filtered[:12]
+    for start in range(4):
+        tab._load_thumbs(batch, tab._page_token, start, 4)
+    placed = sorted(args[0] for args in tab.placed)
+    assert placed == list(range(12))
+
+
+def test_a_stripe_only_does_its_own_share(monkeypatch):
+    tab = FakeTab(clips=12, page_size=12)
+    patch_threads(tab, monkeypatch)
+    tab._load_thumbs(tab.filtered[:12], tab._page_token, 1, 4)
+    assert sorted(args[0] for args in tab.placed) == [1, 5, 9]
+
+
+def test_one_stripe_asks_for_the_prefetch_not_all_of_them(monkeypatch):
+    tab = FakeTab(clips=40, page_size=4)
+    patch_threads(tab, monkeypatch)
+    for start in range(4):
+        tab._load_thumbs(tab.filtered[:4], tab._page_token, start, 4)
+    assert len(tab.deferred) == 1, "every stripe queued its own prefetch"
+
+
+def test_starting_a_page_spawns_a_worker_per_stripe(monkeypatch):
+    tab = FakeTab(clips=48, page_size=48)
+    patch_threads(tab, monkeypatch)
+    tab._start_thumbs(tab.filtered[:48], tab._page_token)
+    assert len(tab.spawned) == tab.TILE_WORKERS
+
+
+def test_a_short_page_does_not_spawn_more_threads_than_cards(monkeypatch):
+    tab = FakeTab(clips=1, page_size=1)
+    patch_threads(tab, monkeypatch)
+    tab._start_thumbs(tab.filtered[:1], tab._page_token)
+    assert len(tab.spawned) == 1
+
+
+def test_an_empty_page_spawns_one_that_does_nothing(monkeypatch):
+    tab = FakeTab(clips=0)
+    patch_threads(tab, monkeypatch)
+    tab._start_thumbs([], tab._page_token)
+    for body in tab.spawned:
+        body()
+    assert tab.placed == []
