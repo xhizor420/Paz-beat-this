@@ -136,3 +136,64 @@ def test_dragging_past_the_slop_stays_smooth_from_there():
         tab._grip_drag(Event(x))
     assert tab.cfg.panel_width_px == 640          # 1400 - 1360
     assert tab.fits == 4                          # the 1px move changed nothing
+
+
+# ── theater must always have a door ─────────────────────────────────────
+
+class EscapeTab:
+    key_escape = LibraryTab.key_escape
+    is_typing = staticmethod(lambda event: False)
+
+    def __init__(self, theater=True, marked=(), selected=None):
+        self.cfg = Cfg(theater=theater)
+        self.marked = set(marked)
+        self.selected = selected
+        self.toggled = 0
+        self.status = []
+        self.player = type("P", (), {"playing": False, "pause": lambda self: None})()
+
+    def toggle_theater(self):
+        self.toggled += 1
+        self.cfg.theater = not self.cfg.theater
+
+    def set_status(self, text, colour=None):
+        self.status.append(text)
+
+    def clear_marks(self):
+        self.marked.clear()
+
+    def _restyle_cards(self):
+        pass
+
+    def _render_details(self):
+        pass
+
+
+class KeyEvent:
+    state = 0
+
+
+def test_escape_leaves_theater():
+    """The button that turns it off lives in the panel theater has just
+    filled the window with. If the layout ever puts that button out of
+    reach, this is the way out."""
+    tab = EscapeTab(theater=True)
+    tab.key_escape(KeyEvent())
+    assert tab.toggled == 1
+    assert tab.cfg.theater is False
+
+
+def test_escape_leaves_theater_before_anything_else():
+    """Marks and a selection are cheap to redo; being stuck is not."""
+    tab = EscapeTab(theater=True, marked={"a.mp4"}, selected=object())
+    tab.key_escape(KeyEvent())
+    assert tab.toggled == 1
+    assert tab.marked == {"a.mp4"}          # untouched
+    assert tab.selected is not None
+
+
+def test_escape_still_clears_marks_when_theater_is_off():
+    tab = EscapeTab(theater=False, marked={"a.mp4"})
+    tab.key_escape(KeyEvent())
+    assert tab.toggled == 0
+    assert not tab.marked

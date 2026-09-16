@@ -468,6 +468,19 @@ class LibraryTab(ctk.CTkFrame):
         center.grid(row=1, column=1, sticky="nsew", padx=10, pady=(10, 0))
         center.grid_columnconfigure(0, weight=1)
         center.grid_rowconfigure(2, weight=1)
+        # grid_propagate(False): this column must be able to SHRINK. Tk
+        # gives a column at least what its contents ask for, and what this
+        # one contains asks for a lot - a row of five-figure count chips,
+        # the saved-search chips, the pager, and "10,818 clips · 97.6 GB ·
+        # 904 hr of footage". On a 10,000-clip library that came to 1,400
+        # pixels, and in theater, where the inspector takes most of the
+        # width, the two together were wider than the window. Tk does not
+        # squeeze in that case - it runs off the right-hand edge, taking
+        # the inspector's own Theater button with it, which is how theater
+        # became a room with no door. Clipped content is recoverable; a
+        # layout wider than its window is not.
+        center.grid_propagate(False)
+        self._center = center
 
         # Row 0 pairs the active search tokens (left, usually empty) with
         # the running total (right). The total used to sit on the filter
@@ -714,6 +727,11 @@ class LibraryTab(ctk.CTkFrame):
     # the height below the picture (see panel_width). The gallery still
     # has to be a gallery.
     PANEL_SHARE_MAX = 0.42
+    # And whatever the sums say, this much of the window stays with the
+    # gallery. Without it the inspector could ask for more than the window
+    # had left, and Tk answers that by running off the right-hand edge -
+    # taking the inspector's own Theater button with it.
+    GALLERY_MIN_W = 300
     # The same, for theater. Wide enough to be the point of theater,
     # narrow enough that the gallery and this panel's own way out are
     # both still on the screen.
@@ -721,10 +739,16 @@ class LibraryTab(ctk.CTkFrame):
     # Room kept for the tag list when the panel grows. Tags are how a
     # clip gets found again; a player that ate them would be a worse tab,
     # not a better one.
-    TAGS_MIN_H = 150
+    # Room kept for the tag list. Deliberately modest: it is a scrolling
+    # list, so a short one still works, and on a 1080-tall window every
+    # pixel reserved here is a pixel the picture cannot have - at 150 the
+    # picture could not fill the column's width on a 16:9 clip, which is
+    # the whole point of the column. The handle between them moves this
+    # for anyone who would rather see tags than video.
+    TAGS_MIN_H = 108
     # What the tag list keeps when the width was dragged by hand - see
     # _picture_room. Less, because that drag said what it wanted.
-    TAGS_DRAGGED_H = 100
+    TAGS_DRAGGED_H = 80
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -752,6 +776,16 @@ class LibraryTab(ctk.CTkFrame):
         # columns matter. The gain goes where it was asked for instead:
         # the ceiling, so a big screen stops being capped at 660px, and
         # theater, which exists precisely to be the big one.
+        # What is already spoken for: the tag rail (collapsed or not) and
+        # the handle. Measured rather than assumed - the rail has two
+        # widths and the sums have to hold for both.
+        rail = getattr(self, "side", None)
+        try:
+            taken = int(rail.winfo_width()) if rail is not None else px(40)
+        except tk.TclError:
+            taken = px(40)
+        ceiling = max(total - px(self.GALLERY_MIN_W) - taken - self.GRIP_W,
+                      px(self.PANEL_MIN))
         base = int(max(px(self.PANEL_MIN), min(total * 0.28, self.panel_cap)))
         if not self.cfg.theater:
             # A width dragged by hand outranks every rule here: it is the
@@ -759,9 +793,9 @@ class LibraryTab(ctk.CTkFrame):
             chosen = int(getattr(self.cfg, "panel_width_px", 0) or 0)
             if chosen:
                 return max(px(self.PANEL_MIN),
-                           min(chosen, int(total * 0.60), self.PANEL_MAX))
+                           min(chosen, int(total * 0.60), self.PANEL_MAX, ceiling))
             return min(max(base, self._width_that_uses_the_height()),
-                       int(total * self.PANEL_SHARE_MAX), self.panel_cap)
+                       int(total * self.PANEL_SHARE_MAX), self.panel_cap, ceiling)
         # Theater fills the height too, for the same reason the normal
         # width does: a 16:9 picture as wide as 60% of the window still
         # left a band of empty column under the buttons on a tall screen.
@@ -773,7 +807,7 @@ class LibraryTab(ctk.CTkFrame):
         # depending on whose desk it is. The share leaves the gallery
         # enough to stay a gallery - and leaves this panel's own Theater
         # button on screen, which is the way back out.
-        return min(theater, int(total * self.THEATER_SHARE_MAX))
+        return min(theater, int(total * self.THEATER_SHARE_MAX), ceiling)
 
     def _width_that_uses_the_height(self) -> int:
         """How wide the panel would have to be for the picture to fill the
@@ -1086,6 +1120,15 @@ class LibraryTab(ctk.CTkFrame):
     def key_escape(self, event):
         if self.is_typing(event):
             return
+        # Theater first, and before anything else. It is the one state
+        # that takes over the window, so it is the one state you most need
+        # a way out of - and if the layout has gone wrong, the button that
+        # would have turned it off is the thing you cannot reach. Escape
+        # always works.
+        if self.cfg.theater:
+            self.toggle_theater()
+            self.set_status("Theater off.", T.DIM)
+            return "break"
         if self.marked:
             self.clear_marks()
         elif self.player.playing:
@@ -2002,6 +2045,17 @@ class LibraryTab(ctk.CTkFrame):
     def _on_grid_resize(self, event):
         columns = max(2, (event.width - self.GAP) // (self.card_width + self.GAP))
         if columns == getattr(self, "_columns", 0):
+            return
+        if getattr(self, "_grip_from", None) is not None:
+            # A drag on the handle is in progress. Re-laying out the whole
+            # page in the middle of one is churn under the cursor; it gets
+            # one re-layout when the hand lets go.
+            if self._resize_after is not None:
+                try:
+                    self.after_cancel(self._resize_after)
+                except ValueError:
+                    pass
+            self._resize_after = self.after(250, self.render_page)
             return
         if self._resize_after is not None:
             try:
