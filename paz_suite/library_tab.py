@@ -160,6 +160,9 @@ class LibraryTab(ctk.CTkFrame):
         self._heads_done = 0
         self._slots_planned: dict = {}
         self._rail_gen = 0
+        # How many card positions have had their bindings set - see
+        # _bind_card_slots. Positions, not clips: they outlive a page.
+        self._bound_slots = 0
         self._hidden_btn = None
         # Prepared gallery tiles - see TILE_CACHE. Written by the page
         # loader and the prefetch, read by both, so it takes a lock.
@@ -2737,6 +2740,8 @@ class LibraryTab(ctk.CTkFrame):
 
         cell_h = self.IMG_H + self.CAP_H + self.GAP
         self._cell_h = cell_h
+        # Once per position the gallery has ever had - see _bind_card_slots.
+        self._bind_card_slots(len(batch))
         for index, rec in enumerate(batch):
             col, row = index % columns, index // columns
             x = margin + col * (self.CARD_W + self.GAP)
@@ -2748,7 +2753,54 @@ class LibraryTab(ctk.CTkFrame):
         visible = max(canvas.winfo_height(), 1)
         canvas.configure(scrollregion=(0, 0, width, max(content, visible)))
         canvas.yview_moveto(0)
-        threading.Thread(target=self._load_thumbs, args=(list(batch), token), daemon=True).start()
+        self._start_thumbs(list(batch), token)
+
+    # A canvas binding belongs to the tag, not to the items wearing it:
+    # it survives deleting them and applies to new ones created with the
+    # same tag afterwards, and it can even be set before any item carries
+    # the tag at all. (Both verified against Tk, not assumed.) Card N
+    # always wears tag "cdN", so these are set once for each position the
+    # gallery has ever had and never again - where before they were nine
+    # bindings per card per page flip, which is four hundred trips into
+    # Tcl every time you turned a page.
+    #
+    # The handlers therefore cannot close over the clip: position three
+    # is a different clip on every page. They take the index and look the
+    # record up in _layout, which is what actually says what is on screen.
+
+    def _bind_card_slots(self, count: int) -> None:
+        canvas = self.gallery
+        for index in range(self._bound_slots, count):
+            tag = f"cd{index}"
+            for event in ("<Button-1>", "<Control-Button-1>", "<Shift-Button-1>"):
+                canvas.tag_bind(tag, event,
+                                lambda e, i=index: self._card_click(e, i))
+            canvas.tag_bind(tag, "<Double-Button-1>",
+                            lambda e, i=index: self._play_slot(i))
+            canvas.tag_bind(tag, "<Button-3>",
+                            lambda e, i=index: self._menu_slot(e, i))
+            canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
+            canvas.tag_bind(tag, "<Leave>", lambda e, i=index: self._unhover(i, e))
+            canvas.tag_bind(tag, "<Motion>",
+                            lambda e, i=index: self._scrub_motion(e, i))
+        self._bound_slots = max(self._bound_slots, count)
+
+    def _slot_rec(self, index: int):
+        """The clip at card `index` right now, or None if the page has
+        changed under a click already on its way."""
+        if 0 <= index < len(self._layout):
+            return self._layout[index]["rec"]
+        return None
+
+    def _play_slot(self, index: int) -> None:
+        rec = self._slot_rec(index)
+        if rec is not None:
+            self._select_and_play(rec)
+
+    def _menu_slot(self, event, index: int) -> None:
+        rec = self._slot_rec(index)
+        if rec is not None:
+            self._card_menu(event, rec)
 
     def _draw_card(self, index: int, rec: Rec, x: int, y: int):
         canvas = self.gallery
@@ -2796,19 +2848,6 @@ class LibraryTab(ctk.CTkFrame):
                                font=(T.MONO, pt(10)), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
-
-        canvas.tag_bind(tag, "<Button-1>",
-                        lambda e, r=rec, i=index: self._card_click(e, r, i))
-        canvas.tag_bind(tag, "<Control-Button-1>",
-                        lambda e, r=rec, i=index: self._card_click(e, r, i))
-        canvas.tag_bind(tag, "<Shift-Button-1>",
-                        lambda e, r=rec, i=index: self._card_click(e, r, i))
-        canvas.tag_bind(tag, "<Double-Button-1>", lambda e, r=rec: self._select_and_play(r))
-        canvas.tag_bind(tag, "<Button-3>", lambda e, r=rec: self._card_menu(e, r))
-        canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
-        canvas.tag_bind(tag, "<Leave>", lambda e, i=index: self._unhover(i, e))
-        canvas.tag_bind(tag, "<Motion>",
-                        lambda e, i=index: self._scrub_motion(e, i))
 
     def _card_outline(self, rec: Rec, hover: bool) -> tuple:
         """(colour, width) for a card's border. Selection outranks the
@@ -3345,18 +3384,39 @@ class LibraryTab(ctk.CTkFrame):
             # page that stops loading at the clip before it.
             return None
 
-    def _load_thumbs(self, batch: list, token: int):
+    # How many threads compose a page's tiles. A page is forty-eight
+    # independent pictures and composing them one after another was most
+    # of the wait for a page nobody had visited before. Bounded well
+    # under the core count: the point is to overlap the work, not to take
+    # the machine away from whatever else is running on it - which for
+    # this app's user is Topaz on a 4K file.
+    TILE_WORKERS = max(2, min(4, (os.cpu_count() or 4) // 2))
+
+    def _start_thumbs(self, batch: list, token: int) -> None:
+        """Set the page's thumbnails going, striped across a few threads."""
+        workers = max(min(self.TILE_WORKERS, len(batch)), 1)
+        for start in range(workers):
+            threading.Thread(target=self._load_thumbs,
+                             args=(batch, token, start, workers),
+                             daemon=True).start()
+
+    def _load_thumbs(self, batch: list, token: int,
+                     start: int = 0, step: int = 1):
         """Put a page's thumbnails on screen, off the UI thread.
 
-        The preparing is the point: only the PhotoImage is left for the UI
-        thread, because that is the part that must be there. Anything
-        already prepared - a page revisited, or one the prefetch reached
-        first - skips straight to that.
+        Handles the cards where `index % step == start`, so several of
+        these share a page without needing to coordinate. The preparing
+        is the point: only the PhotoImage is left for the UI thread,
+        because that is the part that must be there. Anything already
+        prepared - a page revisited, or one the prefetch reached first -
+        skips straight to that.
         """
         width, height, fit = self.CARD_W, self.IMG_H, self.cfg.thumb_fit
         for index, rec in enumerate(batch):
             if token != self._page_token:
                 return
+            if index % step != start:
+                continue
             key = (rec.path, width, height, fit)
             # A finished Tk image already exists for this card: there is
             # nothing to compose, and _place_thumb will find it by key.
@@ -3370,7 +3430,10 @@ class LibraryTab(ctk.CTkFrame):
                 image = self._tile_build(rec, width, height, fit)
                 self._tile_put(key, image)
             self.ui(self._place_thumb, index, rec, image, token, key)
-        if token == self._page_token:
+        # One of the stripes asks for the pages either side, not all of
+        # them. It waits before starting anyway, so there is no need to
+        # know which stripe finished last.
+        if start == 0 and token == self._page_token:
             self.ui(self._prefetch_pages)
 
     # A pause between prepared tiles, and a wait before starting at all.
@@ -3561,7 +3624,10 @@ class LibraryTab(ctk.CTkFrame):
     # top of that, and every tool that used to act on "the selected clip"
     # or "everything on this page" acts on the set when there is one.
 
-    def _card_click(self, event, rec: Rec, index: int):
+    def _card_click(self, event, index: int):
+        rec = self._slot_rec(index)
+        if rec is None:
+            return
         ctrl = bool(event.state & 0x0004)
         shift = bool(event.state & 0x0001)
         if ctrl:

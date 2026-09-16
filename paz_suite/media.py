@@ -239,6 +239,18 @@ def available_encoders() -> set:
 FILL_STEP = 3
 FILL_BLUR = 14.0
 FILL_DIM = 0.55
+# How close the picture has to come to filling the box before the fill
+# behind it stops being worth making. Two pixels, because "covers it"
+# in practice means a thumbnail one pixel narrower than the card.
+FILL_SKIP_PX = 2
+
+
+def _rgb(colour: str) -> tuple:
+    value = (colour or "#0f0917").lstrip("#")
+    try:
+        return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return (15, 9, 23)
 
 
 def _blurred_fill(source, box_w: int, box_h: int):
@@ -284,11 +296,22 @@ def fit_frame(image, box_w: int, box_h: int, mode: str = "contain",
         canvas = wide.crop((left, top, left + box_w, top + box_h))
         return canvas.filter(ImageFilter.GaussianBlur(9)) if blur else canvas
 
-    canvas = _blurred_fill(source, box_w, box_h)
-
     scale_fit = min(box_w / src_w, box_h / src_h)
-    inner = source.resize((max(int(src_w * scale_fit), 1),
-                            max(int(src_h * scale_fit), 1)), Image.LANCZOS)
+    inner_w = max(int(src_w * scale_fit), 1)
+    inner_h = max(int(src_h * scale_fit), 1)
+    if inner_w >= box_w - FILL_SKIP_PX and inner_h >= box_h - FILL_SKIP_PX:
+        # The picture covers the box, so a blurred copy behind it would
+        # be hidden by it - and making one is half of what a tile costs.
+        # A widescreen clip in a widescreen tile is the common case here:
+        # the cached thumbnail is 320x180 and the card is 331x186, which
+        # leaves a one-pixel edge, not a letterbox. That edge gets the
+        # colour of the well the tile sits in, which is what the corners
+        # get too.
+        canvas = Image.new("RGB", (box_w, box_h), _rgb(T.INPUT))
+    else:
+        canvas = _blurred_fill(source, box_w, box_h)
+
+    inner = source.resize((inner_w, inner_h), Image.LANCZOS)
     canvas.paste(inner, ((box_w - inner.width) // 2, (box_h - inner.height) // 2))
     return canvas.filter(ImageFilter.GaussianBlur(9)) if blur else canvas
 
