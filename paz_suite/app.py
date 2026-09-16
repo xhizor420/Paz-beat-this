@@ -525,6 +525,15 @@ class PazApp:
             "Library", lambda ev: self.library.key_edge(ev, True), e))
         for key in ("m", "M"):
             root.bind(key, lambda e: self._only_evt("Library", self.library.key_mute, e))
+        # Up and Down walk the results; V puts the one you are looking at
+        # into the project you are working in (Shift+V to pick another).
+        root.bind("<Up>", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_step_clip(ev, -1), e))
+        root.bind("<Down>", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_step_clip(ev, 1), e))
+        root.bind("v", lambda e: self._only_evt("Library", self.library.key_mark_used, e))
+        root.bind("V", lambda e: self._only_evt(
+            "Library", lambda ev: self.library.key_mark_used(ev, pick=True), e))
         for digit in range(10):
             root.bind(str(digit), lambda e, d=digit: self._only_evt(
                 "Library", lambda ev: self.library.key_jump(ev, d / 10.0), e))
