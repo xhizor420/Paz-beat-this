@@ -9,6 +9,7 @@ import fnmatch
 import os
 import shlex
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -41,17 +42,50 @@ CREATE TABLE IF NOT EXISTS vault_marks (
 """
 
 
+INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_files_pid ON files(pid)",
+    "CREATE INDEX IF NOT EXISTS idx_vault_marks_path ON vault_marks(path)",
+    "CREATE INDEX IF NOT EXISTS idx_vault_marks_project ON vault_marks(project)",
+)
+
+# Marking a clip, reading the projects list, a hover peek and the sync
+# worker each open their own connection - a connection is cheap and
+# sharing one across threads is not. What is NOT cheap is the schema:
+# four CREATE IF NOT EXISTS, a PRAGMA table_info walk and three index
+# checks, every time. None of it can have changed since the first
+# connection to that file, so it runs once per database and later
+# connections get the pragmas only. Keyed by path rather than a bare
+# flag so pointing at a different database still sets it up, and locked
+# because the sync worker and the UI thread race here.
+_schema_done: set = set()
+_schema_lock = threading.Lock()
+
+
 def db_connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=15.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.executescript(SCHEMA)
-    _add_missing_columns(conn)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_files_pid ON files(pid)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_marks_path ON vault_marks(path)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_marks_project ON vault_marks(project)")
+    # WAL lets readers and one writer run at once, but two writers still
+    # collide - and the sync worker writes ten thousand rows while you are
+    # marking clips. Without this, that collision is an exception on the
+    # UI thread; with it, the loser waits.
+    conn.execute("PRAGMA busy_timeout=15000")
+    if DB_PATH not in _schema_done:
+        with _schema_lock:
+            if DB_PATH not in _schema_done:
+                conn.executescript(SCHEMA)
+                _add_missing_columns(conn)
+                for statement in INDEXES:
+                    conn.execute(statement)
+                _schema_done.add(DB_PATH)
     return conn
+
+
+def db_forget_schema() -> None:
+    """Make the next connection set the schema up again - for anything
+    that moves or deletes the database underneath us."""
+    _schema_done.clear()
 
 
 @dataclass

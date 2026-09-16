@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from .config import CONFIG_DIR, E621_META_PATH
+from .config import CONFIG_DIR, E621_META_LOG, E621_META_PATH
 
 APP_NAME = "PAZ Suite"
 # Still finding its edges - Resolve, the beat models and the
@@ -82,22 +82,32 @@ class E621Meta:
     def __init__(self):
         self._lock = threading.Lock()
         self._dirty = False
+        self._pending: set = set()
         try:
             with open(E621_META_PATH, "r", encoding="utf-8") as fh:
                 self._data = json.load(fh)
         except (OSError, ValueError):
             self._data = {}
+        if self._replay_log():
+            # A previous run was interrupted mid-fetch. Fold its journal
+            # back into the cache and start clean - once, at startup,
+            # where a hundred milliseconds does not matter.
+            self._dirty = True
+            self.save()
 
     def get(self, pid: str) -> dict | None:
         with self._lock:
             return self._data.get(pid)
 
     def save(self) -> None:
+        """Rewrite the whole cache. Use at shutdown and at the end of a
+        fetch - see checkpoint() for the one to call during it."""
         with self._lock:
             if not self._dirty:
                 return
             data = dict(self._data)
             self._dirty = False
+            self._pending.clear()
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             tmp = E621_META_PATH + ".tmp"
@@ -105,7 +115,58 @@ class E621Meta:
                 json.dump(data, fh)
             os.replace(tmp, E621_META_PATH)
         except OSError:
+            return
+        try:
+            os.remove(E621_META_LOG)
+        except OSError:
             pass
+
+    def checkpoint(self) -> None:
+        """Put the posts fetched since the last checkpoint somewhere safe.
+
+        Tagging a whole library is thousands of posts over hours, and it
+        has to survive being interrupted - but a full rewrite to bank ten
+        new posts means writing the other ten thousand as well. On this
+        library that is seven and a half megabytes and an eighth of a
+        second, over a thousand times in one run: eight gigabytes of
+        writes and two minutes of CPU to save work that would fit in a
+        few kilobytes. So the checkpoint appends the new records to a
+        journal instead, and the next full save folds them in.
+        """
+        with self._lock:
+            rows = [(pid, self._data[pid]) for pid in sorted(self._pending)
+                    if pid in self._data]
+            self._pending.clear()
+        if not rows:
+            return
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(E621_META_LOG, "a", encoding="utf-8") as fh:
+                for pid, record in rows:
+                    fh.write(json.dumps({"pid": pid, "rec": record}) + "\n")
+        except OSError:
+            pass
+
+    def _replay_log(self) -> int:
+        """Apply a journal left by an interrupted run. Returns how many."""
+        count = 0
+        try:
+            with open(E621_META_LOG, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue        # a half-written last line
+                    pid = row.get("pid")
+                    if isinstance(pid, str) and isinstance(row.get("rec"), dict):
+                        self._data[pid] = row["rec"]
+                        count += 1
+        except OSError:
+            return 0
+        return count
 
     def fetch(self, pid: str, user: str = "", key: str = "") -> dict:
         """One API call. Returns the record; {"error": ...} on transient failure."""
@@ -147,6 +208,7 @@ class E621Meta:
         record["fetched_at"] = time.time()
         with self._lock:
             self._data[pid] = record
+            self._pending.add(pid)
             self._dirty = True
         return record
 

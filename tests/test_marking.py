@@ -68,6 +68,8 @@ class FakeTab:
         self.renders = 0
         self.metas = 0
         self.counts = 0
+        self.scans = 0
+        self.bumps = []
         self.scrolled = []
         self.picked = 0
 
@@ -89,6 +91,11 @@ class FakeTab:
 
     def _refresh_quick_counts(self):
         self.counts += 1
+        self.scans += 1
+
+    def _bump_quick_count(self, key, delta):
+        self.counts += 1
+        self.bumps.append((key, delta))
 
     def render_page(self):
         self.renders += 1
@@ -193,6 +200,49 @@ def test_the_counted_chips_are_refreshed(db):
     tab = FakeTab()
     tab._mark_used([tab.records[0]], "PMV")
     assert tab.counts == 1
+
+
+def test_the_chips_are_adjusted_not_recounted(db):
+    """Recounting means walking ten thousand records to learn a number the
+    caller already knows, which was most of what a mark cost."""
+    tab = FakeTab()
+    tab._mark_used([tab.records[0]], "PMV")
+    assert tab.scans == 0
+    assert tab.bumps == [("unused", -1)]
+
+
+def test_marking_a_clip_that_was_already_used_does_not_move_the_count(db):
+    tab = FakeTab()
+    rec = tab.records[0]
+    tab._mark_used([rec], "Other")
+    tab.bumps.clear()
+    tab._mark_used([rec], "PMV")
+    assert tab.bumps == [("unused", 0)]
+
+
+def test_marking_several_clips_counts_each_of_them(db):
+    tab = FakeTab()
+    tab._mark_used(tab.records[:3], "PMV")
+    assert tab.bumps == [("unused", -3)]
+
+
+def test_unmarking_the_last_project_puts_it_back_in_the_count(db):
+    tab = FakeTab()
+    rec = tab.records[0]
+    tab._mark_used([rec], "PMV")
+    tab.bumps.clear()
+    tab._unmark_used(rec, "PMV")
+    assert tab.bumps == [("unused", 1)]
+
+
+def test_unmarking_one_of_two_projects_does_not(db):
+    tab = FakeTab()
+    rec = tab.records[0]
+    tab._mark_used([rec], "Other")
+    tab._mark_used([rec], "PMV")
+    tab.bumps.clear()
+    tab._unmark_used(rec, "PMV")
+    assert tab.bumps == [("unused", 0)]
 
 
 def test_the_project_is_remembered_once_not_per_clip(db):

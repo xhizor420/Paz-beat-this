@@ -8,6 +8,7 @@ from __future__ import annotations
 import collections
 import os
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -129,6 +130,10 @@ class LibraryTab(ctk.CTkFrame):
         self.by_path: dict = {}
         self.tag_universe: set = set()
         self.filtered: list[Rec] = []
+        # Totals over the whole result set, summed once per search - see
+        # run_search.
+        self._results_bytes = 0
+        self._results_secs = 0.0
         self._project_colors: dict = {}
         # Reused tag widgets - see _tag_button. Forty CTkButtons per clip,
         # built fresh on every click, was 85ms of the 100ms it took to
@@ -138,6 +143,8 @@ class LibraryTab(ctk.CTkFrame):
         self._tags_used = 0
         self._groups_used = 0
         self._tags_job = None
+        self._chunk_job = None
+        self._tag_plan: list = []
         self._detail_empty = None
         self.page = 0
         self.selected: Rec | None = None
@@ -689,14 +696,28 @@ class LibraryTab(ctk.CTkFrame):
         height = max(canvas.winfo_height(), 1)
         if width < 8 or height < 8:
             return
-        want = (width, height, self.cfg.art_wallpaper_path,
-                self.cfg.art_wallpaper_zoom, self.cfg.art_wallpaper_fx,
-                self.cfg.art_wallpaper_fy, self.cfg.art_wallpaper_blur,
-                self.cfg.art_wallpaper_dim)
-        if want != getattr(self, "_wallpaper_key", None):
-            picture = artwork.render_backdrop(self.cfg, "wallpaper",
-                                              (width, height), T.SURFACE)
-            self._wallpaper_key = want
+        if not self.cfg.art_wallpaper_path:
+            self._wallpaper_photo = None
+            return
+        look = artwork.backdrop_key(self.cfg, "wallpaper")
+        if look != getattr(self, "_wallpaper_look", None):
+            # Decoding and blurring the picture is the slow part and it
+            # does not depend on the canvas size, so it happens once, off
+            # this thread. The page draws now; the backdrop lands when it
+            # is ready.
+            self._wallpaper_look = look
+            self._wallpaper_src = None
+            self._wallpaper_photo = None
+            threading.Thread(target=self._build_wallpaper, args=(look,),
+                             daemon=True).start()
+            return
+        source = getattr(self, "_wallpaper_src", None)
+        if source is None:
+            return
+        if (width, height) != getattr(self, "_wallpaper_size", None):
+            blur = artwork.read_treatments(self.cfg, "wallpaper")["blur"]
+            picture = artwork.backdrop_fit(source, (width, height), blur)
+            self._wallpaper_size = (width, height)
             self._wallpaper_photo = (ImageTk.PhotoImage(picture)
                                      if picture is not None else None)
         if self._wallpaper_photo is None:
@@ -705,8 +726,25 @@ class LibraryTab(ctk.CTkFrame):
                             anchor="nw", tags=("wallpaper",))
         canvas.tag_lower("wallpaper")
 
+    def _build_wallpaper(self, look) -> None:
+        """Decode, crop, scale and blur the backdrop. Worker thread."""
+        try:
+            source = artwork.backdrop_source(self.cfg, "wallpaper", T.SURFACE)
+        except Exception:
+            source = None
+        self.ui(self._wallpaper_ready, look, source)
+
+    def _wallpaper_ready(self, look, source) -> None:
+        if look != getattr(self, "_wallpaper_look", None):
+            return                      # the picture changed again meanwhile
+        self._wallpaper_src = source
+        self._wallpaper_size = None
+        self._draw_wallpaper()
+
     def refresh_wallpaper(self) -> None:
-        self._wallpaper_key = None
+        self._wallpaper_look = None
+        self._wallpaper_src = None
+        self._wallpaper_size = None
         self.render_page()
 
     def _gal_background_click(self, event):
@@ -1435,11 +1473,18 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── library loading ─────────────────────────────────────────────────────
 
-    def _apply_meta(self, rec: Rec) -> None:
+    def _apply_meta(self, rec: Rec, universe=None) -> None:
         """Fold this clip's cached e621 record into it. Split out of the
         load so a fetch can update the handful of clips it touched instead
         of re-reading the whole library, which is over a second once the
-        library runs into five figures."""
+        library runs into five figures.
+
+        `universe` is where the tags are collected: a load off the UI
+        thread passes its own set, so it cannot write into the one the
+        window is currently searching against.
+        """
+        if universe is None:
+            universe = self.tag_universe
         meta = self.emeta.get(rec.pid) if rec.pid else None
         if not meta or meta.get("missing"):
             return
@@ -1452,7 +1497,7 @@ class LibraryTab(ctk.CTkFrame):
         rec.score = meta.get("score") or 0
         rec.tags = set((meta.get("tags") or "").split())
         rec.url = meta.get("url") or ""
-        self.tag_universe |= rec.tags
+        universe |= rec.tags
         rec.compute_named()
 
     def refresh_meta_for(self, pids) -> None:
@@ -1500,11 +1545,12 @@ class LibraryTab(ctk.CTkFrame):
                 else "Nothing missing")
 
     def _refresh_quick_counts(self):
+        """Recount from the records and repaint. For a library load or a
+        tag fetch, where anything could have changed."""
         if not getattr(self, "quick_chips", None) or not self.records:
             return
-        # One pass, not eight. These numbers are refreshed on every mark,
-        # and eight walks of ten thousand records is most of what a mark
-        # costs once the rest of it stopped reloading the library.
+        # One pass, not eight. Eight walks of ten thousand records is
+        # most of what this costs.
         counts = dict.fromkeys(
             ("unused", "untagged", "noid", "4k", "no4k",
              "portrait", "widescreen", "square"), 0)
@@ -1519,6 +1565,27 @@ class LibraryTab(ctk.CTkFrame):
             shape = rec.orientation
             if shape in counts:
                 counts[shape] += 1
+        self._quick_counts = counts
+        self._paint_quick_counts()
+
+    def _bump_quick_count(self, key: str, delta: int) -> None:
+        """Adjust one counted chip and repaint, without recounting.
+
+        Marking a clip changes exactly one of these numbers, by one - but
+        finding that out by walking the library again is twelve
+        milliseconds, which on the real library was most of what a mark
+        cost. A marking session is hundreds of marks.
+        """
+        counts = getattr(self, "_quick_counts", None)
+        if not counts or not delta:
+            return
+        counts[key] = max(counts.get(key, 0) + delta, 0)
+        self._paint_quick_counts()
+
+    def _paint_quick_counts(self):
+        if not getattr(self, "quick_chips", None):
+            return
+        counts = getattr(self, "_quick_counts", None) or {}
         self._quick_live = []
         for key, (chip, label, _token) in self.quick_chips.items():
             count = counts.get(key)
@@ -1542,20 +1609,27 @@ class LibraryTab(ctk.CTkFrame):
                 chip.pack(side="left", padx=(0, 6))
         self._fit_quick_chips()
 
-    def _load_library(self):
+    # Reading the library is three things at once: ten thousand rows out
+    # of SQLite, the tag cache folded into each of them, and a directory
+    # walk of the premium pool. A quarter of a second, all told - which
+    # is fine while the window is still being built and a visible freeze
+    # every other time. So it is split: _read_library does the work and
+    # touches nothing, _adopt_library installs the result, and
+    # load_library_async puts the first on a worker thread.
+
+    def _read_library(self) -> dict:
+        """Everything a load produces, and nothing of self changed. Safe
+        to call from a worker thread."""
         conn = db_connect()
-        rows = conn.execute(
-            "SELECT path,name,folder,pid,size,mtime,duration,width,height,fps "
-            "FROM files").fetchall()
-        vault_marks = vault_marks_by_path(conn)
-        self._project_colors = {name: color for name, color, _n, _t
-                                in vault_projects_list(conn)}
-        conn.close()
-        self.records = []
-        self.by_path = {}
-        self.tag_universe = set()
-        # Built from the whole library, so it cannot outlive this load.
-        self._weights = None
+        try:
+            rows = conn.execute(
+                "SELECT path,name,folder,pid,size,mtime,duration,width,height,fps "
+                "FROM files").fetchall()
+            vault_marks = vault_marks_by_path(conn)
+            colors = {name: color for name, color, _n, _t
+                      in vault_projects_list(conn)}
+        finally:
+            conn.close()
 
         premium: dict = {}
         if self.cfg.premium_root and os.path.isdir(self.cfg.premium_root):
@@ -1573,9 +1647,10 @@ class LibraryTab(ctk.CTkFrame):
             except OSError:
                 pass
 
+        records, by_path, universe = [], {}, set()
         for row in rows:
             rec = Rec(*row)
-            self._apply_meta(rec)
+            self._apply_meta(rec, universe)
             alt_path = premium.get(rec.folder, {}).get(rec.name)
             rec.premium = rec.height >= 2000 or alt_path is not None
             rec.premium_path = alt_path or ""
@@ -1583,8 +1658,19 @@ class LibraryTab(ctk.CTkFrame):
             if marks:
                 rec.used_projects = [project for project, _color, _t in marks]
                 rec.used_color = marks[0][1]   # most-recent mark, per vault_marks_by_path
-            self.records.append(rec)
-            self.by_path[rec.path] = rec
+            records.append(rec)
+            by_path[rec.path] = rec
+        return {"records": records, "by_path": by_path,
+                "tag_universe": universe, "colors": colors}
+
+    def _adopt_library(self, loaded: dict) -> None:
+        """Install a library read by _read_library. UI thread."""
+        self.records = loaded["records"]
+        self.by_path = loaded["by_path"]
+        self.tag_universe = loaded["tag_universe"]
+        self._project_colors = loaded["colors"]
+        # Built from the whole library, so it cannot outlive this load.
+        self._weights = None
         if hasattr(self, "quick_chips"):
             self._refresh_missing_badge()
         # The identity bar carries one live number for the whole suite, so
@@ -1592,6 +1678,38 @@ class LibraryTab(ctk.CTkFrame):
         setter = getattr(self.app, "set_header_status", None)
         if setter:
             setter(f"{len(self.records):,} clips indexed", T.OK)
+
+    def _load_library(self):
+        """Read and install, here and now. For the constructor, where
+        there is no window to freeze yet - everywhere else wants
+        load_library_async."""
+        self._load_gen = getattr(self, "_load_gen", 0) + 1
+        self._adopt_library(self._read_library())
+
+    def load_library_async(self, then=None) -> None:
+        """Re-read the library without stalling the window, then call
+        `then` on the UI thread once it is installed.
+
+        A second call while one is in flight wins: the older result is
+        thrown away rather than installed over the newer one.
+        """
+        gen = self._load_gen = getattr(self, "_load_gen", 0) + 1
+
+        def work():
+            try:
+                loaded = self._read_library()
+            except Exception:
+                return
+            self.ui(finish, loaded)
+
+        def finish(loaded):
+            if gen != self._load_gen:
+                return
+            self._adopt_library(loaded)
+            if then is not None:
+                then()
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ── search & render ─────────────────────────────────────────────────────
 
@@ -1951,6 +2069,13 @@ class LibraryTab(ctk.CTkFrame):
         query = self.search.get().strip()
         includes, excludes = parse_query(query)
         self.filtered = [r for r in self.records if rec_matches(r, includes, excludes)]
+        # The line under the gallery reads "N clips · X GB · Y hr of
+        # footage" - totals over the whole result, not the page. Summed
+        # here, where the result set changes, rather than in render_page:
+        # there it was two walks of ten thousand records on every single
+        # page flip, for a number that cannot have changed.
+        self._results_bytes = sum(r.size for r in self.filtered)
+        self._results_secs = sum(r.duration for r in self.filtered)
         self._apply_sort()
         self.page = 0
         self._remember_state()
@@ -2333,8 +2458,8 @@ class LibraryTab(ctk.CTkFrame):
 
         self.page_label.configure(text=f"page {self.page + 1}/{pages}")
         self.count_label.configure(
-            text=f"{total} clips · {fmt_size(sum(r.size for r in self.filtered))}"
-                 f" · {fmt_len(sum(r.duration for r in self.filtered))} of footage")
+            text=f"{total} clips · {fmt_size(self._results_bytes)}"
+                 f" · {fmt_len(self._results_secs)} of footage")
 
         base = self.card_width
         width = max(canvas.winfo_width(), base + 2 * self.GAP)
@@ -3372,8 +3497,10 @@ class LibraryTab(ctk.CTkFrame):
         if not rec:
             self.detail_name.configure(text="Nothing selected")
             self.detail_meta.configure(text="")
+            self._cancel_tag_chunks()
             self._tags_used = 0
             self._groups_used = 0
+            self._tag_plan = []
             self._park_tag_widgets()
             if self._detail_empty is not None:
                 self._detail_empty.grid_remove()
@@ -3384,6 +3511,7 @@ class LibraryTab(ctk.CTkFrame):
         self._queue_tag_list(rec)
 
     def _queue_tag_list(self, rec: Rec) -> None:
+        self._cancel_tag_chunks()
         if self._tags_job is not None:
             try:
                 self.after_cancel(self._tags_job)
@@ -3391,8 +3519,33 @@ class LibraryTab(ctk.CTkFrame):
                 pass
         self._tags_job = self.after(90, lambda: self._render_tag_list(rec))
 
+    def _cancel_tag_chunks(self) -> None:
+        if self._chunk_job is not None:
+            try:
+                self.after_cancel(self._chunk_job)
+            except ValueError:
+                pass
+            self._chunk_job = None
+
+    # How long one callback may spend placing tag rows. A well-tagged clip
+    # here carries well over a hundred, and placing them all in one go is
+    # a tenth of a second with the window dead - which is what the panel
+    # felt like on the busiest clips. Only about twenty are on screen at
+    # once anyway, so the first chunk is everything you can see and the
+    # rest arrive over the next few frames.
+    #
+    # A time budget rather than a count of rows, because the two costs
+    # involved differ by a factor of twenty: reconfiguring a pooled
+    # button is a tenth of a millisecond, building one that does not
+    # exist yet is two. A count tuned for the warm case stalls on a cold
+    # pool and a count tuned for the cold case dribbles forever on a warm
+    # one. This asks the only question that matters - is the frame gone
+    # yet - and so needs no tuning per machine either.
+    CHUNK_MS = 12.0
+
     def _render_tag_list(self, rec: Rec) -> None:
         self._tags_job = None
+        self._cancel_tag_chunks()
         # The selection may have moved on while this was waiting.
         if rec is not self.selected:
             return
@@ -3407,15 +3560,28 @@ class LibraryTab(ctk.CTkFrame):
             ("Tags", "", sorted(rec.tags - rec.named), T.TAG["general"]),
         ]
 
+        # The headers go up straight away - there are at most six of them
+        # and they are the shape of the panel. The tag rows under them are
+        # only planned here, as a flat list of placements, and placed a
+        # chunk at a time below.
+        plan: list = []
         row = 0
         any_content = False
         for title, prefix, names, colour in groups:
             if not names:
                 continue
             any_content = True
-            row = self._detail_group(title, prefix, names, colour, row)
+            row = self._detail_group(title, prefix, names, colour, row, plan)
+        self._tag_plan = plan
 
-        self._park_tag_widgets()
+        # Anything the previous clip used and this one does not, hidden
+        # now rather than after the last chunk - a stale tag left sitting
+        # under a new clip's list reads as this clip's tag.
+        for button in self._tag_pool[len(plan):]:
+            button.grid_remove()
+        for header in self._group_pool[self._groups_used:]:
+            header.grid_remove()
+
         if self._detail_empty is None:
             self._detail_empty = ctk.CTkLabel(
                 self.detail_tags,
@@ -3427,6 +3593,19 @@ class LibraryTab(ctk.CTkFrame):
         else:
             self._detail_empty.grid(row=0, column=0, columnspan=2,
                                     padx=10, pady=10, sticky="w")
+        self._render_tag_chunk()
+
+    def _render_tag_chunk(self) -> None:
+        """Place planned tag rows for up to CHUNK_MS, then yield."""
+        self._chunk_job = None
+        plan = self._tag_plan
+        deadline = time.perf_counter() + self.CHUNK_MS / 1000.0
+        while self._tags_used < len(plan):
+            self._tag_button(*plan[self._tags_used])
+            if time.perf_counter() >= deadline:
+                break
+        if self._tags_used < len(plan):
+            self._chunk_job = self.after(16, self._render_tag_chunk)
 
     def _render_meta_line(self, rec: Rec) -> None:
         """The one line under the file name. Its own method because a mark
@@ -3444,7 +3623,11 @@ class LibraryTab(ctk.CTkFrame):
             bits.append("used: " + ", ".join(rec.used_projects))
         self.detail_meta.configure(text="  ·  ".join(bits))
 
-    def _detail_group(self, title: str, prefix: str, names: list, colour: str, row: int) -> int:
+    def _detail_group(self, title: str, prefix: str, names: list, colour: str,
+                      row: int, plan: list) -> int:
+        """Grid this group's header and append its tag rows to `plan`.
+        Returns the next free row. The rows are placed by
+        _render_tag_chunk, not here - see TAG_CHUNK."""
         key = title.lower()
         open_now = self.cfg.detail_open.get(key, True)
         pool = self._group_pool
@@ -3467,13 +3650,14 @@ class LibraryTab(ctk.CTkFrame):
             return row
 
         two_up = len(names) > 6 and prefix == ""
-        for index, name in enumerate(names[:160]):
+        shown = names[:160]
+        for index, name in enumerate(shown):
             token = prefix + name
             if two_up:
-                self._tag_button(token, name, colour, row + index // 2, column=index % 2)
+                plan.append((token, name, colour, row + index // 2, index % 2, 1))
             else:
-                self._tag_button(token, name, colour, row + index, column=0, span=2)
-        row += ((len(names[:160]) + 1) // 2) if two_up else len(names[:160])
+                plan.append((token, name, colour, row + index, 0, 2))
+        row += ((len(shown) + 1) // 2) if two_up else len(shown)
         return row
 
     def _toggle_group(self, key: str):
@@ -3647,14 +3831,17 @@ class LibraryTab(ctk.CTkFrame):
         """Re-read the library and land back where you were, rather than
         bouncing to page one after every edit."""
         page, selected = self.page, self.selected.path if self.selected else ""
-        self._load_library()
-        self.run_search()
-        self.page = page
-        if selected and selected in self.by_path:
-            self.selected = self.by_path[selected]
-        self.render_page()
-        self._render_details()
-        self._render_tagpanel()
+
+        def settle():
+            self.run_search()
+            self.page = page
+            if selected and selected in self.by_path:
+                self.selected = self.by_path[selected]
+            self.render_page()
+            self._render_details()
+            self._render_tagpanel()
+
+        self.load_library_async(settle)
 
     # ── Resolve hand-off ────────────────────────────────────────────────
     #
@@ -3738,7 +3925,10 @@ class LibraryTab(ctk.CTkFrame):
         finally:
             conn.close()
         colour = self._project_colors.get(project, T.ACCENT2)
+        newly_used = 0
         for rec in recs:
+            if not rec.used_projects:
+                newly_used += 1         # it leaves the "never used" chip
             if project in rec.used_projects:
                 rec.used_projects.remove(project)
             # Most recent first, which is the order _load_library builds
@@ -3751,7 +3941,7 @@ class LibraryTab(ctk.CTkFrame):
         if self.cfg.last_project != project:
             self.cfg.last_project = project
             self.cfg.save()
-        self._after_vault_change(recs)
+        self._after_vault_change(recs, -newly_used)
         count = len(paths)
         self.set_status(f"Marked {count} clip{'s' if count != 1 else ''} as used "
                         f"in '{project}'. Press V to put the next one there too.",
@@ -3788,10 +3978,11 @@ class LibraryTab(ctk.CTkFrame):
             rec.used_projects.remove(project)
         rec.used_color = (self._project_colors.get(rec.used_projects[0], "")
                           if rec.used_projects else "")
-        self._after_vault_change([rec])
+        # Back into "never used", but only if that was its last project.
+        self._after_vault_change([rec], 0 if rec.used_projects else 1)
         self.set_status(f"Removed from '{project}'.", T.OK)
 
-    def _after_vault_change(self, recs) -> None:
+    def _after_vault_change(self, recs, unused_delta: int = 0) -> None:
         """Repaint what a mark or unmark actually changed - and nothing
         else. The page, the scroll position, the selection and the search
         results all stay exactly as they were."""
@@ -3803,8 +3994,9 @@ class LibraryTab(ctk.CTkFrame):
             # The meta line, not the whole panel: the tag list has not
             # changed, and rebuilding it is the expensive part.
             self._render_meta_line(self.selected)
-        # "Never used" is one of the counted chips, and it just changed.
-        self._refresh_quick_counts()
+        # "Never used" is the one counted chip a mark can change, and the
+        # caller already knows by how many - see _bump_quick_count.
+        self._bump_quick_count("unused", unused_delta)
 
     # ── sync (incremental index build) ──────────────────────────────────────
 
@@ -3991,17 +4183,22 @@ class LibraryTab(ctk.CTkFrame):
         self.busy = False
         self.more_btn.configure(state="normal")
         self.progress.set(1.0)
-        self._load_library()
-        self.run_search()
-        untagged = sum(1 for r in self.records if r.pid and not r.tags)
-        if untagged and self.cfg.library_autofetch and self.cfg.e621_enabled:
-            self.after(400, self._fetch_tags)
-        message = f"{self.F('synced')} · {len(self.records)} clips in {self._folders_summary()}"
-        if removed:
-            message += f" · {removed} gone"
-        if untagged:
-            message += f" · {untagged} still untagged (press {self.F('fetch')})"
-        self.set_status(message, T.OK)
+        self.set_status(self.F("synced") + " - reading the index...", T.ACCENT2)
+
+        def settle():
+            self.run_search()
+            untagged = sum(1 for r in self.records if r.pid and not r.tags)
+            if untagged and self.cfg.library_autofetch and self.cfg.e621_enabled:
+                self.after(400, self._fetch_tags)
+            message = (f"{self.F('synced')} · {len(self.records)} clips "
+                       f"in {self._folders_summary()}")
+            if removed:
+                message += f" · {removed} gone"
+            if untagged:
+                message += f" · {untagged} still untagged (press {self.F('fetch')})"
+            self.set_status(message, T.OK)
+
+        self.load_library_async(settle)
 
     # ── tag fetching (shared cache with Convert) ────────────────────────────
 
@@ -4113,14 +4310,18 @@ class LibraryTab(ctk.CTkFrame):
 
     def _media_fixed(self, done: int, more_tags: bool, failed: int = 0):
         self.more_btn.configure(state="normal")
-        self._load_library()
-        self.run_search()
-        message = f"Rebuilt {done - failed}/{done} thumbnails/details"
-        if failed:
-            message += f" - {failed} could not be read (corrupt or unsupported; try Verify library)"
-        self.set_status(message, T.WARN if failed else T.OK)
-        if more_tags and self.cfg.e621_enabled:
-            self._fetch_tags()
+
+        def settle():
+            self.run_search()
+            message = f"Rebuilt {done - failed}/{done} thumbnails/details"
+            if failed:
+                message += (f" - {failed} could not be read (corrupt or "
+                            "unsupported; try Verify library)")
+            self.set_status(message, T.WARN if failed else T.OK)
+            if more_tags and self.cfg.e621_enabled:
+                self._fetch_tags()
+
+        self.load_library_async(settle)
 
     def _fetch_tags(self, full: bool = False):
         # Docstring below; this guard is the one thing that has to happen
@@ -4307,7 +4508,7 @@ class LibraryTab(ctk.CTkFrame):
                                 f"{self.F('fetching')} {done}/{len(todo)}",
                                 T.FAINT if ambient else T.ACCENT2)
                     if index % 10 == 9:
-                        self.emeta.save()
+                        self.emeta.checkpoint()
                     # wait(), not sleep(): a cancel lands at once rather
                     # than after the pause e621's rate limit asks for.
                     if index + 1 < len(todo):

@@ -8,11 +8,13 @@ tab and must only fire for whichever one is currently visible.
 from __future__ import annotations
 
 import os
+import threading
 import tkinter as tk
 
 import customtkinter as ctk
+from PIL import ImageTk
 
-from .theme import (T, BANNER_H, banner_photo, font, mark_photo, mix, resolve_fonts)
+from .theme import (T, BANNER_H, banner_image, font, mark_photo, mix, resolve_fonts)
 from .config import AppConfig, CONFIG_DIR
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
@@ -208,6 +210,7 @@ class PazApp:
         self._banner_photo = None
         self._banner_job = None
         self._banner_width = 0
+        self._banner_key = None
         self._header_icon = mark_photo(22, T.ACCENT)
         self._header_text = ""
         self._header_colour = T.OK
@@ -231,23 +234,60 @@ class PazApp:
             120, lambda: self._draw_header(self._banner_width))
 
     def _draw_header(self, width: int) -> None:
-        """Repaint the whole strip: picture, lockup, status.
+        """Repaint the strip. The picture is made off this thread.
+
+        Compositing a full-width header out of a photograph costs about a
+        tenth of a second, and this is the one piece of chrome that every
+        status line in the app writes into - so doing it here would put
+        that tenth of a second into every encode tick and every tag fetch
+        reply. The picture is rendered on a worker and cached against
+        everything that could change it; the strip keeps showing the
+        previous one until the new one lands, which at a header's aspect
+        ratio is not a visible difference.
+        """
+        width = max(int(width), 320)
+        self._banner_job = None
+        self._banner_width = width
+        key = (artwork.slot_key(self.cfg, "banner"), width)
+        if key != self._banner_key:
+            self._banner_key = key
+            threading.Thread(target=self._build_banner, args=(key,),
+                             daemon=True).start()
+        self._paint_header()
+
+    def _build_banner(self, key: tuple) -> None:
+        """Decode, crop, scale and scrim the header picture. Worker."""
+        slot, width = key
+        try:
+            picture = banner_image(slot[0], width, BANNER_H,
+                                   slot[2], slot[3], slot[4])
+        except Exception:
+            picture = None
+        uithread.post(self._banner_ready, key, picture)
+
+    def _banner_ready(self, key: tuple, picture) -> None:
+        if key != self._banner_key:
+            return                      # a wider window got there first
+        try:
+            self._banner_photo = (ImageTk.PhotoImage(picture)
+                                  if picture is not None else None)
+        except Exception:
+            return
+        self._paint_header()
+
+    def _paint_header(self) -> None:
+        """The canvas items, over the cached picture.
 
         Everything is a canvas item over one composited background image
         rather than a row of packed widgets, because Tk has no widget
         transparency - a CTkLabel over a picture would sit on its own
         opaque rectangle and the banner would look like a mistake.
         """
-        width = max(int(width), 320)
-        self._banner_job = None
         try:
-            art = artwork.read_slot(self.cfg, "banner")
-            self._banner_photo = banner_photo(
-                art["path"], width, BANNER_H,
-                art["zoom"], art["fx"], art["fy"])
             self.header.delete("all")
-            self.header.create_image(0, 0, image=self._banner_photo, anchor="nw")
-
+            if self._banner_photo is not None:
+                self.header.create_image(0, 0, image=self._banner_photo,
+                                         anchor="nw")
             mid = BANNER_H // 2
             self.header.create_image(20, mid, image=self._header_icon, anchor="w")
             name = self.header.create_text(52, mid + 1, text="PAZ", anchor="w",
@@ -259,13 +299,27 @@ class PazApp:
             self.header.create_text(self.header.bbox(name)[2] + 9, mid + 4,
                                     text="S U I T E", anchor="w",
                                     fill=T.DIM, font=(T.MONO, 9))
-            if self._header_text:
-                item = self.header.create_text(
-                    width - 20, mid, text=self._header_text, anchor="e",
-                    fill=T.DIM, font=(T.MONO, 10))
-                left = self.header.bbox(item)[0]
-                self.header.create_oval(left - 15, mid - 4, left - 8, mid + 3,
-                                        fill=self._header_colour, outline="")
+            self._paint_header_status()
+        except tk.TclError:
+            pass
+
+    def _paint_header_status(self) -> None:
+        """Just the live line and its dot. Tagged so a status change can
+        replace them without touching the picture underneath."""
+        try:
+            self.header.delete("hstatus")
+            if not self._header_text:
+                return
+            width = max(self._banner_width or self.root.winfo_width() or 1760,
+                        320)
+            mid = BANNER_H // 2
+            item = self.header.create_text(
+                width - 20, mid, text=self._header_text, anchor="e",
+                fill=T.DIM, font=(T.MONO, 10), tags=("hstatus",))
+            left = self.header.bbox(item)[0]
+            self.header.create_oval(left - 15, mid - 4, left - 8, mid + 3,
+                                    fill=self._header_colour, outline="",
+                                    tags=("hstatus",))
         except tk.TclError:
             pass
 
@@ -273,12 +327,16 @@ class PazApp:
         """One live line in the identity bar - what the suite is doing
         right now, readable from whichever tab you happen to be on. An
         empty text hides the indicator entirely; a lone dot with nothing
-        beside it just looks like a rendering fault."""
+        beside it just looks like a rendering fault.
+
+        Called from encode ticks and tag-fetch replies, so it redraws two
+        canvas items and nothing else - never the picture.
+        """
         if text == self._header_text and colour == self._header_colour:
             return
         self._header_text = text
         self._header_colour = colour
-        self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
+        self._paint_header_status()
 
     # ── banner picture ──────────────────────────────────────────────────
     #
