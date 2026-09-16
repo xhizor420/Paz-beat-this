@@ -160,6 +160,9 @@ class LibraryTab(ctk.CTkFrame):
         self._heads_done = 0
         self._slots_planned: dict = {}
         self._rail_gen = 0
+        # How many card positions have had their bindings set - see
+        # _bind_card_slots. Positions, not clips: they outlive a page.
+        self._bound_slots = 0
         self._hidden_btn = None
         # Prepared gallery tiles - see TILE_CACHE. Written by the page
         # loader and the prefetch, read by both, so it takes a lock.
@@ -2737,6 +2740,8 @@ class LibraryTab(ctk.CTkFrame):
 
         cell_h = self.IMG_H + self.CAP_H + self.GAP
         self._cell_h = cell_h
+        # Once per position the gallery has ever had - see _bind_card_slots.
+        self._bind_card_slots(len(batch))
         for index, rec in enumerate(batch):
             col, row = index % columns, index // columns
             x = margin + col * (self.CARD_W + self.GAP)
@@ -2749,6 +2754,53 @@ class LibraryTab(ctk.CTkFrame):
         canvas.configure(scrollregion=(0, 0, width, max(content, visible)))
         canvas.yview_moveto(0)
         self._start_thumbs(list(batch), token)
+
+    # A canvas binding belongs to the tag, not to the items wearing it:
+    # it survives deleting them and applies to new ones created with the
+    # same tag afterwards, and it can even be set before any item carries
+    # the tag at all. (Both verified against Tk, not assumed.) Card N
+    # always wears tag "cdN", so these are set once for each position the
+    # gallery has ever had and never again - where before they were nine
+    # bindings per card per page flip, which is four hundred trips into
+    # Tcl every time you turned a page.
+    #
+    # The handlers therefore cannot close over the clip: position three
+    # is a different clip on every page. They take the index and look the
+    # record up in _layout, which is what actually says what is on screen.
+
+    def _bind_card_slots(self, count: int) -> None:
+        canvas = self.gallery
+        for index in range(self._bound_slots, count):
+            tag = f"cd{index}"
+            for event in ("<Button-1>", "<Control-Button-1>", "<Shift-Button-1>"):
+                canvas.tag_bind(tag, event,
+                                lambda e, i=index: self._card_click(e, i))
+            canvas.tag_bind(tag, "<Double-Button-1>",
+                            lambda e, i=index: self._play_slot(i))
+            canvas.tag_bind(tag, "<Button-3>",
+                            lambda e, i=index: self._menu_slot(e, i))
+            canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
+            canvas.tag_bind(tag, "<Leave>", lambda e, i=index: self._unhover(i, e))
+            canvas.tag_bind(tag, "<Motion>",
+                            lambda e, i=index: self._scrub_motion(e, i))
+        self._bound_slots = max(self._bound_slots, count)
+
+    def _slot_rec(self, index: int):
+        """The clip at card `index` right now, or None if the page has
+        changed under a click already on its way."""
+        if 0 <= index < len(self._layout):
+            return self._layout[index]["rec"]
+        return None
+
+    def _play_slot(self, index: int) -> None:
+        rec = self._slot_rec(index)
+        if rec is not None:
+            self._select_and_play(rec)
+
+    def _menu_slot(self, event, index: int) -> None:
+        rec = self._slot_rec(index)
+        if rec is not None:
+            self._card_menu(event, rec)
 
     def _draw_card(self, index: int, rec: Rec, x: int, y: int):
         canvas = self.gallery
@@ -2796,19 +2848,6 @@ class LibraryTab(ctk.CTkFrame):
                                font=(T.MONO, pt(10)), anchor="e", tags=(tag,))
 
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
-
-        canvas.tag_bind(tag, "<Button-1>",
-                        lambda e, r=rec, i=index: self._card_click(e, r, i))
-        canvas.tag_bind(tag, "<Control-Button-1>",
-                        lambda e, r=rec, i=index: self._card_click(e, r, i))
-        canvas.tag_bind(tag, "<Shift-Button-1>",
-                        lambda e, r=rec, i=index: self._card_click(e, r, i))
-        canvas.tag_bind(tag, "<Double-Button-1>", lambda e, r=rec: self._select_and_play(r))
-        canvas.tag_bind(tag, "<Button-3>", lambda e, r=rec: self._card_menu(e, r))
-        canvas.tag_bind(tag, "<Enter>", lambda e, i=index: self._set_hover(i))
-        canvas.tag_bind(tag, "<Leave>", lambda e, i=index: self._unhover(i, e))
-        canvas.tag_bind(tag, "<Motion>",
-                        lambda e, i=index: self._scrub_motion(e, i))
 
     def _card_outline(self, rec: Rec, hover: bool) -> tuple:
         """(colour, width) for a card's border. Selection outranks the
@@ -3585,7 +3624,10 @@ class LibraryTab(ctk.CTkFrame):
     # top of that, and every tool that used to act on "the selected clip"
     # or "everything on this page" acts on the set when there is one.
 
-    def _card_click(self, event, rec: Rec, index: int):
+    def _card_click(self, event, index: int):
+        rec = self._slot_rec(index)
+        if rec is None:
+            return
         ctrl = bool(event.state & 0x0004)
         shift = bool(event.state & 0x0001)
         if ctrl:

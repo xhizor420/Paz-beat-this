@@ -379,3 +379,50 @@ def test_an_empty_page_spawns_one_that_does_nothing(monkeypatch):
     for body in tab.spawned:
         body()
     assert tab.placed == []
+
+
+# ── card bindings belong to the position, not the clip ─────────────────
+
+def test_a_position_is_only_bound_once():
+    """A canvas binding belongs to the tag, survives its items being
+    deleted, and applies to new ones created with the same tag - so card
+    N is bound once, not nine times per page flip."""
+    class Canvas:
+        def __init__(self):
+            self.binds = 0
+
+        def tag_bind(self, *_a, **_kw):
+            self.binds += 1
+
+    class Tab:
+        _bind_card_slots = LibraryTab._bind_card_slots
+        _slot_rec = LibraryTab._slot_rec
+
+        def __init__(self):
+            self.gallery = Canvas()
+            self._bound_slots = 0
+            self._layout = []
+
+    tab = Tab()
+    tab._bind_card_slots(48)
+    first = tab.gallery.binds
+    assert first > 0
+    tab._bind_card_slots(48)                 # another page flip
+    assert tab.gallery.binds == first, "rebound a position it already had"
+    tab._bind_card_slots(60)                 # a bigger page
+    assert tab.gallery.binds > first
+
+
+def test_a_click_on_a_position_past_the_page_is_ignored():
+    """A page can shrink under a click already on its way, and the
+    bindings for the old higher positions are still there."""
+    class Tab:
+        _slot_rec = LibraryTab._slot_rec
+
+        def __init__(self):
+            self._layout = [{"rec": "a"}, {"rec": "b"}]
+
+    tab = Tab()
+    assert tab._slot_rec(1) == "b"
+    assert tab._slot_rec(2) is None
+    assert tab._slot_rec(-1) is None
