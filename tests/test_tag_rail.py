@@ -214,3 +214,39 @@ def test_the_grid_rows_advance_past_the_chip_rows():
     assert row > 1
     grid_rows = [item[2] for item in plan if item[0] == "row"]
     assert grid_rows == sorted(set(grid_rows)), "two rows claimed one grid row"
+
+
+# ── the counting happens off the UI thread ─────────────────────────────
+
+def test_counting_needs_no_window():
+    """Five sixths of what rebuilding the rail costs was counting every
+    tag in the result set, which touches no widget. So it has to be a
+    function of the records alone."""
+    class Rec:
+        def __init__(self, artists=(), tags=(), named=(), projects=()):
+            self.artists = list(artists)
+            self.characters = []
+            self.species = []
+            self.copyrights = []
+            self.lore = []
+            self.tags = set(tags)
+            self.named = frozenset(named)
+            self.used_projects = list(projects)
+
+    counted = LibraryTab._count_tags([
+        Rec(artists=["kenket"], tags={"wolf", "male", "kenket"},
+            named={"kenket"}, projects=["PMV"]),
+        Rec(artists=["kenket"], tags={"wolf", "fox"}),
+    ])
+    assert counted["artists"]["kenket"] == 2
+    assert counted["other"]["wolf"] == 2
+    assert counted["other"]["fox"] == 1
+    assert "kenket" not in counted["other"], "a named tag was counted twice"
+    assert counted["projects"]["PMV"] == 1
+
+
+def test_counting_an_empty_result_is_empty():
+    counted = LibraryTab._count_tags([])
+    assert all(not c for c in counted.values())
+    assert set(counted) == {"artists", "characters", "species", "series",
+                            "lore", "other", "projects"}

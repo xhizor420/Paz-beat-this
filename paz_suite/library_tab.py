@@ -159,6 +159,7 @@ class LibraryTab(ctk.CTkFrame):
         self._rows_planned = 0
         self._heads_done = 0
         self._slots_planned: dict = {}
+        self._rail_gen = 0
         self._hidden_btn = None
         # Prepared gallery tiles - see TILE_CACHE. Written by the page
         # loader and the prefetch, read by both, so it takes a lock.
@@ -2409,28 +2410,63 @@ class LibraryTab(ctk.CTkFrame):
         self._tagpanel_after = self.after(self.TAGPANEL_DELAY_MS,
                                           self._render_tagpanel)
 
+    @staticmethod
+    def _count_tags(records: list) -> dict:
+        """Every tag in the result set, counted by category. Any thread.
+
+        On ten thousand clips this is forty-odd milliseconds and, once
+        the chips were pooled, it became five sixths of what rebuilding
+        the rail costs. It touches no widget, so it does not belong on
+        the thread that draws them.
+        """
+        counters = {name: collections.Counter() for name in
+                    ("artists", "characters", "species", "series",
+                     "lore", "other", "projects")}
+        for rec in records:
+            counters["artists"].update(rec.artists)
+            counters["characters"].update(rec.characters)
+            counters["species"].update(rec.species)
+            counters["series"].update(rec.copyrights)
+            counters["lore"].update(rec.lore)
+            counters["other"].update(t for t in rec.tags if t not in rec.named)
+            counters["projects"].update(rec.used_projects)
+        return counters
+
     def _render_tagpanel(self):
+        """Count the result set off this thread, then draw the rail."""
         self._tagpanel_after = None
+        # Stop placing the last rail's chips now rather than when the new
+        # counts land: they are the previous search's tags, and they are
+        # going into the same pooled widgets.
+        self._cancel_rail_chunks()
+        self._rail_gen += 1
+        gen = self._rail_gen
+        # A snapshot, not self.filtered itself: _apply_sort sorts that
+        # list in place, and CPython empties a list while sorting it - so
+        # a worker iterating it mid-sort would quietly count nothing.
+        records = list(self.filtered)
+
+        def work():
+            counted = self._count_tags(records)
+            self.ui(self._tagpanel_counted, gen, counted)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _tagpanel_counted(self, gen: int, counted: dict) -> None:
+        if gen != self._rail_gen:
+            return                  # a newer search is already counting
         self._cancel_rail_chunks()
         self._heads_planned = 0
         self._rows_planned = 0
         self._slots_planned = {}
         self._heads_done = 0
-        artists = collections.Counter()
-        characters = collections.Counter()
-        species = collections.Counter()
-        series = collections.Counter()
-        lore = collections.Counter()
-        other = collections.Counter()
-        projects = collections.Counter()
-        for rec in self.filtered:
-            artists.update(rec.artists)
-            characters.update(rec.characters)
-            species.update(rec.species)
-            series.update(rec.copyrights)
-            lore.update(rec.lore)
-            other.update(t for t in rec.tags if t not in rec.named)
-            projects.update(rec.used_projects)
+        artists = counted["artists"]
+        characters = counted["characters"]
+        species = counted["species"]
+        series = counted["series"]
+        lore = counted["lore"]
+        other = counted["other"]
+        projects = counted["projects"]
 
         hidden = set(self.cfg.hidden_tags)
         row = 0
