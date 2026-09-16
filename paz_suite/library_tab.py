@@ -146,6 +146,20 @@ class LibraryTab(ctk.CTkFrame):
         self._chunk_job = None
         self._tag_plan: list = []
         self._detail_empty = None
+        # The tag rail's own pools - see _plan_chips. Chips are pooled by
+        # the position they occupy, because Tk cannot move a widget to a
+        # different parent and they live inside per-row frames.
+        self._rail_heads: list = []
+        self._rail_rows: list = []
+        self._rail_slots: list = []
+        self._rail_plan: list = []
+        self._rail_job = None
+        self._rail_at = 0
+        self._heads_planned = 0
+        self._rows_planned = 0
+        self._heads_done = 0
+        self._slots_planned: dict = {}
+        self._hidden_btn = None
         self.page = 0
         self.selected: Rec | None = None
         # Paths rather than records: the record objects are rebuilt on
@@ -2207,46 +2221,141 @@ class LibraryTab(ctk.CTkFrame):
     # measured and filled by hand.
 
     CHIP_PAD = 18        # chip padding + border, on top of the text width
-    CHIP_ROOM = 236      # usable width inside the sidebar
+    CHIP_ROOM = 236      # fallback usable width, before the rail is mapped
 
-    def _group_header(self, title: str, key: str, open_now: bool,
-                      count: int, row: int) -> int:
-        header = ctk.CTkButton(
-            self.tagpanel,
+    def _chip_room(self) -> int:
+        """The real usable width inside the rail, in screen pixels.
+
+        Measured rather than assumed. The constant said 236 while the
+        sidebar is actually over 400 wide at this scale, so a row that
+        could hold three chips was told it could hold one - which is how
+        a design of wrapped chips ended up rendering as the single column
+        of full-width rows it exists to avoid.
+        """
+        try:
+            room = int(self.tagpanel.winfo_width())
+        except tk.TclError:
+            room = 0
+        if room < px(80):
+            room = px(self.CHIP_ROOM)
+        # Its own padding, and the scrollbar down the right-hand side.
+        return max(room - px(26), px(110))
+
+    # The rail is rebuilt on every search, and building a chip - a
+    # CTkButton with a border and a rounded corner - costs three and a
+    # half milliseconds. A hundred and seventy of them is a six-hundred
+    # millisecond freeze, which was the largest single stall left in the
+    # app and is what the rail's 240ms deferral was hiding rather than
+    # fixing. So the chips are kept and pointed at different words, the
+    # way the inspector's tag list is.
+    #
+    # Tk cannot reparent a widget, and the chips live inside per-row
+    # frames so they can wrap. So a chip is pooled by the position it
+    # occupies - row three, slot four - which never changes parent. The
+    # wrap is worked out during planning, before anything is placed, so
+    # every chip's position is known in advance.
+
+    def _plan_header(self, title: str, key: str, open_now: bool,
+                     count: int, row: int, plan: list) -> int:
+        plan.append(("head", title, key, open_now, count, row))
+        self._heads_planned += 1
+        return row + 1
+
+    def _plan_chips(self, items: list, row: int, menu: bool, plan: list) -> int:
+        """items: (name, count, token, text colour, swatch colour or None).
+        Works out which row and slot each chip lands in, wrapping when the
+        next one will not fit. Measures, places nothing."""
+        used = 0
+        slot = 0
+        line = -1
+        room = self._chip_room()
+        # Everything here is in real screen pixels, because that is what
+        # the font reports. The design numbers go through px() to join it.
+        pad = px(self.CHIP_PAD)
+        gap = px(4)
+        for name, count, token, colour, swatch in items:
+            label = f"{name}  {count}"
+            width = self._chip_font.measure(label) + pad
+            if swatch:
+                width += px(10)
+            if line < 0 or used + width > room:
+                line = self._rows_planned
+                self._rows_planned += 1
+                plan.append(("row", line, row))
+                row += 1
+                used = 0
+                slot = 0
+            plan.append(("chip", line, slot, label, width, colour, swatch,
+                         token, name, menu))
+            self._slots_planned[line] = slot + 1
+            slot += 1
+            used += width + gap
+        return row
+
+    def _rail_row(self, index: int, row: int) -> None:
+        """The frame one wrapped line of chips packs into."""
+        while index >= len(self._rail_rows):
+            self._rail_rows.append(
+                ctk.CTkFrame(self.tagpanel, fg_color="transparent"))
+            self._rail_slots.append([])
+        self._rail_rows[index].grid(row=row, column=0, sticky="w",
+                                    padx=5, pady=1)
+
+    def _rail_chip(self, line: int, slot: int, label: str, width: int,
+                   colour: str, swatch, token: str, name: str,
+                   menu: bool) -> None:
+        slots = self._rail_slots[line]
+        if slot < len(slots):
+            chip = slots[slot]
+        else:
+            chip = ctk.CTkButton(
+                self._rail_rows[line], text="", height=24, corner_radius=6,
+                font=font(11), fg_color=T.SURFACE, hover_color=T.BTN_HOV,
+                border_width=1, border_color=T.LINE)
+            slots.append(chip)
+        # unscaled(), because `width` is a measured screen width and CTk
+        # multiplies whatever it is handed by the widget scaling. Passing
+        # it straight through made every chip half again as wide as its
+        # own text, which is the other half of why they would not fit
+        # two to a row. See theme.unscaled.
+        chip.configure(text=label, width=unscaled(width), text_color=colour,
+                       command=lambda t=token: self.add_token(t))
+        # Rebound every time: the same chip carries a different tag now,
+        # and an unbind on a widget that was never bound is not an error.
+        chip.unbind("<Button-3>")
+        if menu:
+            chip.bind("<Button-3>",
+                      lambda e, t=token, n=name: self._tag_menu(e, t, n))
+        if not chip.winfo_ismapped():
+            chip.pack(side="left", padx=(0, 4))
+
+    def _rail_head(self, index: int, title: str, key: str, open_now: bool,
+                   count: int, row: int) -> None:
+        while index >= len(self._rail_heads):
+            self._rail_heads.append(ctk.CTkButton(
+                self.tagpanel, text="", height=22, corner_radius=5,
+                font=font(9, "bold"), anchor="w", fg_color="transparent",
+                hover_color=T.BTN_HOV, text_color=T.FAINT))
+        header = self._rail_heads[index]
+        header.configure(
             text=("▾  " if open_now else "▸  ") + f"{title}   {count}",
-            height=22, corner_radius=5, font=font(9, "bold"), anchor="w",
-            fg_color="transparent", hover_color=T.BTN_HOV, text_color=T.FAINT,
             command=lambda k=key: self._toggle_sidebar_group(k))
         header.grid(row=row, column=0, sticky="ew", padx=6,
                     pady=(12 if row else 4, 3))
-        return row + 1
 
-    def _chip_flow(self, items: list, row: int, menu: bool) -> int:
-        """items: (name, count, token, text colour, swatch colour or None).
-        Packs them left-to-right, wrapping when the next chip won't fit."""
-        line = None
-        used = 0
-        for name, count, token, colour, swatch in items:
-            label = f"{name}  {count}"
-            width = self._chip_font.measure(label) + self.CHIP_PAD
-            if swatch:
-                width += 10
-            if line is None or used + width > self.CHIP_ROOM:
-                line = ctk.CTkFrame(self.tagpanel, fg_color="transparent")
-                line.grid(row=row, column=0, sticky="w", padx=5, pady=1)
-                row += 1
-                used = 0
-            chip = ctk.CTkButton(
-                line, text=label, height=24, width=width, corner_radius=6,
-                font=font(11), fg_color=T.SURFACE, hover_color=T.BTN_HOV,
-                border_width=1, border_color=T.LINE, text_color=colour,
-                command=lambda t=token: self.add_token(t))
-            chip.pack(side="left", padx=(0, 4))
-            if menu:
-                chip.bind("<Button-3>",
-                          lambda e, t=token, n=name: self._tag_menu(e, t, n))
-            used += width + 4
-        return row
+    def _park_rail(self) -> None:
+        """Hide what this rail does not need. Called as soon as the plan
+        is known, not after the last chunk, so the previous search's tags
+        never sit under this one's."""
+        for header in self._rail_heads[self._heads_planned:]:
+            header.grid_remove()
+        for frame in self._rail_rows[self._rows_planned:]:
+            frame.grid_remove()
+        for line, slots in enumerate(self._rail_slots):
+            keep = self._slots_planned.get(line, 0) if line < self._rows_planned else 0
+            for chip in slots[keep:]:
+                if chip.winfo_ismapped():
+                    chip.pack_forget()
 
     TAGPANEL_DELAY_MS = 240
 
@@ -2270,8 +2379,11 @@ class LibraryTab(ctk.CTkFrame):
 
     def _render_tagpanel(self):
         self._tagpanel_after = None
-        for child in self.tagpanel.winfo_children():
-            child.destroy()
+        self._cancel_rail_chunks()
+        self._heads_planned = 0
+        self._rows_planned = 0
+        self._slots_planned = {}
+        self._heads_done = 0
         artists = collections.Counter()
         characters = collections.Counter()
         species = collections.Counter()
@@ -2306,18 +2418,19 @@ class LibraryTab(ctk.CTkFrame):
                  ("SERIES", series, "copyright:", T.TAG["copyright"]),
                  ("LORE", lore, "lore:", T.TAG["lore"]),
                  ("TAGS", other, "", T.TAG["general"]))
+        plan: list = []
         for title, counter, prefix, colour in groups:
             visible = [(n, c) for n, c in counter.most_common(60) if n not in hidden][:24]
             if not visible:
                 continue
             key = title.lower()
             open_now = self.cfg.sidebar_group_open.get(key, True)
-            row = self._group_header(title, key, open_now, len(visible), row)
+            row = self._plan_header(title, key, open_now, len(visible), row, plan)
             if not open_now:
                 continue
-            row = self._chip_flow(
+            row = self._plan_chips(
                 [(name, count, prefix + name, colour, None) for name, count in visible],
-                row, menu=True)
+                row, True, plan)
 
         # PROJECTS gets its own block instead of the loop above - project
         # names are free text (can hold spaces), so the search token needs
@@ -2326,21 +2439,67 @@ class LibraryTab(ctk.CTkFrame):
         if projects:
             key = "projects"
             open_now = self.cfg.sidebar_group_open.get(key, True)
-            row = self._group_header("PROJECTS", key, open_now, len(projects), row)
+            row = self._plan_header("PROJECTS", key, open_now, len(projects),
+                                    row, plan)
             if open_now:
-                row = self._chip_flow(
+                row = self._plan_chips(
                     [(name, count, f'used:"{name}"',
                       self._project_colors.get(name, T.DIM), self._project_colors.get(name))
                      for name, count in projects.most_common(60)],
-                    row, menu=False)
+                    row, False, plan)
+
+        # Everything this rail needs is now known, so everything it does
+        # not need can go at once - before a single chip is placed.
+        self._park_rail()
+        self._rail_plan = plan
+        self._rail_at = 0
+        self._render_rail_chunk()
+
+        if self._hidden_btn is None:
+            self._hidden_btn = ctk.CTkButton(
+                self.tagpanel, text="", height=24, corner_radius=5,
+                font=font(9), fg_color="transparent", hover_color=T.BTN_HOV,
+                text_color=T.FAINT, command=self._manage_hidden)
         if hidden:
-            ctk.CTkButton(self.tagpanel,
-                         text=f"{len(hidden)} hidden tag{'s' if len(hidden) != 1 else ''} "
-                              f"· manage",
-                         height=24, corner_radius=5, font=font(9),
-                         fg_color="transparent", hover_color=T.BTN_HOV,
-                         text_color=T.FAINT, command=self._manage_hidden
-                         ).grid(row=row, column=0, sticky="ew", padx=8, pady=(10, 6))
+            self._hidden_btn.configure(
+                text=f"{len(hidden)} hidden tag{'s' if len(hidden) != 1 else ''} "
+                     f"· manage")
+            self._hidden_btn.grid(row=row, column=0, sticky="ew",
+                                  padx=8, pady=(10, 6))
+        else:
+            self._hidden_btn.grid_remove()
+
+    def _cancel_rail_chunks(self) -> None:
+        if self._rail_job is not None:
+            try:
+                self.after_cancel(self._rail_job)
+            except ValueError:
+                pass
+            self._rail_job = None
+
+    def _render_rail_chunk(self) -> None:
+        """Place planned rail widgets for up to CHUNK_MS, then yield.
+
+        With a warm pool the whole rail lands in one pass. The budget is
+        for the first rail of a session, when every chip has to be built
+        rather than reused."""
+        self._rail_job = None
+        plan = self._rail_plan
+        deadline = time.perf_counter() + self.CHUNK_MS / 1000.0
+        while self._rail_at < len(plan):
+            item = plan[self._rail_at]
+            self._rail_at += 1
+            if item[0] == "head":
+                self._rail_head(self._heads_done, *item[1:])
+                self._heads_done += 1
+            elif item[0] == "row":
+                self._rail_row(item[1], item[2])
+            else:
+                self._rail_chip(*item[1:])
+            if time.perf_counter() >= deadline:
+                break
+        if self._rail_at < len(plan):
+            self._rail_job = self.after(16, self._render_rail_chunk)
 
     # ── gallery ─────────────────────────────────────────────────────────────
 

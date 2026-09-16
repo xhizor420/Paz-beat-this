@@ -189,3 +189,117 @@ def test_a_freeze_is_still_a_freeze_not_just_a_pause():
     assert watchdog.LAGGY_AFTER < watchdog.STUCK_AFTER
     # And a stutter must not drown out the full report for a real hang.
     assert watchdog.LAG_REARM_AFTER < watchdog.REARM_AFTER
+
+
+# ── stutters: the band where every real complaint has landed ────────────
+#
+# Everything the user has ever called laggy in this app measured between
+# 50 and 250 milliseconds. LAGGY_AFTER is a second and a half, so the log
+# recorded nothing whatsoever about the only problem being reported. A
+# stutter is too small for a line of its own - a bad minute would be a
+# hundred of them - so they are counted by where the thread was and go
+# out as one summary.
+
+def test_a_stutter_is_smaller_than_a_pause_which_is_smaller_than_a_hang():
+    assert watchdog.STUTTER_AFTER < watchdog.LAGGY_AFTER < watchdog.STUCK_AFTER
+
+
+def test_the_heartbeat_is_faster_than_the_thing_it_measures():
+    """At 500ms a quarter-second stall was indistinguishable from a
+    healthy gap between beats."""
+    assert watchdog.BEAT_EVERY_MS / 1000.0 < watchdog.STUTTER_AFTER
+
+
+def test_a_quiet_session_says_nothing(tmp_path):
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog.summarise()
+    assert not log.exists() or "STUTTERS" not in log.read_text()
+
+
+def test_stutters_are_counted_and_summarised(tmp_path):
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._armed = True
+    for _ in range(3):
+        dog._counted_at = 0.0          # each one a separate stall
+        dog._count_stutter(0.3)
+    dog.summarise()
+    text = log.read_text()
+    assert "3 pauses over 200ms" in text
+    assert "worst 300ms" in text
+
+
+def test_the_summary_names_where_the_thread_was(tmp_path):
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._armed = True
+    dog._count_stutter(0.25)
+    dog.summarise()
+    # The frame that belongs to the app, not tkinter's or pytest's.
+    assert "watchdog.py:" in log.read_text()
+
+
+def test_repeats_of_one_slow_thing_add_up_rather_than_pile_up(tmp_path):
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._armed = True
+    for _ in range(5):
+        dog._counted_at = 0.0
+        dog._count_stutter(0.3)
+    dog.summarise()
+    text = log.read_text()
+    assert text.count("STUTTERS") == 1
+    assert "    5x" in text
+
+
+def test_one_stall_is_counted_once_not_once_per_poll(tmp_path):
+    """The watcher looks twenty times a second; a 300ms stall is visible
+    on six of those looks and is still one stutter."""
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._armed = True
+    for _ in range(6):
+        dog._count_stutter(0.3)        # no _counted_at reset: one stall
+    assert dog._stutters == 1
+
+
+def test_nothing_is_counted_while_the_window_is_still_being_built(tmp_path):
+    """Building the window takes over a second with no event loop running,
+    which to the watcher looks exactly like a one-second freeze. It filled
+    the report with whichever button was under construction."""
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._count_stutter(1.0)            # never armed
+    assert dog._stutters == 0
+    dog.summarise()
+    assert not log.exists() or "STUTTERS" not in log.read_text()
+
+
+def test_two_beats_from_a_running_loop_arm_it(tmp_path):
+    root = FakeRoot()
+    dog = watchdog.Watchdog(root, str(tmp_path / "freeze.log"))
+    dog._tick()                        # the one start() does itself
+    assert not dog._armed
+    dog._tick()                        # the loop's first beat
+    assert dog._armed
+
+
+def test_a_long_gap_does_not_arm_it(tmp_path):
+    root = FakeRoot()
+    dog = watchdog.Watchdog(root, str(tmp_path / "freeze.log"))
+    dog._tick()
+    dog._beat -= 5.0                   # the window was busy for 5 seconds
+    dog._tick()
+    assert not dog._armed
+
+
+def test_stopping_writes_the_summary(tmp_path):
+    """It goes out on the way out, so a session that stuttered says so
+    even though no single stutter was worth a line."""
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._armed = True
+    dog._count_stutter(0.4)
+    dog.stop()
+    assert "STUTTERS" in log.read_text()
