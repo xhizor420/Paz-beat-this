@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from .config import THUMB_DIR
 from .theme import T
 from .files import NO_WINDOW, PREVIEW_FLAGS
+from . import machine
 
 
 def _drain(proc) -> None:
@@ -186,9 +187,20 @@ _encoder_cache: set | None = None
 
 
 def available_encoders() -> set:
-    """Ask ffmpeg once which encoders this build actually has."""
+    """Which encoders this ffmpeg build has.
+
+    Asked once per ffmpeg install rather than once per launch. The answer
+    cannot change while the binary does not, and running the subprocess
+    at startup was a fifth of a second of the window not answering when
+    the disk was busy - see paz_suite.machine.
+    """
     global _encoder_cache
     if _encoder_cache is not None:
+        return _encoder_cache
+    stamp = machine.tool_stamp(shutil.which("ffmpeg") or "")
+    held = machine.remembered("ffmpeg_encoders", stamp)
+    if isinstance(held, list):
+        _encoder_cache = set(held)
         return _encoder_cache
     names = set()
     try:
@@ -203,6 +215,12 @@ def available_encoders() -> set:
                 names.add(parts[1])
     except (OSError, subprocess.SubprocessError):
         pass
+    else:
+        # Only a real answer is worth remembering. An ffmpeg that failed
+        # to run should be asked again next time, not recorded as a build
+        # with no encoders.
+        if names:
+            machine.remember("ffmpeg_encoders", stamp, sorted(names))
     _encoder_cache = names
     return names
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -45,6 +46,12 @@ class FakeTab:
         self._weights = "stale"
         self.app = None
         self.read_calls = 0
+        # Prepared gallery tiles: a sync can have replaced the thumbnail
+        # behind a path, so installing a library drops them.
+        self._tiles = {"stale-tile": object()}
+        self._photos = {"stale-photo": object()}
+        self._tiles_lock = threading.Lock()
+        self._prefetch_token = 0
 
     # -- the surroundings --------------------------------------------------
     def _read_library(self):
@@ -206,3 +213,22 @@ def test_the_synchronous_load_also_invalidates_a_read_in_flight(monkeypatch):
     assert [r.path for r in tab.records] == ["sync.mp4"]
     tab.deliver()
     assert [r.path for r in tab.records] == ["sync.mp4"]
+
+
+# ── prepared tiles do not survive a new library ─────────────────────────
+
+def test_installing_a_library_drops_the_prepared_tiles():
+    """Tiles are keyed by path, and a sync or a rebuild can have replaced
+    the thumbnail behind one - so a kept tile would be a picture of what
+    the clip used to look like."""
+    tab = FakeTab([bundle(["a.mp4"])])
+    tab._load_library()
+    assert tab._tiles == {}
+    assert tab._photos == {}
+
+
+def test_installing_a_library_cancels_a_prefetch_in_flight():
+    tab = FakeTab([bundle(["a.mp4"])])
+    before = tab._prefetch_token
+    tab._load_library()
+    assert tab._prefetch_token != before

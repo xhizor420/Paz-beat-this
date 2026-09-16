@@ -62,6 +62,24 @@ MAX_LOG_BYTES = 2 * 1024 * 1024
 STUTTER_AFTER = 0.2
 STUTTER_TOP = 8
 
+# Construction that has to happen on the UI thread and cannot be broken
+# up - building a tab's several hundred widgets - is announced here while
+# it runs, so it is not counted as a stutter. Not to flatter the numbers:
+# the report samples where the thread is when it notices a stall, and the
+# innermost frame during a tab build is whichever button happened to be
+# under construction. Three launches produced three different culprits,
+# all of them innocent. Excluding known construction is what keeps the
+# entries that remain worth reading.
+_building = threading.Event()
+
+
+def building(flag: bool) -> None:
+    """Announce (or end) a stretch of unavoidable UI-thread building."""
+    if flag:
+        _building.set()
+    else:
+        _building.clear()
+
 
 class Watchdog:
     def __init__(self, root, log_path: str):
@@ -192,7 +210,7 @@ class Watchdog:
         stack is the answer - which is why this is sampled here rather
         than worked out from the gap after the fact.
         """
-        if not self._armed:
+        if not self._armed or _building.is_set():
             return                  # the window is still being built
         now = time.monotonic()
         # One sample per stall, not one per poll while it lasts.

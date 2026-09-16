@@ -24,6 +24,8 @@ import queue
 import threading
 import time
 
+from . import machine
+
 IS_WINDOWS = os.name == "nt"
 
 
@@ -54,8 +56,7 @@ def _windows_vlc_dirs() -> list:
     return dirs
 
 
-def library_path() -> str:
-    """Where libVLC lives, or "" if it isn't installed."""
+def _find_library() -> str:
     if IS_WINDOWS:
         for folder in _windows_vlc_dirs():
             dll = os.path.join(folder, "libvlc.dll")
@@ -64,6 +65,33 @@ def library_path() -> str:
         return ""
     from ctypes.util import find_library
     return find_library("vlc") or ""
+
+
+def library_path() -> str:
+    """Where libVLC lives, or "" if it isn't installed.
+
+    Remembered once found. Searching means a registry read and a walk of
+    Program Files on Windows, and a subprocess on anything else - a
+    quarter of a second of the window not answering, on every launch,
+    for a path that has not moved. A remembered path is only trusted
+    while the file is still there, so uninstalling VLC is noticed; not
+    finding it is never remembered, so installing VLC is noticed too.
+    """
+    held = machine.remembered("vlc_library", "present")
+    if isinstance(held, str) and held:
+        # A real path is only trusted while the file is still there, so
+        # uninstalling VLC is noticed. On POSIX find_library returns a
+        # bare soname rather than a path, and there is nothing to check -
+        # that one is taken on trust, because the only cost of a stale
+        # soname is the load error this module already reports, and the
+        # alternative is a quarter-second subprocess on every launch.
+        if os.sep not in held or os.path.isfile(held):
+            return held
+    found = _find_library()
+    if found:
+        machine.remember("vlc_library", "present", found)
+    # Not finding it is never remembered, so installing VLC is noticed.
+    return found
 
 
 def bindings_present() -> bool:

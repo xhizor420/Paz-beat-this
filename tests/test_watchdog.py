@@ -303,3 +303,32 @@ def test_stopping_writes_the_summary(tmp_path):
     dog._count_stutter(0.4)
     dog.stop()
     assert "STUTTERS" in log.read_text()
+
+
+def test_known_construction_is_not_counted_as_a_stutter(tmp_path):
+    """Building a tab's several hundred widgets cannot be broken up, and
+    the report samples where the thread is - so during a build the
+    innermost frame is whichever button happened to be under
+    construction. Three launches produced three different culprits, all
+    innocent."""
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._armed = True
+    watchdog.building(True)
+    try:
+        dog._count_stutter(0.3)
+    finally:
+        watchdog.building(False)
+    assert dog._stutters == 0
+
+
+def test_counting_resumes_once_construction_ends(tmp_path):
+    log = tmp_path / "freeze.log"
+    dog = watchdog.Watchdog(root=None, log_path=str(log))
+    dog._armed = True
+    watchdog.building(True)
+    dog._count_stutter(0.3)
+    watchdog.building(False)
+    dog._counted_at = 0.0
+    dog._count_stutter(0.3)
+    assert dog._stutters == 1
