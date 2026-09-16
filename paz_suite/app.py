@@ -122,20 +122,49 @@ class PazApp:
     SCALE_CHOICES = ("Auto", "100%", "125%", "150%", "175%", "200%")
 
     def _apply_scaling(self) -> None:
+        """Make our scale factor and CustomTkinter's the SAME number.
+
+        CTk's effective widget scaling is not what you pass to
+        set_widget_scaling - it is that value multiplied by the monitor's
+        DPI factor (ScalingTracker.get_widget_scaling). On Linux that DPI
+        factor is hard-coded to 1, so passing 1.5 gives 1.5 and everything
+        agrees. On Windows at 150% it is 1.5, so passing 1.5 gives 2.25:
+        every CTk widget half again as big as asked for, every measured
+        size handed back to CTk half again too wide, and a layout that
+        runs off the right-hand edge of the window. Which is why this app
+        looked right on the machine it was measured on and wrong on the
+        machine it runs on.
+
+        So: ask CTk what the monitor is already doing, and pass it only
+        the difference. T.SCALE (which px() and pt() use for the raw-Tk
+        canvases) then equals CTk's effective scaling on every platform,
+        and unscaled() is exact rather than approximately right.
+        """
         choice = self.cfg.ui_scale if self.cfg.ui_scale in self.SCALE_CHOICES else "Auto"
         scale = self._detect_scale() if choice == "Auto" else int(choice.rstrip("%")) / 100
         scale = max(1.0, min(scale, 2.5))
         T.SCALE = scale
         try:
-            ctk.set_widget_scaling(scale)
+            dpi = self._ctk_dpi_scaling()
+            # Only the shortfall: CTk multiplies by `dpi` itself.
+            ctk.set_widget_scaling(max(scale / dpi, 0.4) if dpi else scale)
             # Deliberately NOT set_window_scaling: that multiplies every
             # geometry string, so asking for a 1760px window at 175% asks
             # for 3080px and the window manager quietly declines to show it
             # at all on anything smaller. Window sizes here are already in
             # real pixels; it is the contents that need to grow.
-            ctk.set_window_scaling(1.0)
+            ctk.set_window_scaling(1.0 / dpi if dpi else 1.0)
         except Exception:
             pass
+
+    def _ctk_dpi_scaling(self) -> float:
+        """What CustomTkinter is already scaling by, before we ask for
+        anything. 1.0 where it does not scale by itself."""
+        try:
+            dpi = float(ctk.ScalingTracker.get_window_dpi_scaling(self.root))
+        except Exception:
+            return 1.0
+        return dpi if 0.5 <= dpi <= 4.0 else 1.0
 
     def _detect_scale(self) -> float:
         """A sensible scale for this display.

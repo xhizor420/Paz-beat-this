@@ -792,6 +792,15 @@ class LibraryTab(ctk.CTkFrame):
             # one number that knows what this person wants on this screen.
             chosen = int(getattr(self.cfg, "panel_width_px", 0) or 0)
             if chosen:
+                # ...but not wider than the picture can fill. Past that
+                # point the extra width is empty card either side of the
+                # video - the thing this column has been complained about
+                # for three rounds - and the gallery has lost it for
+                # nothing. Drag the handle above TAGS down for a taller
+                # picture and this limit rises with it.
+                useful = self._width_that_uses_the_height()
+                if useful:
+                    chosen = min(chosen, useful)
                 return max(px(self.PANEL_MIN),
                            min(chosen, int(total * 0.60), self.PANEL_MAX, ceiling))
             return min(max(base, self._width_that_uses_the_height()),
@@ -799,8 +808,15 @@ class LibraryTab(ctk.CTkFrame):
         # Theater fills the height too, for the same reason the normal
         # width does: a 16:9 picture as wide as 60% of the window still
         # left a band of empty column under the buttons on a tall screen.
-        theater = max(base + self.THEATER_BONUS, int(total * 0.60),
-                      self._width_that_uses_the_height())
+        # Wide, but not wider than the picture can use. 60% of the window
+        # is a fine target on a tall screen; on a 1080-tall one the column
+        # runs out of HEIGHT first, and the extra width then goes into
+        # empty card either side of the picture while the gallery starves
+        # for it. Always bigger than the normal width, though - that is
+        # what the button is for.
+        theater = max(base + self.THEATER_BONUS,
+                      min(int(total * 0.60), self._width_that_uses_the_height()
+                          or int(total * 0.60)))
         # A share of the window, not a fixed number of pixels: 1900px is
         # most of a laptop screen and half of a 4K one, so a fixed ceiling
         # either swallows the window or stops theater being the big one,
@@ -824,24 +840,62 @@ class LibraryTab(ctk.CTkFrame):
         """
         try:
             room = int(self.detail_panel.winfo_height())
-            card = int(self.player.frame.master.winfo_height())
-            picture = int(self.player.stack.winfo_height())
             head = int(self.detail_head.master.winfo_height())
         except (AttributeError, tk.TclError):
             return 0
-        if room < 200 or picture < 50 or card < picture:
+        if room < 200:
             return 0
         # Everything in the column that is not the picture: the player's
         # own bar and buttons, the name and meta lines, the action row,
         # the header strip, and - unless theater has put it away - the
-        # TAGS heading and the tag list under it.
-        chrome = (card - picture) + head
+        # TAGS heading and the tag list under it. Same reserve the picture
+        # is sized against, from the same place: when these two disagreed,
+        # dragging the column wider bought no picture at all and the
+        # handle felt dead.
+        chrome = self._player_chrome() + max(head, px(30))
         if not self.cfg.theater:
-            chrome += px(46) + px(self.TAGS_MIN_H)
+            chrome += px(40) + self._tags_reserve()
         usable = room - chrome
         if usable <= 0:
             return 0
         return int(usable * 16 / 9) + 26
+
+    # The least the tag list is ever squeezed to by a width drag: about
+    # two rows of chips and its scrollbar. Below that it is not a list.
+    TAGS_FLOOR_H = 70
+
+    def _reserve_for_width(self, want: int) -> int:
+        """The tag reserve that lets the picture actually FILL `want`.
+
+        Dragging the column wider is a request for a bigger picture, and
+        a 16:9 picture that wide needs a given height. This is where that
+        height comes from - the tag list, down to its floor. Without it
+        the width drag stopped dead at the point the height ran out, which
+        reads as a broken handle rather than a full column.
+        """
+        try:
+            room = int(self.detail_panel.winfo_height())
+            head = int(self.detail_head.master.winfo_height())
+        except (AttributeError, tk.TclError):
+            return px(self.TAGS_MIN_H)
+        fixed = self._player_chrome() + max(head, px(30)) + px(50)
+        needed = int((max(int(want), 240) - 26) * 9 / 16)
+        return max(px(self.TAGS_FLOOR_H),
+                   min(px(self.TAGS_MIN_H), room - fixed - needed))
+
+    def _tags_reserve(self) -> int:
+        """How much height the tag list keeps, in real pixels.
+
+        A height dragged by hand wins outright. Otherwise: less when the
+        column's width was dragged (that drag asked for picture, and this
+        is what pays for it), the full reserve when it was not.
+        """
+        chosen = int(getattr(self.cfg, "tags_height_px", 0) or 0)
+        if chosen:
+            return chosen
+        if getattr(self.cfg, "panel_width_px", 0):
+            return px(self.TAGS_DRAGGED_H)
+        return px(self.TAGS_MIN_H)
 
     # ── the handle between the gallery and the inspector ─────────────────
     #
@@ -930,13 +984,32 @@ class LibraryTab(ctk.CTkFrame):
         if want == self.cfg.panel_width_px:
             return
         self.cfg.panel_width_px = want
+        # A wider column means a taller picture, and that height has to
+        # come from somewhere: the tag list, down to its floor. Recomputed
+        # from the width each move, so dragging back the other way hands
+        # it straight back.
+        self.cfg.tags_height_px = self._reserve_for_width(want)
         self._fit_panel()
 
     def _grip_release(self, _event=None) -> None:
         moved, self._grip_moved = self._grip_moved, False
         self._grip_from = None
-        if moved and self.cfg.panel_width_px:
+        if not moved:
+            return
+        if self.cfg.panel_width_px:
             self.cfg.save()
+        # A handle that stops moving looks broken, so say why it stopped.
+        # On a short window a 16:9 picture simply cannot be wider than
+        # this and still leave room for the controls and a tag list -
+        # theater, which puts the tag list away, is how it goes bigger.
+        asked = int(self.cfg.panel_width_px or 0)
+        try:
+            got = int(self.detail_panel.winfo_width())
+        except tk.TclError:
+            return
+        if asked and asked - got > px(12):
+            self.set_status("That is as wide as the picture can fill here - "
+                            "Theater (Ctrl+T) gives it the whole column.", T.DIM)
 
     def _grip_reset(self, _event=None) -> None:
         """Back to the width the window works out for itself."""
@@ -3009,16 +3082,7 @@ class LibraryTab(ctk.CTkFrame):
             # tag list gives up most of what it keeps in reserve - but not
             # all of it: a tag list two chips tall is worse than useless,
             # and this is still the panel clips get found from.
-            # A height set by hand wins: it is the one number that knows
-            # what this person wants to see, on this clip, on this screen.
-            chosen = int(getattr(self.cfg, "tags_height_px", 0) or 0)
-            if chosen:
-                chrome += px(40) + chosen
-            else:
-                reserve = (self.TAGS_DRAGGED_H
-                           if getattr(self.cfg, "panel_width_px", 0)
-                           else self.TAGS_MIN_H)
-                chrome += px(40) + px(reserve)
+            chrome += px(40) + self._tags_reserve()
             return max(min(room - chrome, int(room * self.PICTURE_SHARE_MAX)), 0)
         return max(room - chrome, 0)
 
