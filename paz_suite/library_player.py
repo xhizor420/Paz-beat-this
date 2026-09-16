@@ -40,6 +40,8 @@ class InlinePlayer:
         joins_playback(self)
         self._dragging = False
         self._peek_after = None
+        self._still_job = None
+        self._thumb_src = None
         self._peek_token = 0
         self._peek_busy = False
         self._peek_pending = None
@@ -455,7 +457,9 @@ class InlinePlayer:
             self.canvas.configure(width=width, height=height)
         self.engine.set_size(width, height)
         if self.rec is not None and not self.engine.playing:
-            self._show_thumb(self.rec)
+            # Debounced: a drag on the column handle is a resize per mouse
+            # movement, and each one of these is a redraw.
+            self._show_thumb(self.rec, delay=60)
         self._draw_bar()
 
     def _fit_controls(self, width: int) -> None:
@@ -603,7 +607,24 @@ class InlinePlayer:
         self.canvas.create_text(self.engine.view_w // 2, self.engine.view_h // 2,
                                 text=text, fill=T.FAINT, font=(T.UI, 11))
 
-    def _show_thumb(self, rec):
+    def _show_thumb(self, rec, delay: int = 0):
+        """Draw the resting still. `delay` coalesces a burst of these.
+
+        Every resize asks for one, and a drag on the column's handle is a
+        resize per mouse movement - which used to mean a disk read, a JPEG
+        decode, a scale and a new PhotoImage per mouse movement. That is
+        what made dragging the handle judder. The source picture is now
+        decoded once per clip, and a burst of resizes redraws once.
+        """
+        if delay:
+            if self._still_job is not None:
+                try:
+                    self.frame.after_cancel(self._still_job)
+                except (ValueError, tk.TclError):
+                    pass
+            self._still_job = self.frame.after(delay, lambda: self._show_thumb(rec))
+            return
+        self._still_job = None
         if self.holds_own_still:
             # mpv holds the first frame of the loaded clip, which is a
             # better still than our cached thumbnail and needs no work.
@@ -612,8 +633,9 @@ class InlinePlayer:
         # Anything else: our cached thumbnail, on our canvas, on top.
         self._show_stage(False)
         try:
-            with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
-                image = Image.open(io.BytesIO(fh.read()))
+            image = self._thumb_source(rec)
+            if image is None:
+                raise ValueError("no thumbnail")
             image = fit_frame(image, self.engine.view_w, self.engine.view_h,
                               self.tab.cfg.thumb_fit)
             photo = ImageTk.PhotoImage(image)
@@ -625,6 +647,25 @@ class InlinePlayer:
                                     text="▶ play", fill=T.TEXT, font=(T.UI, 9))
         except Exception:
             self._show_idle_text("no thumbnail")
+
+    def _thumb_source(self, rec):
+        """The clip's thumbnail, decoded once and kept.
+
+        Re-reading and re-decoding it on every resize is most of the cost
+        of a resize, and it is the same few kilobytes every time."""
+        path = getattr(rec, "path", "")
+        cached = getattr(self, "_thumb_src", None)
+        if cached is not None and cached[0] == path:
+            return cached[1]
+        try:
+            with open(os.path.join(THUMB_DIR, thumb_key(path)), "rb") as fh:
+                image = Image.open(io.BytesIO(fh.read()))
+                image.load()
+        except Exception:
+            self._thumb_src = (path, None)
+            return None
+        self._thumb_src = (path, image)
+        return image
 
     # ── transport ───────────────────────────────────────────────────────
 

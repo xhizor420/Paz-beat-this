@@ -147,6 +147,9 @@ class AppConfig:
     # between it and the player. 0 means "work it out", which is the
     # default and what a double-click on the handle restores.
     tags_height_px: int = 0
+    # Bumped when a stored layout number stops meaning what it meant.
+    # See _upgrade_layout_sizes.
+    layout_gen: int = 0
 
     # ── Performance (tune upward as the library grows) ──────────────────
     # In-memory ffprobe result cache, shared by both tabs. Each entry is a
@@ -223,6 +226,7 @@ class AppConfig:
             cfg._read(CONFIG_PATH)
             changed = cfg._upgrade_beat_default()
             changed = cfg._upgrade_banner_slot() or changed
+            changed = cfg._upgrade_layout_sizes() or changed
             if changed:
                 cfg.save()
             return cfg
@@ -232,6 +236,27 @@ class AppConfig:
         if migrated:
             cfg.save()
         return cfg
+
+    LAYOUT_GEN = 1
+
+    def _upgrade_layout_sizes(self) -> bool:
+        """Forget hand-set panel sizes from before they were trustworthy.
+
+        The handle used to decide the width from where the pointer was
+        rather than how far it had moved, so a CLICK on it - including the
+        first press of the double-click that resets it - saved a width.
+        Anyone who touched it is pinned to an arbitrary number, and every
+        improvement to how the column sizes itself is overridden by it
+        with no sign of why. They go back to automatic once; the handle
+        still works, and now it only saves a width it was dragged to.
+        """
+        if self.layout_gen >= self.LAYOUT_GEN:
+            return False
+        self.layout_gen = self.LAYOUT_GEN
+        if self.panel_width_px or self.tags_height_px:
+            self.panel_width_px = 0
+            self.tags_height_px = 0
+        return True
 
     def _upgrade_banner_slot(self) -> bool:
         """Carry an existing header picture into the artwork slot.

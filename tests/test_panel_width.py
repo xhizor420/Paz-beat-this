@@ -40,6 +40,9 @@ class FakeTab:
     PANEL_MAX = LibraryTab.PANEL_MAX
     PANEL_SHARE_MAX = LibraryTab.PANEL_SHARE_MAX
     THEATER_SHARE_MAX = LibraryTab.THEATER_SHARE_MAX
+    GALLERY_MIN_W = LibraryTab.GALLERY_MIN_W
+    SIDEBAR_W = LibraryTab.SIDEBAR_W
+    GRIP_W = LibraryTab.GRIP_W
     THEATER_BONUS = LibraryTab.THEATER_BONUS
     panel_cap = LibraryTab.panel_cap
     panel_width = LibraryTab.panel_width
@@ -106,3 +109,20 @@ def test_theater_is_always_wider_than_the_normal_width():
         normal = FakeTab(window=window).panel_width()
         theater = FakeTab(window=window, theater=True).panel_width()
         assert theater > normal, window
+
+
+# ── the layout may never be wider than the window ───────────────────────
+
+def test_the_gallery_always_keeps_a_strip_of_the_window():
+    """Tk answers "this column wants more than there is" by running off
+    the right-hand edge - and what went over the edge was the inspector's
+    own Theater button, which is the way out of theater."""
+    for window in (1180, 1400, 2000, 2560, 3840):
+        for theater in (False, True):
+            for dragged in (0, 5000):
+                tab = FakeTab(window=window, wants=9999, theater=theater,
+                              panel_width_px=dragged)
+                panel = tab.panel_width()
+                room_left = window - panel
+                assert room_left >= LibraryTab.GALLERY_MIN_W - 1, (
+                    window, theater, dragged, panel, room_left)
