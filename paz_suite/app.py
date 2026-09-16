@@ -329,22 +329,22 @@ class PazApp:
                     "Beat This": (T.ACCENT4_DEEP, T.ACCENT4)}
 
     def _build_tabstrip(self) -> None:
-        strip = ctk.CTkFrame(self.root, fg_color=T.BG, corner_radius=0, height=44)
+        strip = ctk.CTkFrame(self.root, fg_color=T.BG, corner_radius=0, height=36)
         strip.pack(fill="x", side="top")
         strip.pack_propagate(False)
 
         inner = ctk.CTkFrame(strip, fg_color="transparent")
-        inner.pack(side="left", padx=(14, 0), pady=(6, 0))
+        inner.pack(side="left", padx=(14, 0), pady=(2, 0))
 
         self._tab_widgets: dict = {}
         for name in TAB_NAMES:
             deep, bright = self._TAB_ACCENTS[name]
             holder = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=9,
-                                  height=32)
+                                  height=28)
             holder.pack(side="left", padx=(0, 4))
             dot = ctk.CTkFrame(holder, width=8, height=8, corner_radius=2,
                                fg_color=mix(bright, T.BG, 0.55))
-            dot.pack(side="left", padx=(13, 8), pady=12)
+            dot.pack(side="left", padx=(12, 7), pady=10)
             label = ctk.CTkLabel(holder, text=name, font=font(13, "bold"),
                                  text_color=T.DIM)
             label.pack(side="left", padx=(0, 14))

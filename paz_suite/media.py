@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from .config import THUMB_DIR
 from .theme import T
-from .files import NO_WINDOW
+from .files import NO_WINDOW, PREVIEW_FLAGS
 
 
 def _drain(proc) -> None:
@@ -253,6 +253,30 @@ def fit_frame(image, box_w: int, box_h: int, mode: str = "contain",
     return canvas.filter(ImageFilter.GaussianBlur(9)) if blur else canvas
 
 
+# How many preview children may run at once. Thumbnails, hover reels,
+# storyboard sheets and single frames are all ffmpeg, all optional, and
+# all fighting the same disk: unbounded, a page turn plus a hover plus a
+# sheet build is a dozen ffmpegs against one drive, which is slower for
+# everyone AND takes the machine away from whatever the user is actually
+# running. Bounded, they queue instead of thrashing.
+PREVIEW_SLOTS = threading.Semaphore(max(2, (os.cpu_count() or 4) // 3))
+
+
+def tile_image(data: bytes, width: int, height: int, fit: str,
+               radius: int = 9, backing: str | None = None):
+    """JPEG bytes -> a picture sized and rounded for a gallery tile.
+
+    Decoding, scaling and rounding a 320px thumbnail costs a couple of
+    milliseconds. That is nothing once, and a visible hitch forty-eight
+    times in a row - which is what a page turn is. None of it touches Tk,
+    so it belongs on whichever thread fetched the bytes; only the last
+    step, wrapping the result in a PhotoImage, has to be the UI thread.
+    """
+    image = Image.open(io.BytesIO(data))
+    image = fit_frame(image, width, height, fit)
+    return round_corners(image, radius, backing) if backing else image
+
+
 def round_corners(image, radius: int, bg: str = ""):
     """Give a frame softly rounded corners against the gallery surface.
 
@@ -392,9 +416,10 @@ class ThumbCache:
             "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "6", "-",
         ]
         try:
-            result = subprocess.run(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, timeout=25,
-                                    creationflags=NO_WINDOW)
+            with PREVIEW_SLOTS:
+                result = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, timeout=25,
+                                        creationflags=PREVIEW_FLAGS)
         except (OSError, subprocess.SubprocessError):
             return []
         if result.returncode != 0 or not result.stdout:
@@ -435,7 +460,7 @@ class ThumbCache:
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, bufsize=0,
-                                    creationflags=NO_WINDOW)
+                                    creationflags=PREVIEW_FLAGS)
         except OSError:
             on_frames([], True)
             return
@@ -510,9 +535,10 @@ class ThumbCache:
                     "-q:v", "3", "-f", "image2", tmp_path,
                 ]
                 try:
-                    subprocess.run(cmd, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=20,
-                                   creationflags=NO_WINDOW)
+                    with PREVIEW_SLOTS:
+                        subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, timeout=20,
+                                       creationflags=PREVIEW_FLAGS)
                 except (OSError, subprocess.SubprocessError):
                     continue
                 if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
@@ -612,9 +638,10 @@ class ThumbCache:
                    "-an", "-sn", "-frames:v", "1",
                    "-vf", vf, "-q:v", "4", tmp_path]
             try:
-                subprocess.run(cmd, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=90,
-                               creationflags=NO_WINDOW)
+                with PREVIEW_SLOTS:
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=90,
+                                   creationflags=PREVIEW_FLAGS)
             except (OSError, subprocess.SubprocessError):
                 return None
             if not (os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0):
@@ -789,9 +816,10 @@ def make_thumb(path: str, duration: float, width: int) -> bool:
                           "-vf", f"scale={width}:-2:flags=bicubic",
                           "-q:v", "3", "-f", "image2", dest]
             try:
-                subprocess.run(cmd, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=25,
-                               creationflags=NO_WINDOW)
+                with PREVIEW_SLOTS:
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=25,
+                                   creationflags=PREVIEW_FLAGS)
             except (OSError, subprocess.SubprocessError):
                 continue
             if os.path.exists(dest) and os.path.getsize(dest) > 0:

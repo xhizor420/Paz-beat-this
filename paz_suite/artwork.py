@@ -62,7 +62,7 @@ class Slot:
 # content already, so a picture only earns a place if it is either always
 # on screen or is itself an asset.
 SLOTS = (
-    Slot("banner", "Header strip", (1760, 76), flexible_width=True,
+    Slot("banner", "Header strip", (1760, 58), flexible_width=True,
          note="Runs the full width behind the PAZ mark, on every tab, all "
               "the time. A wide crop suits it better than a whole picture."),
     Slot("icon", "Window icon", (256, 256),

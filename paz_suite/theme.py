@@ -287,7 +287,11 @@ def lens_photo(size: int, color: str) -> "ImageTk.PhotoImage":
               width=int(ring), joint="curve")
     return ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
 
-BANNER_H = 76          # header strip height in px
+BANNER_H = 58          # header strip height in px
+# Was 76. On a 1200px-tall window the strip behind the mark, the tab row
+# and the Library's own search row came to 275px - nearly a quarter of
+# the height - before a single clip was drawn. The mark and the clip
+# count still fit; the difference goes to the gallery and the player.
 _BANNER_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
 
 

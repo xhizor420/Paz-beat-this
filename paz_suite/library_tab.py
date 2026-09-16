@@ -6,7 +6,6 @@ Fix-missing / Fetch-tags / Sync pipeline.
 from __future__ import annotations
 
 import collections
-import io
 import os
 import threading
 import tkinter as tk
@@ -15,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import messagebox
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import ImageTk
 
 from .theme import T, font, lens_photo, mix, pt, px, unscaled, LIBRARY_LABELS
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
@@ -23,7 +22,7 @@ from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
 )
 from .config import THUMB_DIR
-from .media import fit_frame, round_corners, thumb_key, make_thumb, probe
+from .media import tile_image, thumb_key, make_thumb, probe
 from .e621 import E621_POST
 from .similar import rank as rank_similar, tag_weights
 from .library_db import (
@@ -224,7 +223,7 @@ class LibraryTab(ctk.CTkFrame):
         self._build_grid_area()
         self._build_details()
 
-    SEARCH_H = 38
+    SEARCH_H = 32
     SEARCH_REST = 340        # width of the resting search field, unscaled
 
     def _build_topbar(self):
@@ -249,8 +248,8 @@ class LibraryTab(ctk.CTkFrame):
         # see _search_focus. Column 1 is the slack it grows into.
         box = ctk.CTkFrame(bar, fg_color=T.INPUT, corner_radius=10,
                            border_width=1, border_color=T.LINE,
-                           height=px(self.SEARCH_H), width=px(self.SEARCH_REST))
-        box.grid(row=0, column=0, sticky="w", padx=(px(18), 0), pady=px(11))
+                           height=self.SEARCH_H, width=self.SEARCH_REST)
+        box.grid(row=0, column=0, sticky="w", padx=(18, 0), pady=5)
         box.pack_propagate(False)
         self.search_box = box
 
@@ -260,10 +259,10 @@ class LibraryTab(ctk.CTkFrame):
 
         def boxbtn(text, cmd, size=13):
             button = ctk.CTkButton(
-                box, text=text, width=px(28), height=px(self.SEARCH_H - 12),
+                box, text=text, width=28, height=self.SEARCH_H - 12,
                 corner_radius=7, font=font(size), fg_color="transparent",
                 hover_color=T.BTN_HOV, text_color=T.DIM, command=cmd)
-            button.pack(side="right", padx=(0, px(5)))
+            button.pack(side="right", padx=(0, 5))
             return button
 
         self.clear_btn = boxbtn("✕", self._clear_search, 12)
@@ -272,11 +271,11 @@ class LibraryTab(ctk.CTkFrame):
 
         self.search = ctk.CTkEntry(
             box, placeholder_text="Search",
-            height=px(self.SEARCH_H - 8), font=font(13), corner_radius=0,
+            height=self.SEARCH_H - 8, font=font(13), corner_radius=0,
             fg_color="transparent", border_width=0, text_color=T.TEXT,
             placeholder_text_color=T.FAINT)
         self.search.pack(side="left", fill="both", expand=True,
-                         padx=(px(8), px(4)))
+                         padx=(8, 4))
         self.search.bind("<KeyRelease>", self._on_search_key)
         self.search.bind("<Return>", self._commit_search)
         self.search.bind("<Up>", lambda e: self._history_step(-1))
@@ -289,21 +288,20 @@ class LibraryTab(ctk.CTkFrame):
         self._search_anim = None
 
         right = ctk.CTkFrame(bar, fg_color="transparent")
-        right.grid(row=0, column=2, sticky="e", padx=(px(12), px(16)),
-                   pady=px(11))
+        right.grid(row=0, column=2, sticky="e", padx=(12, 16), pady=5)
 
         self.sort_menu = ctk.CTkOptionMenu(
-            right, values=list(SORTS), width=px(120), height=px(self.SEARCH_H),
+            right, values=list(SORTS), width=120, height=self.SEARCH_H,
             font=font(12), corner_radius=9, fg_color=T.INPUT, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
             dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, command=lambda _v: self.run_search())
         self.sort_menu.set(self.cfg.sort if self.cfg.sort in SORTS else "Newest")
-        self.sort_menu.pack(side="left", padx=(0, px(8)))
+        self.sort_menu.pack(side="left", padx=(0, 8))
 
         self.more_btn = ctk.CTkButton(
-            right, text="⋯", width=px(40), height=px(self.SEARCH_H),
+            right, text="⋯", width=40, height=self.SEARCH_H,
             corner_radius=9, font=font(15, "bold"), fg_color=T.BTN,
             hover_color=T.BTN_HOV, text_color=T.ACCENT2, command=self._more_menu)
         self.more_btn.pack(side="left")
@@ -545,14 +543,14 @@ class LibraryTab(ctk.CTkFrame):
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
                                  text_color=T.DIM,
                                  command=lambda t=token: self.add_token(t))
-            chip.pack(side="left", padx=(0, px(6)))
+            chip.pack(side="left", padx=(0, 6))
             self.quick_chips[key] = (chip, text, token)
 
         # Everything that did not fit lives behind this - see
         # _fit_quick_chips. A chip sliced in half by the edge of the panel
         # is not a filter, it is a rendering fault.
         self._quick_more = ctk.CTkButton(
-            self._quick_row, text="⋯", height=22, width=px(34),
+            self._quick_row, text="⋯", height=22, width=34,
             corner_radius=11, font=font(10), fg_color=T.BTN,
             hover_color=T.BTN_HOV, text_color=T.FAINT,
             command=self._quick_menu)
@@ -723,10 +721,10 @@ class LibraryTab(ctk.CTkFrame):
     # Room kept for the tag list when the panel grows. Tags are how a
     # clip gets found again; a player that ate them would be a worse tab,
     # not a better one.
-    TAGS_MIN_H = 190
+    TAGS_MIN_H = 150
     # What the tag list keeps when the width was dragged by hand - see
     # _picture_room. Less, because that drag said what it wanted.
-    TAGS_DRAGGED_H = 120
+    TAGS_DRAGGED_H = 100
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -924,7 +922,7 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_panel = panel
         panel.grid(row=1, column=3, sticky="nse", padx=(0, 12), pady=(10, 0))
         panel.grid_propagate(False)
-        panel.grid_rowconfigure(3, weight=1)
+        panel.grid_rowconfigure(4, weight=1)
         panel.grid_columnconfigure(0, weight=1)
 
         head_row = ctk.CTkFrame(panel, fg_color="transparent")
@@ -961,34 +959,39 @@ class LibraryTab(ctk.CTkFrame):
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
 
-        def dbtn(text, cmd, color=T.DIM, width=76):
-            b = ctk.CTkButton(buttons, text=text, width=width, height=29,
+        # Sized to their labels and no wider: six buttons at comfortable
+        # widths did not fit the column at 150% scaling, and the last one
+        # ran off the edge rather than the row admitting it was full.
+        def dbtn(text, cmd, color=T.DIM, width=58):
+            b = ctk.CTkButton(buttons, text=text, width=width, height=27,
                               corner_radius=7, font=font(11), fg_color=T.BTN,
                               hover_color=T.BTN_HOV, text_color=color, command=cmd)
-            b.pack(side="left", padx=(0, 5))
+            b.pack(side="left", padx=(0, 4))
             return b
 
         dbtn("Folder", self._reveal)
         dbtn("→ Resolve", lambda: self.send_to_resolve(self.targets()),
-             T.ACCENT3, 92)
-        self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 58)
-        dbtn("Grid", self._grid, T.ACCENT, 62)
+             T.ACCENT3, 76)
+        self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 46)
+        dbtn("Grid", self._grid, T.ACCENT, 46)
         # The search box cannot ask "more of this" - you would have to
         # know which of a clip's forty tags are the ones that matter.
-        dbtn("Like this", self.sort_by_similarity, T.ACCENT2, 84)
+        dbtn("Like this", self.sort_by_similarity, T.ACCENT2, 68)
         dbtn("Copy name", lambda: self._copy(self.selected.name)
-             if self.selected else None, T.DIM, 96)
+             if self.selected else None, T.DIM, 76)
+
+        self._build_tag_grip(panel)
 
         self.detail_tags_head = ctk.CTkLabel(
             panel, text="TAGS · click to search · right-click for more",
             font=font(11, "bold"), text_color=T.FAINT, anchor="w")
-        self.detail_tags_head.grid(row=2, column=0, sticky="ew", padx=6, pady=(14, 5))
+        self.detail_tags_head.grid(row=3, column=0, sticky="ew", padx=6, pady=(4, 4))
 
         self.detail_tags = ctk.CTkScrollableFrame(
             panel, fg_color=T.SURFACE, corner_radius=12, border_width=1,
             border_color=T.LINE, scrollbar_button_color=T.LINE,
             scrollbar_button_hover_color=T.FAINT)
-        self.detail_tags.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
+        self.detail_tags.grid(row=4, column=0, sticky="nsew", pady=(0, 10))
         self.detail_tags.grid_columnconfigure(0, weight=1)
         # Theater is remembered between runs, so the column has to open in
         # whichever state it was left in.
@@ -1292,10 +1295,10 @@ class LibraryTab(ctk.CTkFrame):
                 continue
             text = f"{label}  {count}"
             chip.configure(text=text, text_color=T.DIM, state="normal",
-                           width=self._quick_font.measure(text) + px(26))
+                           width=unscaled(self._quick_font.measure(text) + px(26)))
             self._quick_live.append(key)
             if not chip.winfo_ismapped():
-                chip.pack(side="left", padx=(0, px(6)))
+                chip.pack(side="left", padx=(0, 6))
         self._fit_quick_chips()
 
     def _load_library(self):
@@ -1515,7 +1518,7 @@ class LibraryTab(ctk.CTkFrame):
     def _show_saved_row(self, wanted: bool) -> None:
         row = self._saved_row
         if wanted and not row.winfo_ismapped():
-            row.pack(side="left", padx=(px(10), 0))
+            row.pack(side="left", padx=(10, 0))
         elif not wanted and row.winfo_ismapped():
             row.pack_forget()
 
@@ -1537,15 +1540,15 @@ class LibraryTab(ctk.CTkFrame):
                 row, text=f"★ {name}", height=22, corner_radius=11,
                 font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                 text_color=T.ACCENT2,
-                width=self._quick_font.measure(f"★ {name}") + px(26),
+                width=unscaled(self._quick_font.measure(f"★ {name}") + px(26)),
                 command=lambda n=name: self.apply_saved(n))
-            chip.pack(side="left", padx=(0, px(6)))
+            chip.pack(side="left", padx=(0, 6))
             chip.bind("<Button-3>", lambda e, n=name: self._saved_chip_menu(n))
             self.saved_chips.append(chip)
         # The rest of the list, and any of these that turn out not to fit,
         # live behind this.
         self._saved_more = ctk.CTkButton(
-            row, text="", height=22, width=px(40), corner_radius=11,
+            row, text="", height=22, width=40, corner_radius=11,
             font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.FAINT, command=self._saved_menu)
         self._saved_overflow = max(len(saved) - SAVED_CHIPS_MAX, 0)
@@ -1598,10 +1601,10 @@ class LibraryTab(ctk.CTkFrame):
                 continue
             used += width
             if not chip.winfo_ismapped():
-                chip.pack(side="left", padx=(0, px(6)))
+                chip.pack(side="left", padx=(0, 6))
         more.pack_forget()
         if self._quick_hidden:
-            more.pack(side="left", padx=(0, px(6)))
+            more.pack(side="left", padx=(0, 6))
 
     def _quick_menu(self) -> None:
         """The filters there was no room for."""
@@ -1654,13 +1657,13 @@ class LibraryTab(ctk.CTkFrame):
         for index, chip in enumerate(self.saved_chips):
             if index < shown:
                 if not chip.winfo_ismapped():
-                    chip.pack(side="left", padx=(0, px(6)))
+                    chip.pack(side="left", padx=(0, 6))
             else:
                 chip.pack_forget()
         self._saved_more.pack_forget()
         if hidden > 0:
             self._saved_more.configure(text=f"+{hidden}")
-            self._saved_more.pack(side="left", padx=(0, px(6)))
+            self._saved_more.pack(side="left", padx=(0, 6))
 
     def _apply_search(self, query: str):
         self.search.delete(0, tk.END)
@@ -2338,10 +2341,17 @@ class LibraryTab(ctk.CTkFrame):
         starts when you stop moving and one that looks broken."""
         fps = self._preview_fps(rec)
         key = self._reel_key(rec.path, start)
+
+        def arrived(frames, done):
+            # Still on the decode thread: shaping a frame is ~2ms, and a
+            # reel is a couple of hundred of them.
+            shaped = [img for img in (self._tile_image(f) for f in frames)
+                      if img is not None]
+            self.ui(self._preview_frames, key, index, shaped, done, fps, token)
+
         self.frames.preview_reel_stream(
             rec.path, rec.duration, self.CARD_W,
-            on_frames=lambda frames, done: self.ui(
-                self._preview_frames, key, index, frames, done, fps, token),
+            on_frames=arrived,
             alive=lambda: token == self._pv_token,
             fps=fps, start=start)
 
@@ -2407,7 +2417,8 @@ class LibraryTab(ctk.CTkFrame):
         """PhotoImages have to be built on the UI thread, so they are made
         as each frame comes up and kept - one small conversion per frame is
         invisible, where converting a whole reel up front is a visible
-        stall right when playback should be starting."""
+        stall right when playback should be starting. The decoding and
+        scaling behind them happened on the decode thread."""
         cache = reel["photos"]
         photo = cache.get(i)
         if photo is not None:
@@ -2418,15 +2429,24 @@ class LibraryTab(ctk.CTkFrame):
         cache[i] = photo
         return photo
 
-    def _tile_photo(self, data: bytes):
-        """JPEG bytes -> a PhotoImage sized and rounded to fill a card's
-        picture area. Every moving picture a tile shows - reel frames and
-        scrub frames alike - goes through here, so they all sit in exactly
-        the same place as the resting thumbnail."""
+    def _tile_image(self, data: bytes):
+        """JPEG bytes -> a picture shaped to a card, on the calling thread.
+
+        Called from the decode threads, never the UI one: see
+        media.tile_image for why.
+        """
         try:
-            image = Image.open(io.BytesIO(data))
-            image = fit_frame(image, self.CARD_W, self.IMG_H, self.cfg.thumb_fit)
-            image = round_corners(image, 9, T.SURFACE)
+            return tile_image(data, self.CARD_W, self.IMG_H,
+                              self.cfg.thumb_fit, backing=T.SURFACE)
+        except Exception:
+            return None
+
+    def _tile_photo(self, image):
+        """A prepared picture -> a PhotoImage. UI thread only, and the
+        only part of the job that has to be."""
+        if image is None:
+            return None
+        try:
             return ImageTk.PhotoImage(image)
         except Exception:
             return None
@@ -2546,19 +2566,24 @@ class LibraryTab(ctk.CTkFrame):
                          daemon=True).start()
 
     def _scrub_fetch(self, rec: Rec, index: int, frac: float, token: int) -> None:
+        image = None
         try:
             data = self.frames.hover_frame(rec.path, rec.duration, frac)
+            if data:
+                # Shaped here, on this thread: the UI thread's only job is
+                # to hand the result to Tk.
+                image = self._tile_image(data)
         except Exception:
-            data = None
-        self.ui(self._scrub_show, index, frac, data, token)
+            image = None
+        self.ui(self._scrub_show, index, frac, image, token)
 
-    def _scrub_show(self, index: int, frac: float, data, token: int) -> None:
+    def _scrub_show(self, index: int, frac: float, image, token: int) -> None:
         if token != self._sb_token or self._sb_index != index:
             return
         self._sb_busy = False
-        if data and index < len(self._layout) \
+        if image is not None and index < len(self._layout) \
                 and self.gallery.find_withtag(f"im{index}"):
-            photo = self._tile_photo(data)
+            photo = self._tile_photo(image)
             if photo is not None:
                 self.gallery.itemconfigure(f"im{index}", image=photo)
                 self._sb_photo = photo
@@ -2619,32 +2644,42 @@ class LibraryTab(ctk.CTkFrame):
             self.gallery.itemconfigure(f"im{index}", image=resting)
 
     def _load_thumbs(self, batch: list, token: int):
+        """Read and prepare a page's thumbnails, off the UI thread.
+
+        The preparing is the point: decoding, scaling and rounding one
+        320px thumbnail is a couple of milliseconds, and a page is
+        forty-eight of them - a tenth of a second of the UI thread, every
+        page turn and every search, which is exactly the hitch that reads
+        as the app being slow. Only the PhotoImage is left for the UI
+        thread, because that is the part that must be.
+        """
+        width, height, fit = self.CARD_W, self.IMG_H, self.cfg.thumb_fit
         for index, rec in enumerate(batch):
             if token != self._page_token:
                 return
-            data = None
+            image = None
             try:
                 with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
                     data = fh.read()
-            except OSError:
-                pass
-            self.ui(self._place_thumb, index, rec, data, token)
+                image = tile_image(data, width, height, fit, backing=T.SURFACE)
+            except Exception:
+                # A missing or corrupt thumbnail is one blank tile, not a
+                # page that stops loading at the clip before it.
+                image = None
+            self.ui(self._place_thumb, index, rec, image, token)
 
-    def _place_thumb(self, index: int, rec: Rec, data, token: int):
+    def _place_thumb(self, index: int, rec: Rec, image, token: int):
         if token != self._page_token or index >= len(self._layout):
             return
         slot = self._layout[index]
         canvas = self.gallery
         canvas.delete(f"ph{index}")
-        if not data:
+        if image is None:
             canvas.create_text(slot["x"] + self.CARD_W // 2, slot["y"] + self.IMG_H // 2,
                                text="no thumb", fill=T.FAINT, font=(T.UI, pt(9)),
                                tags=(slot["tag"],))
             return
         try:
-            image = Image.open(io.BytesIO(data))
-            image = fit_frame(image, self.CARD_W, self.IMG_H, self.cfg.thumb_fit)
-            image = round_corners(image, 9, T.SURFACE)
             photo = ImageTk.PhotoImage(image)
         except Exception:
             return
@@ -2873,27 +2908,64 @@ class LibraryTab(ctk.CTkFrame):
                 return ratio
         return self.DEFAULT_ASPECT
 
+    # What the player's own furniture costs when it cannot be measured -
+    # seek bar, transport row, name, meta line, action row. Only used
+    # until the column has been laid out once.
+    CHROME_GUESS = 210
+    # And the most of the column the picture may ever take. A tall clip
+    # would otherwise fill the whole column and leave the tag list a
+    # sliver: the tags are how the next clip gets found, so they are not
+    # the player's to eat.
+    PICTURE_SHARE_MAX = 0.62
+
+    def _player_chrome(self) -> int:
+        """Height of everything in the card that is not the picture.
+
+        Measured, but the measurement is only trustworthy once: a card
+        that has just been told to hold a taller picture reports its OLD
+        height for a moment, which read as negative chrome. That used to
+        abandon the height limit altogether - the picture kept the full
+        height its aspect asked for and squeezed the tag list down to a
+        single row, which is exactly what a 720x864 clip did.
+        """
+        try:
+            card = int(self.player.frame.master.winfo_height())
+            picture = int(self.player.stack.winfo_height())
+        except (AttributeError, tk.TclError):
+            return px(self.CHROME_GUESS)
+        chrome = card - picture
+        if chrome > px(60):
+            self._chrome_seen = chrome
+            return chrome
+        return getattr(self, "_chrome_seen", None) or px(self.CHROME_GUESS)
+
     def _picture_room(self) -> int:
         """How much height the column can give the picture, or 0 when the
         column has not been laid out yet and there is nothing to measure."""
         try:
             room = int(self.detail_panel.winfo_height())
-            card = int(self.player.frame.master.winfo_height())
-            picture = int(self.player.stack.winfo_height())
             head = int(self.detail_head.master.winfo_height())
         except (AttributeError, tk.TclError):
             return 0
-        if room < 200 or picture < 50 or card < picture:
+        if room < 200:
             return 0
-        chrome = (card - picture) + head + px(10)
+        chrome = self._player_chrome() + max(head, px(30)) + px(10)
         if not self.cfg.theater:
             # A width set by hand is a request for a bigger picture, so the
             # tag list gives up most of what it keeps in reserve - but not
             # all of it: a tag list two chips tall is worse than useless,
             # and this is still the panel clips get found from.
-            reserve = (self.TAGS_DRAGGED_H if getattr(self.cfg, "panel_width_px", 0)
-                       else self.TAGS_MIN_H)
-            chrome += px(46) + px(reserve)
+            # A height set by hand wins: it is the one number that knows
+            # what this person wants to see, on this clip, on this screen.
+            chosen = int(getattr(self.cfg, "tags_height_px", 0) or 0)
+            if chosen:
+                chrome += px(40) + chosen
+            else:
+                reserve = (self.TAGS_DRAGGED_H
+                           if getattr(self.cfg, "panel_width_px", 0)
+                           else self.TAGS_MIN_H)
+                chrome += px(40) + px(reserve)
+            return max(min(room - chrome, int(room * self.PICTURE_SHARE_MAX)), 0)
         return max(room - chrome, 0)
 
     def _picture_box(self, inner: int) -> tuple:
@@ -2932,6 +3004,83 @@ class LibraryTab(ctk.CTkFrame):
         self._fit_panel()
         self.after(150, self.render_page)
 
+    # ── the handle between the player and the tag list ───────────────────
+    #
+    # Whichever way this is set it is wrong for someone. A 16:9 clip fills
+    # the column's width and leaves the tags plenty; a tall clip can use
+    # every pixel of height there is, and then the tag list - which is how
+    # the NEXT clip gets found - is a sliver. So it is a handle, like the
+    # one beside the gallery: drag down for more picture, up for more tags,
+    # double-click for the worked-out split.
+
+    def _build_tag_grip(self, panel) -> None:
+        grip = tk.Frame(panel, height=self.GRIP_W, bg=T.BG,
+                        cursor="sb_v_double_arrow", bd=0, highlightthickness=0)
+        grip.grid(row=2, column=0, sticky="ew", pady=(2, 0))
+        grip.grid_propagate(False)
+        self._tag_grip = grip
+        self._tag_from = None
+        self._tag_moved = False
+        bar = tk.Frame(grip, height=1, bg=T.LINE, bd=0, highlightthickness=0)
+        bar.place(relx=0.0, rely=0.5, relwidth=1.0, anchor="w")
+        self._tag_grip_bar = bar
+        for widget in (grip, bar):
+            widget.configure(cursor="sb_v_double_arrow")
+            widget.bind("<Enter>", lambda e: self._tag_grip_glow(True))
+            widget.bind("<Leave>", lambda e: self._tag_grip_glow(False))
+            widget.bind("<Button-1>", self._tag_grip_press)
+            widget.bind("<B1-Motion>", self._tag_grip_drag)
+            widget.bind("<ButtonRelease-1>", self._tag_grip_release)
+            widget.bind("<Double-Button-1>", self._tag_grip_reset)
+
+    def _tag_grip_glow(self, on: bool) -> None:
+        try:
+            self._tag_grip_bar.configure(bg=T.ACCENT if on else T.LINE,
+                                         height=2 if on else 1)
+        except tk.TclError:
+            pass
+
+    def _tag_grip_press(self, event) -> None:
+        try:
+            tags = int(self.detail_tags.winfo_height())
+        except tk.TclError:
+            return
+        self._tag_from = (event.y_root, tags)
+        self._tag_moved = False
+
+    def _tag_grip_drag(self, event) -> None:
+        """Down gives the height to the picture, up gives it to the tags."""
+        if self._tag_from is None:
+            return
+        start_y, start_h = self._tag_from
+        travelled = event.y_root - start_y
+        if not self._tag_moved and abs(travelled) < px(self.GRIP_SLOP):
+            return
+        self._tag_moved = True
+        try:
+            room = int(self.detail_panel.winfo_height())
+        except tk.TclError:
+            return
+        low, high = px(60), max(int(room * 0.70), px(60))
+        want = int(max(low, min(start_h - travelled, high)))
+        if want == self.cfg.tags_height_px:
+            return
+        self.cfg.tags_height_px = want
+        self._fit_panel()
+
+    def _tag_grip_release(self, _event=None) -> None:
+        moved, self._tag_moved = self._tag_moved, False
+        self._tag_from = None
+        if moved and self.cfg.tags_height_px:
+            self.cfg.save()
+
+    def _tag_grip_reset(self, _event=None) -> None:
+        self.cfg.tags_height_px = 0
+        self.cfg.save()
+        self._fit_panel()
+        self.set_status("Player and tag list back to the worked-out split - "
+                        "drag the handle between them to set your own.", T.DIM)
+
     def _show_tags_panel(self, shown: bool) -> None:
         """Theater gives the whole column to the picture.
 
@@ -2940,7 +3089,7 @@ class LibraryTab(ctk.CTkFrame):
         chips beside it, which is neither a tag list nor more room for the
         video. So it stands down entirely while theater is on, and comes
         back the moment it is off."""
-        for widget in (self.detail_tags_head, self.detail_tags):
+        for widget in (self._tag_grip, self.detail_tags_head, self.detail_tags):
             try:
                 widget.grid() if shown else widget.grid_remove()
             except tk.TclError:

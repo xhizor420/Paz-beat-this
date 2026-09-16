@@ -143,6 +143,10 @@ class AppConfig:
     # handle. 0 means "work it out from the window", which is the default
     # and what the handle's double-click restores.
     panel_width_px: int = 0
+    # Height of the Library's tag list in pixels, as dragged by the handle
+    # between it and the player. 0 means "work it out", which is the
+    # default and what a double-click on the handle restores.
+    tags_height_px: int = 0
 
     # ── Performance (tune upward as the library grows) ──────────────────
     # In-memory ffprobe result cache, shared by both tabs. Each entry is a

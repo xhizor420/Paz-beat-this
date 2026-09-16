@@ -157,8 +157,12 @@ class FakeTab:
     def _preview_arm(self, index, at=None):
         self.armed.append((index, at))
 
-    def _tile_photo(self, data):
+    def _tile_image(self, data):
+        # The worker's half of the job: bytes -> a shaped picture.
         return data
+
+    def _tile_photo(self, image):
+        return image
 
     def _draw_progress(self, index, frac):
         self.painted.append((index, round(frac, 4)))
