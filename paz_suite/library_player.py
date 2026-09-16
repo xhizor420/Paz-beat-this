@@ -17,7 +17,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, pt, px
+from .theme import T, font, pt, px, unscaled
 from .format import fmt_clock, fmt_short
 from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
@@ -101,30 +101,35 @@ class InlinePlayer:
         controls = ctk.CTkFrame(self.frame, fg_color="transparent")
         controls.pack(fill="x")
 
-        def cbtn(text, cmd, width=42, color=T.DIM):
+        # Widths are deliberately tight. Together with the speed menu,
+        # the backend button, the mute button and the volume slider this
+        # row has to fit the inspector column at its NARROWEST, and at
+        # 150% display scaling the generous version ran off the end -
+        # taking the volume slider with it.
+        def cbtn(text, cmd, width=38, color=T.DIM):
             b = ctk.CTkButton(controls, text=text, width=width, height=26,
                                corner_radius=6, font=font(10), fg_color=T.BTN,
                                hover_color=T.BTN_HOV, text_color=color,
                                command=cmd)
-            b.pack(side="left", padx=(0, 5))
+            b.pack(side="left", padx=(0, 4))
             return b
 
-        self.play_btn = cbtn("▶ Play", self.toggle, 72, T.ACCENT)
-        cbtn("-5s", lambda: self.nudge(-5), 40)
-        cbtn("+5s", lambda: self.nudge(5), 40)
-        self.loop_btn = cbtn("Loop", self.toggle_loop, 48,
+        self.play_btn = cbtn("▶ Play", self.toggle, 58, T.ACCENT)
+        cbtn("-5s", lambda: self.nudge(-5), 36)
+        cbtn("+5s", lambda: self.nudge(5), 36)
+        self.loop_btn = cbtn("Loop", self.toggle_loop, 44,
                               T.ACCENT if self.engine.loop else T.DIM)
-        self.quality_btn = cbtn("4K", self.toggle_quality, 46)
+        self.quality_btn = cbtn("4K", self.toggle_quality, 38)
         self.quality_btn.configure(state="disabled")
         self.speed_menu = ctk.CTkOptionMenu(
-            controls, values=["0.5x", "1x", "1.5x", "2x"], width=64, height=26,
+            controls, values=["0.5x", "1x", "1.5x", "2x"], width=58, height=26,
             font=font(10), corner_radius=6, fg_color=T.INPUT,
             button_color=T.LINE, button_hover_color=T.BTN_HOV,
             dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT,
             command=lambda v: self._set_speed(float(v.rstrip("x"))))
         self.speed_menu.set("1x")
-        self.speed_menu.pack(side="left", padx=(0, 5))
+        self.speed_menu.pack(side="left", padx=(0, 4))
         # Which player is running, and the menu behind it. This slot used
         # to read "sync" and, on every healthy setup, open a menu saying
         # there was nothing to set - a permanent control next to Play that
@@ -132,15 +137,15 @@ class InlinePlayer:
         # the thing you actually want to know when playback looks wrong,
         # and the offset steps are still in there for the one arrangement
         # that needs them.
-        self.sync_btn = cbtn("·", self._sync_menu, 46, T.FAINT)
+        self.sync_btn = cbtn("·", self._sync_menu, 42, T.FAINT)
 
         self.volume_slider = ctk.CTkSlider(
-            controls, from_=0, to=100, number_of_steps=100, width=64,
+            controls, from_=0, to=100, number_of_steps=100, width=44,
             height=14, button_color=T.ACCENT, button_hover_color=T.ACCENT_HOV,
             progress_color=T.ACCENT, fg_color=T.LINE,
             command=self._on_volume_drag)
         self.volume_slider.set(0 if self.engine.muted else self.engine.volume)
-        self.volume_slider.pack(side="right", padx=(2, 8))
+        self.volume_slider.pack(side="right", padx=(2, 6))
         self.mute_btn = ctk.CTkButton(
             controls, text="🔇" if self.engine.muted else "🔊",
             width=28, height=26, corner_radius=6, font=font(11),
@@ -152,6 +157,18 @@ class InlinePlayer:
         if not HAS_AUDIO:
             self.volume_slider.configure(state="disabled")
 
+        # The row in the order it gives things up when the column is too
+        # narrow for all of it: the volume slider first (the mute button
+        # stays, and the keyboard still works), then the speed menu, then
+        # the player-name button. Play and the seek buttons never go.
+        self._optional = [(self.volume_slider, {"side": "right", "padx": (2, 6)}),
+                          (self.speed_menu, {"side": "left", "padx": (0, 4)})]
+        # When the row is tight the player-name button becomes a dot
+        # rather than disappearing: the menu behind it holds the A/V
+        # offset and the playback report, which are exactly what you go
+        # looking for when something is wrong.
+        self._tight = False
+        self._controls = controls
         self._volume_job = None
         self._progress_job = None
         self._track_end = None
@@ -266,10 +283,15 @@ class InlinePlayer:
         else:
             label = self.SHORT_NAMES.get(self.backend, "player")
             colour = T.WARN if drifts else T.FAINT
+        if getattr(self, "_tight", False) and not (offset and drifts):
+            label = "·"
         # Sized to the label. Fixed-width, it was wide enough for "built-in"
         # and so stole room from the clock in every other case.
+        # unscaled(): measure() answers in real screen pixels and CTk
+        # scales a width it is given, so the button came out half as wide
+        # again as the text it was sized to.
         self.sync_btn.configure(text=label, text_color=colour,
-                                width=self._btn_font.measure(label) + px(22))
+                                width=unscaled(self._btn_font.measure(label) + px(12)))
 
     def playback_report(self) -> str:
         """Which player is running and what the others would do. When
@@ -427,6 +449,7 @@ class InlinePlayer:
         height = int(height) if height else int(width * 9 / 16) // 2 * 2
         height = max(height, 135)
         self.bar.configure(width=width)
+        self._fit_controls(width)
         self.stack.configure(width=width, height=height)
         if self.rec is None or self.holds_own_still:
             self.canvas.configure(width=width, height=height)
@@ -434,6 +457,43 @@ class InlinePlayer:
         if self.rec is not None and not self.engine.playing:
             self._show_thumb(self.rec)
         self._draw_bar()
+
+    def _fit_controls(self, width: int) -> None:
+        """Drop controls that do not fit, put them back when they do.
+
+        A row that is wider than its column does not shrink - it runs off
+        the end, and what runs off is whatever was packed last. That is
+        how the volume slider disappeared at 150% scaling: not hidden,
+        just past the edge, with no way to know it was there.
+        """
+        optional = getattr(self, "_optional", None)
+        if not optional:
+            return
+        # Everything that never gives way, plus the padding between.
+        fixed = 0
+        for child in self._controls.winfo_children():
+            if child is self.sync_btn or any(child is widget
+                                             for widget, _ in optional):
+                continue
+            fixed += child.winfo_reqwidth() + 6
+        room = width - fixed
+        # The player-name button is the flexible one: full name if the row
+        # can take it, a dot if it cannot.
+        name_width = self._btn_font.measure(
+            self.SHORT_NAMES.get(self.backend, "player")) + px(12)
+        tight = room - sum(w.winfo_reqwidth() + 12 for w, _ in optional) < name_width
+        if tight != self._tight:
+            self._tight = tight
+            self._refresh_backend_btn()
+        room -= self.sync_btn.winfo_reqwidth() + 6
+        for widget, where in optional:
+            need = widget.winfo_reqwidth() + 12
+            if need <= room:
+                room -= need
+                if not widget.winfo_ismapped():
+                    widget.pack(**where)
+            elif widget.winfo_ismapped():
+                widget.pack_forget()
 
     # ── content switching ───────────────────────────────────────────────
 

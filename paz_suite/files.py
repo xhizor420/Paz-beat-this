@@ -11,6 +11,16 @@ import sys
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Preview work - thumbnails, single frames, storyboard sheets, hover
+# reels - runs at below-normal priority on Windows. None of it is what
+# the machine is FOR at that moment: the user is usually converting,
+# upscaling in another program, or editing, and a media bin helping
+# itself to the same cores is why the window stops answering. The
+# encoder and the beat tracker are deliberately not on this: those are
+# the job, and they run at normal priority.
+LOW_PRIORITY = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+PREVIEW_FLAGS = NO_WINDOW | LOW_PRIORITY
+
 # ─────────────────────────────────────────────────────────────────────────
 #  Proxy folders
 #
