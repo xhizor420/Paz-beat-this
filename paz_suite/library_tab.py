@@ -130,6 +130,15 @@ class LibraryTab(ctk.CTkFrame):
         self.tag_universe: set = set()
         self.filtered: list[Rec] = []
         self._project_colors: dict = {}
+        # Reused tag widgets - see _tag_button. Forty CTkButtons per clip,
+        # built fresh on every click, was 85ms of the 100ms it took to
+        # select a clip.
+        self._tag_pool: list = []
+        self._group_pool: list = []
+        self._tags_used = 0
+        self._groups_used = 0
+        self._tags_job = None
+        self._detail_empty = None
         self.page = 0
         self.selected: Rec | None = None
         # Paths rather than records: the record objects are rebuilt on
@@ -1054,13 +1063,17 @@ class LibraryTab(ctk.CTkFrame):
         self.player.frame.grid(row=0, column=0, padx=8, pady=(8, 4))
         self.after(200, self._fit_panel)
 
+        # Fixed heights, both of them. A long file name or a meta line
+        # that wraps to two lines on one clip and one on the next would
+        # otherwise move every button underneath by a row - and the
+        # buttons are what the mouse is already on its way to.
         self.detail_name = ctk.CTkLabel(card, text="Nothing selected", font=font(15, "bold"),
                                          text_color=T.TEXT, anchor="w",
-                                         wraplength=470, justify="left")
+                                         wraplength=470, justify="left", height=24)
         self.detail_name.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 0))
         self.detail_meta = ctk.CTkLabel(card, text="", font=font(12, mono=True),
-                                         text_color=T.DIM, anchor="w",
-                                         wraplength=470, justify="left")
+                                         text_color=T.DIM, anchor="nw",
+                                         wraplength=470, justify="left", height=34)
         self.detail_meta.grid(row=2, column=0, sticky="ew", padx=14, pady=(4, 8))
 
         buttons = ctk.CTkFrame(card, fg_color="transparent")
@@ -1217,6 +1230,111 @@ class LibraryTab(ctk.CTkFrame):
             return
         self._random()
         return "break"
+
+    def key_step_clip(self, event, delta: int):
+        """Up and Down walk the results one clip at a time.
+
+        The whole job here is look, judge, next - and reaching for the
+        mouse between every clip is most of the work. Paging follows the
+        selection, so walking off the end of a page turns it.
+        """
+        if self.is_typing(event):
+            return
+        if not self.filtered:
+            return "break"
+        if self.selected is None:
+            self._select_index(0)
+            return "break"
+        try:
+            at = self.filtered.index(self.selected)
+        except ValueError:
+            self._select_index(0)
+            return "break"
+        self._select_index(max(0, min(at + delta, len(self.filtered) - 1)))
+        return "break"
+
+    def _select_index(self, index: int) -> None:
+        """Select the result at `index`, turning the page if it is on
+        another one, and scroll it into view."""
+        if not (0 <= index < len(self.filtered)):
+            return
+        rec = self.filtered[index]
+        page = index // max(self.cfg.page_size, 1)
+        if page != self.page:
+            self.page = page
+            self.render_page()
+        self._select(rec)
+        self._scroll_card_into_view(rec)
+
+    def _scroll_card_into_view(self, rec: Rec) -> None:
+        """Bring a card fully into the gallery's viewport, and no further
+        - a selection that jumps to the middle of the screen every time
+        loses you the row you were reading."""
+        slot = next((s for s in self._layout if s["rec"] is rec), None)
+        if slot is None:
+            return
+        canvas = self.gallery
+        try:
+            view_h = int(canvas.winfo_height())
+            total = float(canvas.cget("scrollregion").split()[3])
+        except (tk.TclError, IndexError, ValueError):
+            return
+        if total <= view_h:
+            return
+        top = canvas.canvasy(0)
+        card_top = slot["y"] - self.GAP
+        card_bottom = slot["y"] + self.IMG_H + self.CAP_H + self.GAP
+        if card_top < top:
+            canvas.yview_moveto(max(card_top, 0) / total)
+        elif card_bottom > top + view_h:
+            canvas.yview_moveto(max(card_bottom - view_h, 0) / total)
+
+    def key_mark_used(self, event, pick: bool = False):
+        """V marks the selection into the project you are working in.
+
+        Picking clips for an edit is a session: one project, hundreds of
+        clips, one decision each. Asking which project every time is the
+        wrong question - it remembers, says which one it used, and
+        Shift+V is how you change it.
+        """
+        if self.is_typing(event):
+            return
+        targets = self.targets(self.selected)
+        if not targets:
+            self.set_status("Nothing selected to mark.", T.WARN)
+            return "break"
+        project = (self.cfg.last_project or "").strip()
+        if pick or not project:
+            self._mark_menu(targets)
+            return "break"
+        self._mark_used(targets, project)
+        return "break"
+
+    def _mark_menu(self, targets) -> None:
+        """The project list, at the pointer - for choosing which one V
+        will use from here on."""
+        conn = db_connect()
+        try:
+            projects = vault_projects_list(conn)
+        finally:
+            conn.close()
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
+        count = len(targets)
+        what = f"{count} clips" if count != 1 else "this clip"
+        menu.add_command(label=f"Mark {what} as used in…", state="disabled")
+        menu_rule(menu)
+        for name, _colour, used, _created in projects:
+            menu.add_command(label=f"{name}   ({used})",
+                             command=lambda n=name: self._mark_used(targets, n))
+        if projects:
+            menu_rule(menu)
+        menu.add_command(label="New project…",
+                         command=lambda: self._mark_used_new(targets))
+        try:
+            menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        finally:
+            menu.grab_release()
 
     def key_find_search(self, event):
         if isinstance(event.widget, (ctk.CTkEntry, tk.Entry, tk.Text)):
@@ -1384,16 +1502,23 @@ class LibraryTab(ctk.CTkFrame):
     def _refresh_quick_counts(self):
         if not getattr(self, "quick_chips", None) or not self.records:
             return
-        counts = {
-            "unused": sum(1 for r in self.records if not r.used_projects),
-            "untagged": sum(1 for r in self.records if not r.tags),
-            "noid": sum(1 for r in self.records if not r.pid),
-            "4k": sum(1 for r in self.records if r.premium),
-            "no4k": sum(1 for r in self.records if not r.premium),
-            "portrait": sum(1 for r in self.records if r.orientation == "portrait"),
-            "widescreen": sum(1 for r in self.records if r.orientation == "widescreen"),
-            "square": sum(1 for r in self.records if r.orientation == "square"),
-        }
+        # One pass, not eight. These numbers are refreshed on every mark,
+        # and eight walks of ten thousand records is most of what a mark
+        # costs once the rest of it stopped reloading the library.
+        counts = dict.fromkeys(
+            ("unused", "untagged", "noid", "4k", "no4k",
+             "portrait", "widescreen", "square"), 0)
+        for rec in self.records:
+            if not rec.used_projects:
+                counts["unused"] += 1
+            if not rec.tags:
+                counts["untagged"] += 1
+            if not rec.pid:
+                counts["noid"] += 1
+            counts["4k" if rec.premium else "no4k"] += 1
+            shape = rec.orientation
+            if shape in counts:
+                counts[shape] += 1
         self._quick_live = []
         for key, (chip, label, _token) in self.quick_chips.items():
             count = counts.get(key)
@@ -2996,13 +3121,13 @@ class LibraryTab(ctk.CTkFrame):
         width = self.panel_width()
         inner = width - 26
         box = self._picture_box(inner)
-        height = box[1]
-        # Both numbers are read off the live column, and setting them
-        # changes the column - so a fit that would change nothing stops
-        # here rather than going round again.
-        if (width, height) == getattr(self, "_panel_fit", None):
+        # The whole box, not just its height: the height is the same for
+        # every clip now (by design - see _picture_box), so a guard that
+        # watched only the height never noticed a narrower clip and left
+        # the last one's width in place.
+        if (width, box) == getattr(self, "_panel_fit", None):
             return
-        self._panel_fit = (width, height)
+        self._panel_fit = (width, box)
         try:
             # unscaled(): `width` is real screen pixels, worked out against
             # the column's measured height and the picture that has to fit
@@ -3010,7 +3135,9 @@ class LibraryTab(ctk.CTkFrame):
             self.detail_panel.configure(width=unscaled(width))
         except tk.TclError:
             return
-        self.player.set_size(*box)
+        # The picture takes the clip's shape; the bar and the buttons take
+        # the column, so they do not move when the shape changes.
+        self.player.set_size(box[0], box[1], frame_width=inner)
         for label in (self.detail_name, self.detail_meta):
             label.configure(wraplength=unscaled(inner - 22))
 
@@ -3087,19 +3214,33 @@ class LibraryTab(ctk.CTkFrame):
         return max(room - chrome, 0)
 
     def _picture_box(self, inner: int) -> tuple:
-        """The biggest box of the clip's own shape that fits this column.
+        """The box for the picture: the clip's own shape, at a height that
+        does not depend on the clip.
 
-        Width first, height only when the height is what runs out - a
-        black box wider than the picture in it is not a bigger picture,
-        it is bars either side of the same one.
+        The height is the one a widescreen clip would use in this column,
+        whatever the clip actually is, and only the width changes with the
+        shape. That matters more than squeezing a vertical clip taller:
+        everything below the picture - the seek bar, Play, the file name,
+        Folder and Resolve - stays exactly where it was when you reach for
+        it. A panel whose buttons move depending on which clip is selected
+        cannot be used without looking at it first.
+
+        Still the clip's real shape, so nothing is cropped and there are
+        no bars: a vertical clip gets a narrow box of the same height,
+        centred in the card. Theater and the handles are how it gets
+        bigger than that.
         """
         aspect = self.clip_aspect()
         width = max(int(inner), 240)
+        # Kept as a float for the width below: rounding here and then
+        # again there loses a pixel or two off the column's width, which
+        # is visible as a hairline of card beside a widescreen clip.
+        tall = width / self.DEFAULT_ASPECT
         room = self._picture_room()
         if room:
-            width = min(width, int(room * aspect))
-        height = max(int(round(width / aspect)), 135)
-        return max(width, 240), height
+            tall = min(tall, float(room))
+        height = max(int(tall), 135)
+        return max(min(width, int(tall * aspect)), 240), height
 
     def on_root_resize(self):
         if getattr(self, "_panel_job", None):
@@ -3214,8 +3355,15 @@ class LibraryTab(ctk.CTkFrame):
                 pass
 
     def _render_details(self):
-        for child in self.detail_tags.winfo_children():
-            child.destroy()
+        """The panel for the selected clip.
+
+        The name, the meta line and the player happen now; the tag list
+        follows a moment later. Forty tag widgets cost about fifty
+        milliseconds however carefully they are reused, and walking the
+        results with the arrow keys would pay that for every clip passed
+        through on the way to the one being looked for. Deferred and
+        debounced, that cost is paid once, for the clip you stop on.
+        """
         rec = self.selected
         self.player.show_rec(rec)
         # A different clip can be a different shape, and the box is built
@@ -3224,21 +3372,32 @@ class LibraryTab(ctk.CTkFrame):
         if not rec:
             self.detail_name.configure(text="Nothing selected")
             self.detail_meta.configure(text="")
+            self._tags_used = 0
+            self._groups_used = 0
+            self._park_tag_widgets()
+            if self._detail_empty is not None:
+                self._detail_empty.grid_remove()
             return
 
         self.detail_name.configure(text=rec.name)
-        bits = [f"{rec.width}x{rec.height}", f"{rec.fps:.0f} fps",
-               fmt_len(rec.duration), fmt_size(rec.size), rec.folder]
-        if rec.score:
-            bits.insert(2, f"▲ {rec.score} score")
-        if rec.premium:
-            bits.append("4K available ✓")
-        if rec.pid:
-            bits.append(f"#{rec.pid}")
-        if rec.used_projects:
-            bits.append("used: " + ", ".join(rec.used_projects))
-        self.detail_meta.configure(text="  ·  ".join(bits))
+        self._render_meta_line(rec)
+        self._queue_tag_list(rec)
 
+    def _queue_tag_list(self, rec: Rec) -> None:
+        if self._tags_job is not None:
+            try:
+                self.after_cancel(self._tags_job)
+            except ValueError:
+                pass
+        self._tags_job = self.after(90, lambda: self._render_tag_list(rec))
+
+    def _render_tag_list(self, rec: Rec) -> None:
+        self._tags_job = None
+        # The selection may have moved on while this was waiting.
+        if rec is not self.selected:
+            return
+        self._tags_used = 0
+        self._groups_used = 0
         groups = [
             ("Artists", "artist:", rec.artists, T.TAG["artist"]),
             ("Characters", "character:", rec.characters, T.TAG["character"]),
@@ -3256,22 +3415,50 @@ class LibraryTab(ctk.CTkFrame):
             any_content = True
             row = self._detail_group(title, prefix, names, colour, row)
 
-        if not any_content:
-            ctk.CTkLabel(self.detail_tags,
-                        text="No tags for this clip yet - press "
-                             "“Fix missing” up top.",
-                        font=font(11), text_color=T.FAINT, wraplength=380,
-                        justify="left").grid(row=0, column=0, columnspan=2,
-                                             padx=10, pady=10, sticky="w")
+        self._park_tag_widgets()
+        if self._detail_empty is None:
+            self._detail_empty = ctk.CTkLabel(
+                self.detail_tags,
+                text="No tags for this clip yet - press “Fix missing” up top.",
+                font=font(11), text_color=T.FAINT, wraplength=380,
+                justify="left")
+        if any_content:
+            self._detail_empty.grid_remove()
+        else:
+            self._detail_empty.grid(row=0, column=0, columnspan=2,
+                                    padx=10, pady=10, sticky="w")
+
+    def _render_meta_line(self, rec: Rec) -> None:
+        """The one line under the file name. Its own method because a mark
+        changes it and nothing else - rebuilding the tag list to add four
+        words to this line was most of what made marking slow."""
+        bits = [f"{rec.width}x{rec.height}", f"{rec.fps:.0f} fps",
+                fmt_len(rec.duration), fmt_size(rec.size), rec.folder]
+        if rec.score:
+            bits.insert(2, f"▲ {rec.score} score")
+        if rec.premium:
+            bits.append("4K available ✓")
+        if rec.pid:
+            bits.append(f"#{rec.pid}")
+        if rec.used_projects:
+            bits.append("used: " + ", ".join(rec.used_projects))
+        self.detail_meta.configure(text="  ·  ".join(bits))
 
     def _detail_group(self, title: str, prefix: str, names: list, colour: str, row: int) -> int:
         key = title.lower()
         open_now = self.cfg.detail_open.get(key, True)
-        header = ctk.CTkButton(
-            self.detail_tags,
+        pool = self._group_pool
+        if self._groups_used < len(pool):
+            header = pool[self._groups_used]
+        else:
+            header = ctk.CTkButton(
+                self.detail_tags, text="", height=29, corner_radius=7,
+                font=font(11, "bold"), anchor="w", fg_color=T.ELEVATED,
+                hover_color=T.BTN_HOV, text_color=T.FAINT)
+            pool.append(header)
+        self._groups_used += 1
+        header.configure(
             text=("▾  " if open_now else "▸  ") + f"{title.upper()}   {len(names)}",
-            height=29, corner_radius=7, font=font(11, "bold"), anchor="w",
-            fg_color=T.ELEVATED, hover_color=T.BTN_HOV, text_color=T.FAINT,
             command=lambda k=key: self._toggle_group(k))
         header.grid(row=row, column=0, columnspan=2, sticky="ew", padx=6,
                    pady=(8 if row else 4, 2))
@@ -3294,15 +3481,37 @@ class LibraryTab(ctk.CTkFrame):
         self.cfg.save()
         self._render_details()
 
+    # ── the tag list, reused rather than rebuilt ─────────────────────────
+    #
+    # A clip here carries forty or more tags, and building forty CTkButtons
+    # costs 85ms - which was paid on every single click of a clip, and
+    # again on every mark. The widgets are kept and reconfigured instead:
+    # the same list, pointed at different words.
+
     def _tag_button(self, token: str, label: str, colour: str, row: int,
                     column: int = 0, span: int = 1):
-        button = ctk.CTkButton(
-            self.detail_tags, text=label, height=28, corner_radius=6,
-            font=font(13), anchor="w", fg_color="transparent",
-            hover_color=T.BTN_HOV, text_color=colour,
-            command=lambda t=token: self.add_token(t))
-        button.grid(row=row, column=column, columnspan=span, sticky="ew", padx=6, pady=2)
+        pool = self._tag_pool
+        if self._tags_used < len(pool):
+            button = pool[self._tags_used]
+        else:
+            button = ctk.CTkButton(
+                self.detail_tags, text="", height=28, corner_radius=6,
+                font=font(13), anchor="w", fg_color="transparent",
+                hover_color=T.BTN_HOV)
+            pool.append(button)
+        self._tags_used += 1
+        button.configure(text=label, text_color=colour,
+                         command=lambda t=token: self.add_token(t))
         button.bind("<Button-3>", lambda e, t=token: self._tag_menu(e, t, label))
+        button.grid(row=row, column=column, columnspan=span, sticky="ew", padx=6, pady=2)
+
+    def _park_tag_widgets(self) -> None:
+        """Hide the pooled widgets this render did not need. grid_remove,
+        not destroy - the next clip will almost certainly want them."""
+        for button in self._tag_pool[self._tags_used:]:
+            button.grid_remove()
+        for header in self._group_pool[self._groups_used:]:
+            header.grid_remove()
 
     def _tag_menu(self, event, token: str, name: str):
         menu = popup_menu(self.root)
@@ -3507,20 +3716,46 @@ class LibraryTab(ctk.CTkFrame):
     # ── Vault marks (right-click "used in a project") ───────────────────
 
     def _mark_used(self, recs, project: str) -> None:
-        recs = recs if isinstance(recs, list) else [recs]
-        paths = [r.path for r in recs if r]
+        """Mark clips as used, without losing your place.
+
+        This used to re-read all ten thousand rows from the database,
+        re-filter them, re-sort them and redraw the page - a quarter of a
+        second of frozen window, and it landed you back on page one at the
+        top, having lost the clip you were looking at. Marking one clip
+        changes one clip: the rows in memory are updated in place and only
+        the cards that changed are repainted.
+        """
+        recs = [r for r in (recs if isinstance(recs, list) else [recs]) if r]
+        paths = [r.path for r in recs]
         if not paths:
             return
         conn = db_connect()
         try:
             vault_mark(conn, paths, project)
+            if project not in self._project_colors:
+                self._project_colors = {name: color for name, color, _n, _t
+                                        in vault_projects_list(conn)}
         finally:
             conn.close()
-        for path in paths:
-            self._resync_after_vault_change(path)
+        colour = self._project_colors.get(project, T.ACCENT2)
+        for rec in recs:
+            if project in rec.used_projects:
+                rec.used_projects.remove(project)
+            # Most recent first, which is the order _load_library builds
+            # and the order the card's colour comes from.
+            rec.used_projects.insert(0, project)
+            rec.used_color = colour
+        # Only when it changes: a marking session is one project and
+        # hundreds of clips, and rewriting the config file for each of
+        # them is the slowest thing in an otherwise instant action.
+        if self.cfg.last_project != project:
+            self.cfg.last_project = project
+            self.cfg.save()
+        self._after_vault_change(recs)
         count = len(paths)
         self.set_status(f"Marked {count} clip{'s' if count != 1 else ''} as used "
-                        f"in '{project}'.", T.OK)
+                        f"in '{project}'. Press V to put the next one there too.",
+                        T.OK)
 
     def _mark_used_new(self, recs) -> None:
         recs = recs if isinstance(recs, list) else [recs]
@@ -3549,18 +3784,27 @@ class LibraryTab(ctk.CTkFrame):
             vault_unmark(conn, rec.path, project)
         finally:
             conn.close()
-        self._resync_after_vault_change(rec.path)
+        if project in rec.used_projects:
+            rec.used_projects.remove(project)
+        rec.used_color = (self._project_colors.get(rec.used_projects[0], "")
+                          if rec.used_projects else "")
+        self._after_vault_change([rec])
         self.set_status(f"Removed from '{project}'.", T.OK)
 
-    def _resync_after_vault_change(self, path: str) -> None:
-        """_load_library() rebuilds every Rec fresh, so self.selected (if
-        it's the clip that was just marked/unmarked) would otherwise keep
-        pointing at the old, now-stale copy until re-clicked."""
-        self._load_library()
-        self.run_search()
-        if self.selected and self.selected.path == path:
-            self.selected = self.by_path.get(path)
-            self._render_details()
+    def _after_vault_change(self, recs) -> None:
+        """Repaint what a mark or unmark actually changed - and nothing
+        else. The page, the scroll position, the selection and the search
+        results all stay exactly as they were."""
+        self._restyle_cards()
+        for index, slot in enumerate(self._layout):
+            if any(slot["rec"] is rec for rec in recs):
+                self._draw_badges(index, slot["rec"], slot)
+        if self.selected is not None and any(r is self.selected for r in recs):
+            # The meta line, not the whole panel: the tag list has not
+            # changed, and rebuilding it is the expensive part.
+            self._render_meta_line(self.selected)
+        # "Never used" is one of the counted chips, and it just changed.
+        self._refresh_quick_counts()
 
     # ── sync (incremental index build) ──────────────────────────────────────
 

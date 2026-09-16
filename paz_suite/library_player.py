@@ -446,12 +446,22 @@ class InlinePlayer:
 
     # ── sizing ──────────────────────────────────────────────────────────
 
-    def set_size(self, width: int, height: int = 0) -> None:
+    def set_size(self, width: int, height: int = 0, frame_width: int = 0) -> None:
+        """Size the picture to `width` x `height`, and everything else to
+        `frame_width` - the column, not the picture.
+
+        They are not the same number once the picture takes the shape of
+        the clip: a vertical clip is a narrow box, and if the seek bar and
+        the transport row shrank with it, Play and the volume slider would
+        sit somewhere different for every clip. The picture is centred in
+        the column; the controls span it.
+        """
         width = max(int(width) // 2 * 2, 240)
         height = int(height) if height else int(width * 9 / 16) // 2 * 2
         height = max(height, 135)
-        self.bar.configure(width=width)
-        self._fit_controls(width)
+        frame_width = max(int(frame_width) or width, width)
+        self.bar.configure(width=frame_width)
+        self._fit_controls(frame_width)
         self.stack.configure(width=width, height=height)
         if self.rec is None or self.holds_own_still:
             self.canvas.configure(width=width, height=height)

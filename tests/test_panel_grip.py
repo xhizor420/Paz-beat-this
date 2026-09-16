@@ -215,3 +215,53 @@ def test_dragging_wider_pays_for_the_picture_out_of_the_tag_list():
     tab._grip_drag(Event(1300))
     assert tab.reserves == [700]
     assert tab.cfg.tags_height_px == 120
+
+
+# ── nothing in the panel may move when the clip changes ─────────────────
+
+class BoxTab:
+    _picture_box = LibraryTab._picture_box
+    clip_aspect = LibraryTab.clip_aspect
+    DEFAULT_ASPECT = LibraryTab.DEFAULT_ASPECT
+
+    def __init__(self, room=420, aspect=None):
+        self._room = room
+        self.selected = None
+        if aspect:
+            w, h = aspect
+            self.selected = type("R", (), {"width": w, "height": h})()
+
+    def _picture_room(self):
+        return self._room
+
+
+def test_the_picture_box_is_the_same_height_for_every_clip():
+    """The seek bar, Play, the file name and Folder all sit under it. A
+    box that changes height moves every one of them, and the mouse is
+    already on its way."""
+    heights = {BoxTab(aspect=a)._picture_box(700)[1]
+               for a in ((1920, 1080), (1080, 1080), (720, 864),
+                         (608, 1080), (640, 480), None)}
+    assert len(heights) == 1
+
+
+def test_the_box_still_takes_the_clips_shape():
+    """Same height, different width - so nothing is cropped and there are
+    no bars, and the panel below stays put."""
+    wide = BoxTab(aspect=(1920, 1080))._picture_box(700)
+    tall = BoxTab(aspect=(608, 1080))._picture_box(700)
+    assert wide[0] > tall[0]
+    assert wide[1] == tall[1]
+    assert abs(wide[0] / wide[1] - 16 / 9) < 0.05
+    assert abs(tall[0] / tall[1] - 608 / 1080) < 0.05
+
+
+def test_a_widescreen_clip_fills_the_column():
+    box = BoxTab(room=9999, aspect=(1920, 1080))._picture_box(700)
+    assert box[0] == 700
+
+
+def test_a_short_column_caps_the_height_not_the_shape():
+    box = BoxTab(room=200, aspect=(1920, 1080))._picture_box(700)
+    assert box[1] == 200
+    assert abs(box[0] / box[1] - 16 / 9) < 0.05

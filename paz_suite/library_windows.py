@@ -148,6 +148,11 @@ class HelpWindow(ctk.CTkToplevel):
         ("Keys - playing", "Enter or Space play/pause · ←→ seek 5s · "
          "Shift+←→ seek 1s · , and . step one frame · Home/End ends of the "
          "clip · 0-9 jump that tenth of the way in · M mute"),
+        ("Keys - picking", "↑↓ next and previous clip, turning the page "
+         "when you walk off the end · V marks it as used in the project "
+         "you are working in, and says which one · Shift+V picks a "
+         "different project (or makes one). Marking does not move you: "
+         "same page, same scroll, same clip selected."),
         ("Keys - everything else", "/ search · R random · G grid · "
          "PgUp/PgDn pages · Ctrl+A select all on page · Ctrl+L collapse "
          "tags · Ctrl+C copy name · Ctrl+Shift+C copy path · Ctrl+F search "

@@ -147,6 +147,10 @@ class AppConfig:
     # between it and the player. 0 means "work it out", which is the
     # default and what a double-click on the handle restores.
     tags_height_px: int = 0
+    # The Vault project you are working in: what V marks into, remembered
+    # so a session of picking clips is one keypress each rather than a
+    # trip through a menu for every clip.
+    last_project: str = ""
     # Bumped when a stored layout number stops meaning what it meant.
     # See _upgrade_layout_sizes.
     layout_gen: int = 0
