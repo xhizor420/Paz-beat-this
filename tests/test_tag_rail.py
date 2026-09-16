@@ -47,13 +47,19 @@ class Panel:
 class FakeTab:
     CHIP_PAD = LibraryTab.CHIP_PAD
     CHIP_ROOM = LibraryTab.CHIP_ROOM
+    WIDTH_CACHE = LibraryTab.WIDTH_CACHE
     _chip_room = LibraryTab._chip_room
     _plan_chips = LibraryTab._plan_chips
     _plan_header = LibraryTab._plan_header
+    _text_w = LibraryTab._text_w
 
     def __init__(self, rail_width=400):
         self.tagpanel = Panel(rail_width)
         self._chip_font = Font()
+        # Widths go through the remembered-measurement path, the way the
+        # real rail does - a wrong cache key would look like a wrong wrap.
+        self._widths = {}
+        self._measure_fonts = {"chip": self._chip_font}
         self._rows_planned = 0
         self._heads_planned = 0
         self._slots_planned = {}

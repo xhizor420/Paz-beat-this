@@ -25,6 +25,7 @@ from .vault_tab import VaultTab
 from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
 from .watchdog import Watchdog
+from . import watchdog
 from . import artwork, audio_out, uithread, vlc_player
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
@@ -93,19 +94,16 @@ class PazApp:
         for _row in (0, 1, 2):
             self.tabview.grid_rowconfigure(_row, weight=0, minsize=0)
 
-        self.convert = ConvertTab(self.tabview.tab("Convert"), self)
-        self.library = LibraryTab(self.tabview.tab("Library"), self)
-        # Reads app.library.records to match a pasted list against the
-        # index, so it must exist after Library has loaded its own.
-        self.vault = VaultTab(self.tabview.tab("Vault"), self)
-        self.beat = BeatTab(self.tabview.tab("Beat This"), self)
-
+        # One tab now; the rest once the window is up. See _tab_object.
+        self._tabs: dict = {}
         if self.cfg.last_tab in TAB_NAMES:
             self.tabview.set(self.cfg.last_tab)
+        self._tab_object(self.tabview.get())
         # set() does not run the change callback, so the tab we open on
         # would never get its first-look call. Give it one, after the
         # window is up rather than in the middle of building it.
         self.root.after(200, self._first_look)
+        self.root.after(700, self._build_rest)
 
         self._apply_chrome()
         self._style_tabs()
@@ -374,7 +372,9 @@ class PazApp:
         if key == "banner":
             self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
         elif key == "wallpaper":
-            self.library.refresh_wallpaper()
+            library = self._tab_object("Library", build=False)
+            if library is not None:
+                library.refresh_wallpaper()
         elif key == "icon":
             self._icon = None
             self._apply_chrome()
@@ -461,9 +461,77 @@ class PazApp:
         if shown is not None:
             shown()
 
-    def _tab_object(self, name: str):
-        return {"Convert": self.convert, "Library": self.library,
-                "Vault": self.vault, "Beat This": self.beat}.get(name)
+    # ── the tabs, built when they are needed ─────────────────────────────
+    #
+    # All four used to be built before the window appeared: a second of
+    # constructing widgets plus another half second of Tk laying out four
+    # full tabs at once, with nothing on screen. Worse, the constructors
+    # read the disk - the library index, the premium pool, the convert
+    # queue - so on a machine whose disk is busy (which for this app's
+    # user means "while Topaz is upscaling", i.e. most of the time) that
+    # second became fifteen. Measured, twice.
+    #
+    # So only the tab being opened is built up front, and the other three
+    # follow a moment later, one per callback, while the window is
+    # already usable. Switching to one before it is ready builds it on
+    # demand, which is what the properties below are for: every
+    # `app.library` in the codebase still works, and still means "the
+    # Library tab", whether or not it exists yet.
+
+    TAB_CLASSES = {"Convert": ConvertTab, "Library": LibraryTab,
+                   "Vault": VaultTab, "Beat This": BeatTab}
+
+    def _tab_object(self, name: str, build: bool = True):
+        """The tab object for `name`, building it if it is not there yet.
+
+        `build=False` asks only for one that already exists - for the
+        callers that run on every tab change, every resize and every
+        settings save, and must not be the reason a tab gets built.
+        """
+        tab = self._tabs.get(name)
+        if tab is not None or not build:
+            return tab
+        cls = self.TAB_CLASSES.get(name)
+        if cls is None:
+            return None
+        tab = cls(self.tabview.tab(name), self)
+        self._tabs[name] = tab
+        return tab
+
+    def _build_rest(self) -> None:
+        """Build one not-yet-built tab, then come back for the next.
+
+        One per callback rather than all three in a row: each is a few
+        hundred milliseconds, and three of them together is the startup
+        stall this exists to remove - just moved later.
+        """
+        for name in TAB_NAMES:
+            if name not in self._tabs:
+                # Announced, so the freeze log does not record a tab
+                # being built as a mystery stutter - see watchdog.building.
+                watchdog.building(True)
+                try:
+                    self._tab_object(name)
+                finally:
+                    watchdog.building(False)
+                self.root.after(120, self._build_rest)
+                return
+
+    @property
+    def convert(self):
+        return self._tab_object("Convert")
+
+    @property
+    def library(self):
+        return self._tab_object("Library")
+
+    @property
+    def vault(self):
+        return self._tab_object("Vault")
+
+    @property
+    def beat(self):
+        return self._tab_object("Beat This")
 
     def _on_tab_changed(self) -> None:
         name = self.tabview.get()
@@ -481,14 +549,22 @@ class PazApp:
         for other in TAB_NAMES:
             if other == name:
                 continue
-            hidden = getattr(self._tab_object(other), "on_hidden", None)
+            # build=False: a tab that does not exist has no player running
+            # and nothing to put away, and building all three to tell them
+            # so would undo the whole point of building them lazily.
+            hidden = getattr(self._tab_object(other, build=False),
+                             "on_hidden", None)
             if hidden is not None:
                 hidden()
 
     def _on_root_configure(self, event) -> None:
         if event.widget is not self.root:
             return
-        self.library.on_root_resize()
+        # Fires while the window is still being sized at startup, so it
+        # must not be what builds the Library tab.
+        library = self._tab_object("Library", build=False)
+        if library is not None:
+            library.on_root_resize()
 
     # ── settings ─────────────────────────────────────────────────────────
 
@@ -499,10 +575,13 @@ class PazApp:
         self._apply_chrome()
         set_probe_cache_limit(self.cfg.probe_cache_limit)
         self.cache.limit = self.cfg.frame_cache_limit
-        self.convert.after_settings_saved()
-        self.library.after_settings_saved()
-        self.vault.after_settings_saved()
-        self.beat.after_settings_saved()
+        # Only the tabs that exist: one that has not been built yet will
+        # read the new settings when it is.
+        for name in TAB_NAMES:
+            tab = self._tab_object(name, build=False)
+            settled = getattr(tab, "after_settings_saved", None)
+            if settled is not None:
+                settled()
 
     # ── keyboard dispatch ────────────────────────────────────────────────
     #
@@ -640,10 +719,17 @@ class PazApp:
     # ── shutdown ─────────────────────────────────────────────────────────
 
     def _on_close(self) -> None:
-        if not self.convert.on_app_close():
+        # Only the tabs that exist. Convert keeps its veto (it asks before
+        # abandoning an encode), so it is asked first and by name; a tab
+        # that was never opened has nothing to save and nothing to ask.
+        convert = self._tab_object("Convert", build=False)
+        if convert is not None and not convert.on_app_close():
             return
-        self.library.on_app_close()
-        self.vault.on_app_close()
+        for name in ("Library", "Vault", "Beat This"):
+            tab = self._tab_object(name, build=False)
+            closing = getattr(tab, "on_app_close", None)
+            if closing is not None:
+                closing()
         self.cfg.save()
         self.root.destroy()
 

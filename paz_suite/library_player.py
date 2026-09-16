@@ -9,6 +9,7 @@ clock, volume) and wires it to the engine.
 
 from __future__ import annotations
 
+import collections
 import io
 import os
 import threading
@@ -42,6 +43,8 @@ class InlinePlayer:
         self._peek_after = None
         self._still_job = None
         self._thumb_src = None
+        # Finished stills - see STILL_CACHE.
+        self._stills: collections.OrderedDict = collections.OrderedDict()
         self._peek_token = 0
         self._peek_busy = False
         self._peek_pending = None
@@ -643,12 +646,17 @@ class InlinePlayer:
         # Anything else: our cached thumbnail, on our canvas, on top.
         self._show_stage(False)
         try:
-            image = self._thumb_source(rec)
-            if image is None:
-                raise ValueError("no thumbnail")
-            image = fit_frame(image, self.engine.view_w, self.engine.view_h,
-                              self.tab.cfg.thumb_fit)
-            photo = ImageTk.PhotoImage(image)
+            key = (getattr(rec, "path", ""), self.engine.view_w,
+                   self.engine.view_h, self.tab.cfg.thumb_fit)
+            photo = self._stills.get(key)
+            if photo is None:
+                image = self._thumb_source(rec)
+                if image is None:
+                    raise ValueError("no thumbnail")
+                image = fit_frame(image, self.engine.view_w,
+                                  self.engine.view_h, self.tab.cfg.thumb_fit)
+                photo = ImageTk.PhotoImage(image)
+                self._still_keep(key, photo)
             self.canvas.delete("all")
             self.canvas.create_image(self.engine.view_w // 2, self.engine.view_h // 2,
                                      image=photo, anchor="center")
@@ -657,6 +665,21 @@ class InlinePlayer:
                                     text="▶ play", fill=T.TEXT, font=(T.UI, 9))
         except Exception:
             self._show_idle_text("no thumbnail")
+
+    # Finished stills, kept per clip and size. Picking footage means
+    # clicking through clips and coming back to the ones worth a second
+    # look, and each of those visits was a disk read, a decode, a scale
+    # with a blurred letterbox fill, and a new Tk image - about ten
+    # milliseconds on the UI thread, every single time. These are the
+    # largest pictures the app holds, so it keeps a session's worth
+    # rather than a library's.
+    STILL_CACHE = 24
+
+    def _still_keep(self, key, photo) -> None:
+        self._stills[key] = photo
+        self._stills.move_to_end(key)
+        while len(self._stills) > self.STILL_CACHE:
+            self._stills.popitem(last=False)
 
     def _thumb_source(self, rec):
         """The clip's thumbnail, decoded once and kept.

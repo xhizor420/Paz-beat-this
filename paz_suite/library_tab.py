@@ -160,6 +160,13 @@ class LibraryTab(ctk.CTkFrame):
         self._heads_done = 0
         self._slots_planned: dict = {}
         self._hidden_btn = None
+        # Prepared gallery tiles - see TILE_CACHE. Written by the page
+        # loader and the prefetch, read by both, so it takes a lock.
+        self._tiles: collections.OrderedDict = collections.OrderedDict()
+        self._tiles_lock = threading.Lock()
+        self._prefetch_token = 0
+        # Finished Tk images. UI thread only, so no lock.
+        self._photos: collections.OrderedDict = collections.OrderedDict()
         self.page = 0
         self.selected: Rec | None = None
         # Paths rather than records: the record objects are rebuilt on
@@ -217,13 +224,30 @@ class LibraryTab(ctk.CTkFrame):
         self._spec_font = tkfont.Font(family=T.MONO, size=pt(11))
         self._chip_font = tkfont.Font(family=T.UI, size=pt(11))
         self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
+        # Remembered string widths - see _text_w. Keyed by which font, so
+        # the same word in two sizes is two answers.
+        self._widths: dict = {}
+        self._measure_fonts = {"card": self._card_font,
+                               "badge": self._badge_font,
+                               "spec": self._spec_font,
+                               "chip": self._chip_font,
+                               "quick": self._quick_font}
 
         self._build()
         self._bind_local_keys()
         self._apply_brand()
         self.folders_label.configure(text=self._folders_summary())
         self._restore_state()
-        self._load_library()
+        # Off the UI thread, even here. Reading the index is ten thousand
+        # rows, the tag cache folded into each one, and a walk of the
+        # premium pool - a quarter of a second when the disk is idle, and
+        # measured at four full seconds when it is not. This tab is built
+        # while the user watches an empty window, so it gets built and
+        # shown first and filled in when the disk answers.
+        self.set_status("Reading the index...", T.ACCENT2)
+        self.load_library_async(self._first_load_done)
+
+    def _first_load_done(self) -> None:
         if self.records:
             self.set_status(self.F("idle"), T.FAINT)
         else:
@@ -1617,7 +1641,7 @@ class LibraryTab(ctk.CTkFrame):
                 continue
             text = f"{label}  {count}"
             chip.configure(text=text, text_color=T.DIM, state="normal",
-                           width=unscaled(self._quick_font.measure(text) + px(26)))
+                           width=unscaled(self._text_w("quick", text) + px(26)))
             self._quick_live.append(key)
             if not chip.winfo_ismapped():
                 chip.pack(side="left", padx=(0, 6))
@@ -1679,6 +1703,14 @@ class LibraryTab(ctk.CTkFrame):
 
     def _adopt_library(self, loaded: dict) -> None:
         """Install a library read by _read_library. UI thread."""
+        # The prepared tiles are keyed by path, and a rebuild or a sync
+        # can have replaced the thumbnail behind one of those paths - so
+        # a cached tile could be a picture of what the clip used to look
+        # like. Cheaper to prepare them again than to be wrong.
+        with self._tiles_lock:
+            self._tiles.clear()
+        self._photos.clear()
+        self._prefetch_token += 1
         self.records = loaded["records"]
         self.by_path = loaded["by_path"]
         self.tag_universe = loaded["tag_universe"]
@@ -1913,7 +1945,7 @@ class LibraryTab(ctk.CTkFrame):
                 row, text=f"★ {name}", height=22, corner_radius=11,
                 font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                 text_color=T.ACCENT2,
-                width=unscaled(self._quick_font.measure(f"★ {name}") + px(26)),
+                width=unscaled(self._text_w("quick", f"★ {name}") + px(26)),
                 command=lambda n=name: self.apply_saved(n))
             chip.pack(side="left", padx=(0, 6))
             chip.bind("<Button-3>", lambda e, n=name: self._saved_chip_menu(n))
@@ -2275,7 +2307,7 @@ class LibraryTab(ctk.CTkFrame):
         gap = px(4)
         for name, count, token, colour, swatch in items:
             label = f"{name}  {count}"
-            width = self._chip_font.measure(label) + pad
+            width = self._text_w("chip", label) + pad
             if swatch:
                 width += px(10)
             if line < 0 or used + width > room:
@@ -2582,12 +2614,41 @@ class LibraryTab(ctk.CTkFrame):
             self.page = new
             self.render_page()
 
+    # Asking Tk how wide a string is means a round trip into Tcl, and a
+    # page of cards asks a few hundred times - then asks the same few
+    # hundred again every time you come back to that page, because clip
+    # names, resolutions and durations repeat. So the answers are kept.
+    # There is no invalidation beyond the cap: a font change rebuilds the
+    # tab, and the same string in the same font is the same width.
+    WIDTH_CACHE = 6000
+
+    def _text_w(self, which: str, text: str) -> int:
+        key = (which, text)
+        width = self._widths.get(key)
+        if width is None:
+            font_obj = self._measure_fonts.get(which)
+            if font_obj is None:
+                return 0
+            width = font_obj.measure(text)
+            if len(self._widths) >= self.WIDTH_CACHE:
+                self._widths.clear()
+            self._widths[key] = width
+        return width
+
     def _ellipsize(self, text: str, max_px: int) -> str:
-        if self._card_font.measure(text) <= max_px:
+        if self._text_w("card", text) <= max_px:
             return text
-        while text and self._card_font.measure(text + "…") > max_px:
-            text = text[:-1]
-        return text + "…"
+        # Binary search, not one character at a time: a long clip name
+        # used to cost a measurement per character trimmed, each of them
+        # a round trip, on every card of every page.
+        low, high = 0, len(text)
+        while low < high:
+            mid = (low + high + 1) // 2
+            if self._text_w("card", text[:mid] + "…") <= max_px:
+                low = mid
+            else:
+                high = mid - 1
+        return text[:low] + "…"
 
     def render_page(self):
         self._resize_after = None
@@ -2686,7 +2747,7 @@ class LibraryTab(ctk.CTkFrame):
                            tags=(tag, f"tt{index}"))
 
         score = fmt_score(rec.score)
-        score_w = (self._spec_font.measure(f"▲{score}") + 10) if score else 0
+        score_w = (self._text_w("spec", f"▲{score}") + 10) if score else 0
         if rec.artists:
             canvas.create_text(x + px(8), y + self.IMG_H + px(31),
                                text=self._ellipsize(rec.artists[0],
@@ -3179,46 +3240,179 @@ class LibraryTab(ctk.CTkFrame):
         if resting is not None and self.gallery.find_withtag(f"im{index}"):
             self.gallery.itemconfigure(f"im{index}", image=resting)
 
-    def _load_thumbs(self, batch: list, token: int):
-        """Read and prepare a page's thumbnails, off the UI thread.
+    # Getting a thumbnail onto a card is two jobs with two homes. Reading
+    # the 320px file, decoding it, scaling it to the card, filling the
+    # letterbox and rounding the corners is about three milliseconds and
+    # can happen anywhere; turning the result into something Tk can draw
+    # has to happen on the UI thread. A page is forty-eight of each.
+    #
+    # So there are two caches. _tiles holds composed pictures and is
+    # where the prefetch puts its work - a staging area, filled by
+    # workers. _photos holds the finished Tk images and is the cache that
+    # actually saves the UI thread anything; once a picture has become
+    # one of those, the picture itself is dropped, because nothing will
+    # ask for it again.
+    #
+    # Six pages of finished images, three of staged pictures. That is
+    # about a hundred megabytes, spent to turn a fifth of a second per
+    # page flip into a few milliseconds.
+    TILE_CACHE = 150
+    PHOTO_CACHE = 300
 
-        The preparing is the point: decoding, scaling and rounding one
-        320px thumbnail is a couple of milliseconds, and a page is
-        forty-eight of them - a tenth of a second of the UI thread, every
-        page turn and every search, which is exactly the hitch that reads
-        as the app being slow. Only the PhotoImage is left for the UI
-        thread, because that is the part that must be.
+    def _tile_get(self, key):
+        with self._tiles_lock:
+            image = self._tiles.get(key)
+            if image is not None:
+                self._tiles.move_to_end(key)
+            return image
+
+    def _tile_put(self, key, image) -> None:
+        if image is None:
+            return
+        with self._tiles_lock:
+            self._tiles[key] = image
+            self._tiles.move_to_end(key)
+            while len(self._tiles) > self.TILE_CACHE:
+                self._tiles.popitem(last=False)
+
+    def _photo_put(self, key, photo) -> None:
+        """Keep a finished Tk image. UI thread only.
+
+        Dropping one that a card on screen is still showing is safe:
+        _page_refs holds a reference to everything the current page drew,
+        so the picture stays alive until that page is replaced.
+        """
+        if key is None or photo is None:
+            return
+        self._photos[key] = photo
+        self._photos.move_to_end(key)
+        while len(self._photos) > self.PHOTO_CACHE:
+            self._photos.popitem(last=False)
+        # The composed picture existed only to become this. Nothing will
+        # ask for it again, and it is the larger of the two.
+        with self._tiles_lock:
+            self._tiles.pop(key, None)
+
+    def _tile_build(self, rec: Rec, width: int, height: int, fit: str):
+        """Compose one tile. Any thread - no Tk here.
+
+        The size is passed in rather than read off self: the window can
+        be resized while this is running, and a tile composed for one
+        card width must not be filed under another.
+        """
+        try:
+            with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
+                data = fh.read()
+            return tile_image(data, width, height, fit, backing=T.SURFACE)
+        except Exception:
+            # A missing or corrupt thumbnail is one blank tile, not a
+            # page that stops loading at the clip before it.
+            return None
+
+    def _load_thumbs(self, batch: list, token: int):
+        """Put a page's thumbnails on screen, off the UI thread.
+
+        The preparing is the point: only the PhotoImage is left for the UI
+        thread, because that is the part that must be there. Anything
+        already prepared - a page revisited, or one the prefetch reached
+        first - skips straight to that.
         """
         width, height, fit = self.CARD_W, self.IMG_H, self.cfg.thumb_fit
         for index, rec in enumerate(batch):
             if token != self._page_token:
                 return
-            image = None
-            try:
-                with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
-                    data = fh.read()
-                image = tile_image(data, width, height, fit, backing=T.SURFACE)
-            except Exception:
-                # A missing or corrupt thumbnail is one blank tile, not a
-                # page that stops loading at the clip before it.
-                image = None
-            self.ui(self._place_thumb, index, rec, image, token)
+            key = (rec.path, width, height, fit)
+            # A finished Tk image already exists for this card: there is
+            # nothing to compose, and _place_thumb will find it by key.
+            # Reading this dict from here is a single lookup, and only
+            # the UI thread ever writes to it.
+            if key in self._photos:
+                self.ui(self._place_thumb, index, rec, None, token, key)
+                continue
+            image = self._tile_get(key)
+            if image is None:
+                image = self._tile_build(rec, width, height, fit)
+                self._tile_put(key, image)
+            self.ui(self._place_thumb, index, rec, image, token, key)
+        if token == self._page_token:
+            self.ui(self._prefetch_pages)
 
-    def _place_thumb(self, index: int, rec: Rec, image, token: int):
+    # A pause between prepared tiles, and a wait before starting at all.
+    #
+    # Both exist for the same reason. Composing a tile is PIL work on a
+    # worker thread, but it still holds the interpreter for much of its
+    # run - so a prefetch going flat out competes with whatever you are
+    # doing in the window. Measured: clicking through clips while three
+    # pages were being prepared went from a 50ms worst case to 300ms.
+    #
+    # There is no hurry. A page takes seconds to look at and under a
+    # second to prepare at this pace, so the work is always finished long
+    # before the flip that wants it - it simply gets out of the way of
+    # the thing you are doing now.
+    PREFETCH_PAUSE = 0.012
+    PREFETCH_AFTER_MS = 400
+
+    def _prefetch_pages(self) -> None:
+        """Prepare the pages either side of this one, gently.
+
+        Flipping a page is a sixth of a second of work. Asked for at the
+        moment you flip, that is a wait; done a moment early, the flip is
+        already finished. Being wrong is cheap - an unused tile costs one
+        slot in the cache - so both directions are prepared, because
+        people flip back as often as forward.
+        """
+        size = max(int(self.cfg.page_size), 1)
+        wanted: list = []
+        for page in (self.page + 1, self.page - 1):
+            if page < 0:
+                continue
+            wanted.extend(self.filtered[page * size:(page + 1) * size])
+        if not wanted:
+            return
+        width, height, fit = self.CARD_W, self.IMG_H, self.cfg.thumb_fit
+        self._prefetch_token += 1
+        token = self._prefetch_token
+
+        def work():
+            for rec in wanted:
+                # A newer prefetch, or a page turn, means these are no
+                # longer the tiles anyone is about to want.
+                if token != self._prefetch_token:
+                    return
+                key = (rec.path, width, height, fit)
+                if self._tile_get(key) is None:
+                    self._tile_put(key, self._tile_build(rec, width, height, fit))
+                    time.sleep(self.PREFETCH_PAUSE)
+
+        def begin():
+            if token != self._prefetch_token:
+                return
+            threading.Thread(target=work, daemon=True).start()
+
+        # Not straight away: the page that just rendered is still
+        # settling its own tiles, and they matter more than the next
+        # page's.
+        self.after(self.PREFETCH_AFTER_MS, begin)
+
+    def _place_thumb(self, index: int, rec: Rec, image, token: int, key=None):
         if token != self._page_token or index >= len(self._layout):
             return
         slot = self._layout[index]
         canvas = self.gallery
         canvas.delete(f"ph{index}")
-        if image is None:
-            canvas.create_text(slot["x"] + self.CARD_W // 2, slot["y"] + self.IMG_H // 2,
-                               text="no thumb", fill=T.FAINT, font=(T.UI, pt(9)),
-                               tags=(slot["tag"],))
-            return
-        try:
-            photo = ImageTk.PhotoImage(image)
-        except Exception:
-            return
+        photo = self._photos.get(key) if key is not None else None
+        if photo is None:
+            if image is None:
+                canvas.create_text(slot["x"] + self.CARD_W // 2,
+                                   slot["y"] + self.IMG_H // 2,
+                                   text="no thumb", fill=T.FAINT,
+                                   font=(T.UI, pt(9)), tags=(slot["tag"],))
+                return
+            try:
+                photo = ImageTk.PhotoImage(image)
+            except Exception:
+                return
+            self._photo_put(key, photo)
         self._page_refs.append(photo)
         self._static_thumb[index] = photo
         canvas.create_image(slot["x"], slot["y"], image=photo, anchor="nw",
@@ -3240,7 +3434,7 @@ class LibraryTab(ctk.CTkFrame):
         corner named by `anchor` ("nw" or "ne")."""
         canvas = self.gallery
         pad, h = px(5), px(18)
-        w = self._badge_font.measure(text) + pad * 2
+        w = self._text_w("badge", text) + pad * 2
         x0 = x if anchor == "nw" else x - w
         canvas.create_rectangle(x0, y, x0 + w, y + h, fill=T.BG, outline="",
                                 tags=(tag,))
@@ -3302,7 +3496,7 @@ class LibraryTab(ctk.CTkFrame):
         if rec.used_projects:
             label = rec.used_projects[0]
             room = self.CARD_W - 62
-            while label and self._badge_font.measure(label) > room:
+            while label and self._text_w("badge", label) > room:
                 label = label[:-1]
             # Named, not coloured. Four badges a card, each in its own
             # colour, was four things shouting over the frame they are
