@@ -2365,19 +2365,25 @@ class LibraryTab(ctk.CTkFrame):
                 font=font(11), fg_color=T.SURFACE, hover_color=T.BTN_HOV,
                 border_width=1, border_color=T.LINE)
             slots.append(chip)
+            # Bound once - see _tag_button for why rebinding leaks. The
+            # right-click menu is offered for tag chips and not for
+            # project chips, so the handler checks rather than the
+            # binding existing or not.
+            chip.bind("<Button-3>", lambda e, c=chip: (
+                self._tag_menu(e, getattr(c, "paz_token", ""),
+                               getattr(c, "paz_name", ""))
+                if getattr(c, "paz_menu", False) else None))
+            chip.configure(command=lambda c=chip: self.add_token(
+                getattr(c, "paz_token", "")))
+        chip.paz_token = token
+        chip.paz_name = name
+        chip.paz_menu = bool(menu)
         # unscaled(), because `width` is a measured screen width and CTk
         # multiplies whatever it is handed by the widget scaling. Passing
         # it straight through made every chip half again as wide as its
         # own text, which is the other half of why they would not fit
         # two to a row. See theme.unscaled.
-        restyle(chip, text=label, width=unscaled(width), text_color=colour,
-                command=lambda t=token: self.add_token(t))
-        # Rebound every time: the same chip carries a different tag now,
-        # and an unbind on a widget that was never bound is not an error.
-        chip.unbind("<Button-3>")
-        if menu:
-            chip.bind("<Button-3>",
-                      lambda e, t=token, n=name: self._tag_menu(e, t, n))
+        restyle(chip, text=label, width=unscaled(width), text_color=colour)
         if not chip.winfo_ismapped():
             chip.pack(side="left", padx=(0, 4))
 
@@ -4222,10 +4228,21 @@ class LibraryTab(ctk.CTkFrame):
                 font=font(13), anchor="w", fg_color="transparent",
                 hover_color=T.BTN_HOV)
             pool.append(button)
+            # Bound once, for the life of the pool. Binding per render
+            # leaks: CTkButton.bind registers a Tcl command on each of
+            # its two inner widgets, and neither unbind nor rebinding
+            # gives them back - measured at four hundred and eighty
+            # abandoned commands per lap of ordinary use, climbing for as
+            # long as the app is open. The handlers read the tag off the
+            # widget instead, because the widget outlives the tag.
+            button.bind("<Button-3>", lambda e, b=button: self._tag_menu(
+                e, getattr(b, "paz_token", ""), getattr(b, "paz_label", "")))
+            button.configure(command=lambda b=button: self.add_token(
+                getattr(b, "paz_token", "")))
         self._tags_used += 1
-        restyle(button, text=label, text_color=colour,
-                         command=lambda t=token: self.add_token(t))
-        button.bind("<Button-3>", lambda e, t=token: self._tag_menu(e, t, label))
+        button.paz_token = token
+        button.paz_label = label
+        restyle(button, text=label, text_color=colour)
         button.grid(row=row, column=column, columnspan=span, sticky="ew", padx=6, pady=2)
 
     def _park_tag_widgets(self) -> None:
