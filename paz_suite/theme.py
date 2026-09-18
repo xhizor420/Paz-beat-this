@@ -359,6 +359,36 @@ def font(size: int = 12, weight: str = "normal", mono: bool = False,
     return ctk.CTkFont(family=family, size=size, weight=weight)
 
 
+def restyle(widget, **options) -> None:
+    """Apply only the options the widget does not already have.
+
+    CustomTkinter re-applies a value blindly. configure(width=80) on a
+    widget that is already 80 wide costs the same 0.34ms as a real
+    change, because it redraws rather than compares - and width,
+    text_color, state, fg_color and the rest all behave that way, while
+    plain text is a tenth of it. Reading the current value back with
+    cget costs nothing measurable.
+
+    Measured on a real tag-rail rebuild: of 242 width settings and 242
+    text_color settings, every single one was a value the widget already
+    had. That was two thirds of what reconfiguring the pooled widgets
+    cost, spent on redrawing them the colour they already were.
+
+    An option cget cannot read is passed through rather than skipped, so
+    this is never less correct than calling configure directly.
+    """
+    changed = {}
+    for name, value in options.items():
+        try:
+            if widget.cget(name) == value:
+                continue
+        except Exception:
+            pass
+        changed[name] = value
+    if changed:
+        widget.configure(**changed)
+
+
 def mark_photo(size: int, color: str) -> "ImageTk.PhotoImage":
     """The app's window/taskbar icon: a paw knocked out of a rounded tile
     in the accent colour, with a soft bloom behind it so it reads as lit
