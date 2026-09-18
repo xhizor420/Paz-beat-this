@@ -21,7 +21,8 @@ from .theme import (T, font, lens_photo, mix, pt, px, restyle, text_fits,
                      text_width, unscaled, LIBRARY_LABELS)
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
-    is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
+    is_ignored_dir, in_ignored_path, prune_dirs, post_id_from, open_file,
+    open_in_explorer,
 )
 from .config import THUMB_DIR
 from .media import tile_image, thumb_key, make_thumb, probe
@@ -4617,10 +4618,16 @@ class LibraryTab(ctk.CTkFrame):
             ext = self.cfg.library_ext_set
             on_disk: dict = {}
 
-            def take(path: str) -> None:
+            def take(path: str, root: str = "") -> None:
                 if os.path.splitext(path)[1].lower() not in ext:
                     return
-                if in_ignored_path(path):
+                # With the root, every folder between it and the file is
+                # judged. Without one, in_ignored_path can only look at
+                # the file's own parent - which misses a proxy two levels
+                # down, and those are indexed as library clips: every clip
+                # twice over, and a proxy counted as the 4K upscale of
+                # the master it stands in for.
+                if in_ignored_path(path, root):
                     return
                 try:
                     st = os.stat(path)
@@ -4630,9 +4637,16 @@ class LibraryTab(ctk.CTkFrame):
 
             for directory in self.library_dirs():
                 if self.cfg.library_recursive:
-                    for base, _dirs, names in os.walk(directory):
+                    for base, dirs, names in os.walk(directory):
+                        # Pruned, not filtered afterwards. This is what
+                        # prune_dirs is for and nothing was calling it, so
+                        # the one recursive scan in the app walked every
+                        # proxy tree Resolve had built - stat-ing each file
+                        # in it, over a library of several terabytes, on
+                        # every sync - only to throw the results away.
+                        prune_dirs(dirs)
                         for name in names:
-                            take(os.path.join(base, name))
+                            take(os.path.join(base, name), directory)
                 else:
                     try:
                         with os.scandir(directory) as entries:
