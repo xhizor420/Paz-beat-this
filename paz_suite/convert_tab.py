@@ -18,7 +18,7 @@ from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
-from .theme import T, font, CONVERT_LABELS
+from .theme import T, font, text_width, CONVERT_LABELS
 from .format import fmt_time, fmt_clock, fmt_size
 from .files import is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer
 from .media import check_dependencies, available_encoders, probe
@@ -782,7 +782,7 @@ class ConvertTab(ctk.CTkFrame):
             # "nd upscale gaps (".
             label = f"{self.F('gaps')} ({total})"
             self.gaps_btn.configure(text=label,
-                                    width=self._btn_font.measure(label) + 28,
+                                    width=text_width(self._btn_font, label) + 28,
                                     fg_color=T.WARN_DEEP, text_color=T.WARN)
         else:
             self.gaps_btn.configure(text=self.F("gaps"), width=150,

@@ -17,7 +17,8 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import ImageTk
 
-from .theme import T, font, lens_photo, mix, pt, px, unscaled, LIBRARY_LABELS
+from .theme import (T, font, lens_photo, mix, pt, px, text_fits, text_width,
+                     unscaled, LIBRARY_LABELS)
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
@@ -231,6 +232,8 @@ class LibraryTab(ctk.CTkFrame):
         # Remembered string widths - see _text_w. Keyed by which font, so
         # the same word in two sizes is two answers.
         self._widths: dict = {}
+        # Cut-to-fit answers, keyed by (text, room) - see _ellipsize.
+        self._ellipsized: dict = {}
         self._measure_fonts = {"card": self._card_font,
                                "badge": self._badge_font,
                                "spec": self._spec_font,
@@ -2653,29 +2656,45 @@ class LibraryTab(ctk.CTkFrame):
             self.page = new
             self.render_page()
 
-    # Asking Tk how wide a string is means a round trip into Tcl, and a
-    # page of cards asks a few hundred times - then asks the same few
-    # hundred again every time you come back to that page, because clip
-    # names, resolutions and durations repeat. So the answers are kept.
-    # There is no invalidation beyond the cap: a font change rebuilds the
-    # tab, and the same string in the same font is the same width.
+    # Text widths come from theme.text_width / theme.text_fits, which
+    # remember every answer and skip asking Tk whenever they can prove
+    # the answer - see the comment above them. `which` names one of this
+    # tab's fonts; the widths themselves are cached per font, app-wide.
     WIDTH_CACHE = 6000
 
     def _text_w(self, which: str, text: str) -> int:
-        key = (which, text)
-        width = self._widths.get(key)
-        if width is None:
-            font_obj = self._measure_fonts.get(which)
-            if font_obj is None:
-                return 0
-            width = font_obj.measure(text)
-            if len(self._widths) >= self.WIDTH_CACHE:
-                self._widths.clear()
-            self._widths[key] = width
-        return width
+        """How wide `text` is in one of this tab's fonts, in real pixels.
+
+        For sizing something to the text - a badge plate, a chip - where
+        the actual number is needed. When the question is only whether it
+        fits, _fits answers more cheaply.
+        """
+        font_obj = self._measure_fonts.get(which)
+        return text_width(font_obj, text) if font_obj is not None else 0
+
+    def _fits(self, which: str, text: str, room: int) -> bool:
+        font_obj = self._measure_fonts.get(which)
+        return text_fits(font_obj, text, room) if font_obj is not None else True
 
     def _ellipsize(self, text: str, max_px: int) -> str:
-        if self._text_w("card", text) <= max_px:
+        """`text`, cut with an ellipsis if it will not fit in `max_px`.
+
+        The answer is kept, because a page of cards asks about the same
+        forty-eight names every time you come back to it, and because the
+        binary search below would otherwise fill the width cache with
+        prefixes nothing ever asks about again.
+        """
+        key = (text, max_px)
+        cut = self._ellipsized.get(key)
+        if cut is None:
+            cut = self._cut_to_fit(text, max_px)
+            if len(self._ellipsized) >= self.WIDTH_CACHE:
+                self._ellipsized.clear()
+            self._ellipsized[key] = cut
+        return cut
+
+    def _cut_to_fit(self, text: str, max_px: int) -> str:
+        if self._fits("card", text, max_px):
             return text
         # Binary search, not one character at a time: a long clip name
         # used to cost a measurement per character trimmed, each of them
@@ -2683,7 +2702,7 @@ class LibraryTab(ctk.CTkFrame):
         low, high = 0, len(text)
         while low < high:
             mid = (low + high + 1) // 2
-            if self._text_w("card", text[:mid] + "…") <= max_px:
+            if self._fits("card", text[:mid] + "…", max_px):
                 low = mid
             else:
                 high = mid - 1
@@ -3283,7 +3302,7 @@ class LibraryTab(ctk.CTkFrame):
                            fill=T.ACCENT, width=1, tags=tags)
         text = f"{fmt_short(frac * rec.duration)} / {fmt_short(rec.duration)}"
         pad, h = px(5), px(18)
-        w = self._badge_font.measure(text) + pad * 2
+        w = self._text_w("badge", text) + pad * 2
         top = y + self.IMG_H - px(23)
         canvas.create_rectangle(x + px(5), top, x + px(5) + w, top + h,
                                 fill=T.BG, outline="", tags=tags)
