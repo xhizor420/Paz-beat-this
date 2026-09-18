@@ -17,8 +17,8 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import ImageTk
 
-from .theme import (T, font, lens_photo, mix, pt, px, text_fits, text_width,
-                     unscaled, LIBRARY_LABELS)
+from .theme import (T, font, lens_photo, mix, pt, px, restyle, text_fits,
+                     text_width, unscaled, LIBRARY_LABELS)
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
     is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
@@ -164,6 +164,12 @@ class LibraryTab(ctk.CTkFrame):
         # How many card positions have had their bindings set - see
         # _bind_card_slots. Positions, not clips: they outlive a page.
         self._bound_slots = 0
+        # Drawing skipped because nothing could see it - see visible().
+        # Starts false: the tab is still being built, and nothing drawn
+        # now would survive the first real layout anyway.
+        self._visible = False
+        self._page_dirty = False
+        self._rail_dirty = False
         self._hidden_btn = None
         # Prepared gallery tiles - see TILE_CACHE. Written by the page
         # loader and the prefetch, read by both, so it takes a lock.
@@ -241,6 +247,8 @@ class LibraryTab(ctk.CTkFrame):
                                "quick": self._quick_font}
 
         self._build()
+        self.bind("<Map>", self._on_map, add="+")
+        self.bind("<Unmap>", self._on_unmap, add="+")
         self._bind_local_keys()
         self._apply_brand()
         self.folders_label.configure(text=self._folders_summary())
@@ -522,6 +530,10 @@ class LibraryTab(ctk.CTkFrame):
             self.side_hint.grid_remove()
             self.side.configure(width=34)
             self.side_toggle.configure(text="▶")
+        if opening:
+            # It has been skipping its rebuild while shut - see
+            # queue_tagpanel.
+            self.queue_tagpanel()
         self.after(120, self.render_page)
 
     def _build_grid_area(self):
@@ -1446,6 +1458,7 @@ class LibraryTab(ctk.CTkFrame):
     def on_hidden(self) -> None:
         """Another tab is in front now. A clip still playing behind it is
         sound coming from a page the user cannot see to stop."""
+        self._visible = False
         if self.player.playing:
             self.player.pause()
         self._preview_stop()
@@ -1467,7 +1480,7 @@ class LibraryTab(ctk.CTkFrame):
         return True
 
     def set_status(self, text: str, colour: str = T.DIM):
-        self.status_label.configure(text=text, text_color=colour)
+        restyle(self.status_label, text=text, text_color=colour)
 
     # ── which folders are indexed ───────────────────────────────────────────
 
@@ -1647,7 +1660,7 @@ class LibraryTab(ctk.CTkFrame):
                 chip.pack_forget()
                 continue
             text = f"{label}  {count}"
-            chip.configure(text=text, text_color=T.DIM, state="normal",
+            restyle(chip, text=text, text_color=T.DIM, state="normal",
                            width=unscaled(self._text_w("quick", text) + px(26)))
             self._quick_live.append(key)
             if not chip.winfo_ismapped():
@@ -2357,8 +2370,8 @@ class LibraryTab(ctk.CTkFrame):
         # it straight through made every chip half again as wide as its
         # own text, which is the other half of why they would not fit
         # two to a row. See theme.unscaled.
-        chip.configure(text=label, width=unscaled(width), text_color=colour,
-                       command=lambda t=token: self.add_token(t))
+        restyle(chip, text=label, width=unscaled(width), text_color=colour,
+                command=lambda t=token: self.add_token(t))
         # Rebound every time: the same chip carries a different tag now,
         # and an unbind on a widget that was never bound is not an error.
         chip.unbind("<Button-3>")
@@ -2376,9 +2389,9 @@ class LibraryTab(ctk.CTkFrame):
                 font=font(9, "bold"), anchor="w", fg_color="transparent",
                 hover_color=T.BTN_HOV, text_color=T.FAINT))
         header = self._rail_heads[index]
-        header.configure(
-            text=("▾  " if open_now else "▸  ") + f"{title}   {count}",
-            command=lambda k=key: self._toggle_sidebar_group(k))
+        restyle(header,
+                text=("▾  " if open_now else "▸  ") + f"{title}   {count}",
+                command=lambda k=key: self._toggle_sidebar_group(k))
         header.grid(row=row, column=0, sticky="ew", padx=6,
                     pady=(12 if row else 4, 3))
 
@@ -2408,6 +2421,10 @@ class LibraryTab(ctk.CTkFrame):
         the results were. Results are what you are waiting for; the
         sidebar is a summary of them and can arrive a moment later.
         """
+        if not self.visible() or not self.cfg.sidebar_open:
+            self._rail_dirty = True
+            return
+        self._rail_dirty = False
         if self._tagpanel_after is not None:
             try:
                 self.after_cancel(self._tagpanel_after)
@@ -2708,7 +2725,55 @@ class LibraryTab(ctk.CTkFrame):
                 high = mid - 1
         return text[:low] + "…"
 
+    # ── don't draw what nobody can see ──────────────────────────────────
+    #
+    # A search redraws the gallery and rebuilds the tag rail. Neither
+    # asked first whether anyone was looking, so both happened while the
+    # rail was collapsed and while another tab was in front - and a
+    # search is not only something you type. The ambient tag fetch
+    # finishes a batch, re-applies the tags and searches again, for hours
+    # on a big library. Measured: two searches from the Convert tab cost
+    # 12ms of gallery and 28ms of rail, drawn into a page nobody had
+    # open, competing with whatever the user was actually doing.
+    #
+    # So both defer instead, and what was skipped is remembered and done
+    # when the thing becomes visible. winfo_ismapped is the authority
+    # rather than which tab is selected: it is 9us, it is what Tk itself
+    # believes, and it is right during startup too, before any tab has
+    # been shown.
+
+    def visible(self) -> bool:
+        """Whether this tab is the one on screen.
+
+        A flag driven by events, NOT winfo_ismapped(): Tk updates that
+        one an event-loop turn late, so straight after a tab switch it
+        still reports the previous answer - in both directions. Asking it
+        at the moment of the switch is how the first version of this
+        deferred a draw and then never came back for it.
+        """
+        return self._visible
+
+    def _on_map(self, _event=None):
+        # Startup, and any other route to being shown that does not go
+        # through the tab strip.
+        self.on_shown()
+
+    def _on_unmap(self, _event=None):
+        self._visible = False
+
+    def on_shown(self) -> None:
+        """This tab is in front now. Catch up on anything deferred."""
+        self._visible = True
+        if self._page_dirty:
+            self.render_page()
+        if self._rail_dirty:
+            self.queue_tagpanel()
+
     def render_page(self):
+        if not self.visible():
+            self._page_dirty = True
+            return
+        self._page_dirty = False
         self._resize_after = None
         self._page_token += 1
         token = self._page_token
@@ -3731,7 +3796,7 @@ class LibraryTab(ctk.CTkFrame):
             # unscaled(): `width` is real screen pixels, worked out against
             # the column's measured height and the picture that has to fit
             # in it. CTk would scale it again.
-            self.detail_panel.configure(width=unscaled(width))
+            restyle(self.detail_panel, width=unscaled(width))
         except tk.TclError:
             return
         # The picture takes the clip's shape; the bar and the buttons take
@@ -4158,7 +4223,7 @@ class LibraryTab(ctk.CTkFrame):
                 hover_color=T.BTN_HOV)
             pool.append(button)
         self._tags_used += 1
-        button.configure(text=label, text_color=colour,
+        restyle(button, text=label, text_color=colour,
                          command=lambda t=token: self.add_token(t))
         button.bind("<Button-3>", lambda e, t=token: self._tag_menu(e, t, label))
         button.grid(row=row, column=column, columnspan=span, sticky="ew", padx=6, pady=2)

@@ -659,6 +659,25 @@ class ThumbCache:
         self._board_remember(key, image)
         return image
 
+    def _board_on_hand(self, path: str, cols: int, rows: int,
+                       cell_w: int) -> bool:
+        """Whether this clip's sheet exists yet, WITHOUT decoding it.
+
+        _board_cached answers the same question by opening the sheet and
+        loading it, which is a 2300x1000 JPEG - about six milliseconds.
+        That is the right thing when the pixels are wanted, and the wrong
+        thing for prime_hover, which only wants to know whether to start
+        a build. It was being paid on every clip selected and every card
+        hovered, on the thread drawing the window, to decode a picture
+        nobody was about to look at.
+        """
+        key = self._board_key(path, cols, rows, cell_w)
+        with self._sprites_lock:
+            if key in self._sprites:
+                return True
+        cached = os.path.join(self.root, key) if self.root else None
+        return bool(cached and os.path.exists(cached))
+
     def _board_remember(self, key: str, image) -> None:
         with self._sprites_lock:
             self._sprites[key] = image
@@ -777,7 +796,8 @@ class ThumbCache:
         the time the user actually reaches for the seek bar, instead of
         the first several seconds of scrubbing paying the slow per-hover
         fallback while the sheet is still mid-build."""
-        if path and duration > 0 and self._board_cached(path, cols, rows, cell_w) is None:
+        if (path and duration > 0
+                and not self._board_on_hand(path, cols, rows, cell_w)):
             self._board_build_async(path, duration, cols, rows, cell_w)
 
     def _board_build_async(self, path: str, duration: float,
