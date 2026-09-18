@@ -102,11 +102,19 @@ def open_in_explorer(path: str, select: bool = True) -> None:
     try:
         if os.name == "nt":
             if select and os.path.isfile(path):
-                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+                # One argument, not two. Explorer reads "/select,<path>" as
+                # a single switch; handing it "/select," and the path
+                # separately puts a space after the comma, which leaves the
+                # switch with nothing attached - Explorer then ignores the
+                # path and opens Documents. The clip the user asked to be
+                # shown is nowhere on screen.
+                subprocess.Popen(["explorer", "/select," + os.path.normpath(path)])
             else:
                 os.startfile(os.path.dirname(path) if os.path.isfile(path) else path)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-R" if select else "", path])
+            # An empty string is an argument too, and `open` reports it as a
+            # file that does not exist rather than opening anything.
+            subprocess.Popen(["open"] + (["-R"] if select else []) + [path])
         else:
             subprocess.Popen(["xdg-open", os.path.dirname(path)
                                if os.path.isfile(path) else path])

@@ -240,6 +240,9 @@ class LibraryTab(ctk.CTkFrame):
         self._widths: dict = {}
         # Cut-to-fit answers, keyed by (text, room) - see _ellipsize.
         self._ellipsized: dict = {}
+        # The query chips above the gallery, pooled - see _render_chips.
+        self._query_chips: list = []
+        self._chips_shown = 0
         self._measure_fonts = {"card": self._card_font,
                                "badge": self._badge_font,
                                "spec": self._spec_font,
@@ -2184,18 +2187,44 @@ class LibraryTab(ctk.CTkFrame):
                         "the library carries counts for nothing.", T.ACCENT2)
 
     def _render_chips(self, query: str):
-        for child in self.chips.winfo_children():
-            child.destroy()
-        tokens = query.split()
-        for token in tokens[:12]:
+        """The tokens of the current query, each with an ✕.
+
+        Pooled, like the sidebar's chips and the inspector's tag list, and
+        for the same reason: this runs on every search, a search runs a
+        quarter-second after the user stops typing, and building a
+        CTkButton costs a millisecond and a half. Four words came to
+        6.9ms of the 19ms a search took - the largest single piece of it,
+        spent destroying twelve widgets to build twelve identical ones.
+        """
+        tokens = query.split()[:12]
+        pool = self._query_chips
+        for index, token in enumerate(tokens):
             negative = token.startswith("-")
-            chip = ctk.CTkButton(
-                self.chips, text=f"{token}  ✕", height=22, corner_radius=11,
-                font=font(9), width=10,
-                fg_color=T.FAIL_DEEP if negative else T.ACCENT_DEEP,
-                hover_color=T.BTN_HOV, text_color=T.FAIL if negative else T.ACCENT,
-                command=lambda t=token: self._remove_token(t))
-            chip.pack(side="left", padx=(0, 5), pady=2)
+            if index < len(pool):
+                chip = pool[index]
+            else:
+                chip = ctk.CTkButton(
+                    self.chips, text="", height=22, corner_radius=11,
+                    font=font(9), width=10, hover_color=T.BTN_HOV)
+                pool.append(chip)
+                # Bound once - the chip outlives any one token, so the
+                # handler reads the token off it. See _tag_button.
+                chip.configure(command=lambda c=chip: self._remove_token(
+                    getattr(c, "paz_token", "")))
+            chip.paz_token = token
+            restyle(chip, text=f"{token}  ✕",
+                    fg_color=T.FAIL_DEEP if negative else T.ACCENT_DEEP,
+                    text_color=T.FAIL if negative else T.ACCENT)
+        # How many are packed is counted rather than asked, because
+        # winfo_ismapped() answers for the whole chain - a chip on a tab
+        # that is not showing reads as unmapped however it is packed, and
+        # packing it twice moves it to the end of the row.
+        while self._chips_shown < len(tokens):
+            pool[self._chips_shown].pack(side="left", padx=(0, 5), pady=2)
+            self._chips_shown += 1
+        while self._chips_shown > len(tokens):
+            self._chips_shown -= 1
+            pool[self._chips_shown].pack_forget()
 
     def _fit_info_row(self, event) -> None:
         """Chips and pager share one row until they can't both fit, then the

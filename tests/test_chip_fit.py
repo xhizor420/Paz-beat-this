@@ -176,3 +176,107 @@ def test_unscaled_never_returns_a_useless_zero():
         assert theme.unscaled(0) >= 1
     finally:
         theme.T.SCALE = before
+
+
+# ── the query chips are pooled, and stay in order ──────────────────────
+#
+# One chip per word of the search. They were destroyed and rebuilt on
+# every search, which is every quarter-second the user pauses while
+# typing - 6.9ms of the 19ms a search cost, spent making twelve widgets
+# identical to the twelve just thrown away. Pooled, the cost is 0.2ms.
+# What pooling can get wrong is order and staleness, so that is what
+# these pin.
+
+class QueryChip:
+    def __init__(self):
+        self.opts = {}
+
+    def configure(self, **kw):
+        self.opts.update(kw)
+
+    def cget(self, name):
+        return self.opts.get(name)
+
+    def pack(self, **_kw):
+        pass
+
+    def pack_forget(self):
+        pass
+
+
+class QueryRow:
+    """Stands in for LibraryTab, with just what _render_chips touches."""
+
+    _render_chips = LibraryTab._render_chips
+
+    def __init__(self):
+        self.chips = object()
+        self._query_chips = []
+        self._chips_shown = 0
+        self.removed = []
+
+    def _remove_token(self, token):
+        self.removed.append(token)
+
+
+def render(row, query):
+    import paz_suite.library_tab as lt
+    was_button, was_font = lt.ctk.CTkButton, lt.font
+    lt.ctk.CTkButton = lambda *a, **kw: QueryChip()
+    lt.font = lambda *a, **kw: None
+    try:
+        row._render_chips(query)
+    finally:
+        lt.ctk.CTkButton, lt.font = was_button, was_font
+    return [c.cget("text").replace("  ✕", "")
+            for c in row._query_chips[:row._chips_shown]]
+
+
+def test_a_chip_shows_each_word_of_the_query():
+    row = QueryRow()
+    assert render(row, "wolf male solo") == ["wolf", "male", "solo"]
+
+
+def test_a_shorter_query_hides_the_chips_it_no_longer_needs():
+    row = QueryRow()
+    render(row, "a b c d e")
+    assert render(row, "a c") == ["a", "c"]
+    assert row._chips_shown == 2
+    assert len(row._query_chips) == 5, "a hidden chip was thrown away"
+
+
+def test_a_longer_query_brings_the_hidden_ones_back():
+    row = QueryRow()
+    render(row, "a b c d")
+    render(row, "a")
+    assert render(row, "a b c d e") == ["a", "b", "c", "d", "e"]
+
+
+def test_an_empty_query_shows_nothing():
+    row = QueryRow()
+    render(row, "wolf male")
+    assert render(row, "") == []
+    assert row._chips_shown == 0
+
+
+def test_the_query_chips_stop_at_twelve():
+    row = QueryRow()
+    words = [f"w{i}" for i in range(20)]
+    assert len(render(row, " ".join(words))) == 12
+
+
+def test_a_reused_chip_drops_the_last_words_negative_styling():
+    """A chip that showed '-cub' is red. Reused for 'cub' it must not be."""
+    row = QueryRow()
+    render(row, "-cub")
+    negative = row._query_chips[0].cget("text_color")
+    render(row, "cub")
+    assert row._query_chips[0].cget("text_color") != negative
+
+
+def test_the_cross_removes_the_word_the_chip_is_showing_now():
+    row = QueryRow()
+    render(row, "wolf male solo")
+    render(row, "fox male solo")
+    row._query_chips[0].cget("command")()
+    assert row.removed == ["fox"], "the chip removed the word it used to show"
