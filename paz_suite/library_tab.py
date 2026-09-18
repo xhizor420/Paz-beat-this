@@ -21,7 +21,8 @@ from .theme import (T, font, lens_photo, mix, pt, px, restyle, text_fits,
                      text_width, unscaled, LIBRARY_LABELS)
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
-    is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
+    is_ignored_dir, in_ignored_path, prune_dirs, post_id_from, open_file,
+    open_in_explorer,
 )
 from .config import THUMB_DIR
 from .media import tile_image, thumb_key, make_thumb, probe
@@ -240,6 +241,9 @@ class LibraryTab(ctk.CTkFrame):
         self._widths: dict = {}
         # Cut-to-fit answers, keyed by (text, room) - see _ellipsize.
         self._ellipsized: dict = {}
+        # The query chips above the gallery, pooled - see _render_chips.
+        self._query_chips: list = []
+        self._chips_shown = 0
         self._measure_fonts = {"card": self._card_font,
                                "badge": self._badge_font,
                                "spec": self._spec_font,
@@ -2184,18 +2188,44 @@ class LibraryTab(ctk.CTkFrame):
                         "the library carries counts for nothing.", T.ACCENT2)
 
     def _render_chips(self, query: str):
-        for child in self.chips.winfo_children():
-            child.destroy()
-        tokens = query.split()
-        for token in tokens[:12]:
+        """The tokens of the current query, each with an ✕.
+
+        Pooled, like the sidebar's chips and the inspector's tag list, and
+        for the same reason: this runs on every search, a search runs a
+        quarter-second after the user stops typing, and building a
+        CTkButton costs a millisecond and a half. Four words came to
+        6.9ms of the 19ms a search took - the largest single piece of it,
+        spent destroying twelve widgets to build twelve identical ones.
+        """
+        tokens = query.split()[:12]
+        pool = self._query_chips
+        for index, token in enumerate(tokens):
             negative = token.startswith("-")
-            chip = ctk.CTkButton(
-                self.chips, text=f"{token}  ✕", height=22, corner_radius=11,
-                font=font(9), width=10,
-                fg_color=T.FAIL_DEEP if negative else T.ACCENT_DEEP,
-                hover_color=T.BTN_HOV, text_color=T.FAIL if negative else T.ACCENT,
-                command=lambda t=token: self._remove_token(t))
-            chip.pack(side="left", padx=(0, 5), pady=2)
+            if index < len(pool):
+                chip = pool[index]
+            else:
+                chip = ctk.CTkButton(
+                    self.chips, text="", height=22, corner_radius=11,
+                    font=font(9), width=10, hover_color=T.BTN_HOV)
+                pool.append(chip)
+                # Bound once - the chip outlives any one token, so the
+                # handler reads the token off it. See _tag_button.
+                chip.configure(command=lambda c=chip: self._remove_token(
+                    getattr(c, "paz_token", "")))
+            chip.paz_token = token
+            restyle(chip, text=f"{token}  ✕",
+                    fg_color=T.FAIL_DEEP if negative else T.ACCENT_DEEP,
+                    text_color=T.FAIL if negative else T.ACCENT)
+        # How many are packed is counted rather than asked, because
+        # winfo_ismapped() answers for the whole chain - a chip on a tab
+        # that is not showing reads as unmapped however it is packed, and
+        # packing it twice moves it to the end of the row.
+        while self._chips_shown < len(tokens):
+            pool[self._chips_shown].pack(side="left", padx=(0, 5), pady=2)
+            self._chips_shown += 1
+        while self._chips_shown > len(tokens):
+            self._chips_shown -= 1
+            pool[self._chips_shown].pack_forget()
 
     def _fit_info_row(self, event) -> None:
         """Chips and pager share one row until they can't both fit, then the
@@ -2365,19 +2395,25 @@ class LibraryTab(ctk.CTkFrame):
                 font=font(11), fg_color=T.SURFACE, hover_color=T.BTN_HOV,
                 border_width=1, border_color=T.LINE)
             slots.append(chip)
+            # Bound once - see _tag_button for why rebinding leaks. The
+            # right-click menu is offered for tag chips and not for
+            # project chips, so the handler checks rather than the
+            # binding existing or not.
+            chip.bind("<Button-3>", lambda e, c=chip: (
+                self._tag_menu(e, getattr(c, "paz_token", ""),
+                               getattr(c, "paz_name", ""))
+                if getattr(c, "paz_menu", False) else None))
+            chip.configure(command=lambda c=chip: self.add_token(
+                getattr(c, "paz_token", "")))
+        chip.paz_token = token
+        chip.paz_name = name
+        chip.paz_menu = bool(menu)
         # unscaled(), because `width` is a measured screen width and CTk
         # multiplies whatever it is handed by the widget scaling. Passing
         # it straight through made every chip half again as wide as its
         # own text, which is the other half of why they would not fit
         # two to a row. See theme.unscaled.
-        restyle(chip, text=label, width=unscaled(width), text_color=colour,
-                command=lambda t=token: self.add_token(t))
-        # Rebound every time: the same chip carries a different tag now,
-        # and an unbind on a widget that was never bound is not an error.
-        chip.unbind("<Button-3>")
-        if menu:
-            chip.bind("<Button-3>",
-                      lambda e, t=token, n=name: self._tag_menu(e, t, n))
+        restyle(chip, text=label, width=unscaled(width), text_color=colour)
         if not chip.winfo_ismapped():
             chip.pack(side="left", padx=(0, 4))
 
@@ -4222,10 +4258,21 @@ class LibraryTab(ctk.CTkFrame):
                 font=font(13), anchor="w", fg_color="transparent",
                 hover_color=T.BTN_HOV)
             pool.append(button)
+            # Bound once, for the life of the pool. Binding per render
+            # leaks: CTkButton.bind registers a Tcl command on each of
+            # its two inner widgets, and neither unbind nor rebinding
+            # gives them back - measured at four hundred and eighty
+            # abandoned commands per lap of ordinary use, climbing for as
+            # long as the app is open. The handlers read the tag off the
+            # widget instead, because the widget outlives the tag.
+            button.bind("<Button-3>", lambda e, b=button: self._tag_menu(
+                e, getattr(b, "paz_token", ""), getattr(b, "paz_label", "")))
+            button.configure(command=lambda b=button: self.add_token(
+                getattr(b, "paz_token", "")))
         self._tags_used += 1
-        restyle(button, text=label, text_color=colour,
-                         command=lambda t=token: self.add_token(t))
-        button.bind("<Button-3>", lambda e, t=token: self._tag_menu(e, t, label))
+        button.paz_token = token
+        button.paz_label = label
+        restyle(button, text=label, text_color=colour)
         button.grid(row=row, column=column, columnspan=span, sticky="ew", padx=6, pady=2)
 
     def _park_tag_widgets(self) -> None:
@@ -4571,10 +4618,16 @@ class LibraryTab(ctk.CTkFrame):
             ext = self.cfg.library_ext_set
             on_disk: dict = {}
 
-            def take(path: str) -> None:
+            def take(path: str, root: str = "") -> None:
                 if os.path.splitext(path)[1].lower() not in ext:
                     return
-                if in_ignored_path(path):
+                # With the root, every folder between it and the file is
+                # judged. Without one, in_ignored_path can only look at
+                # the file's own parent - which misses a proxy two levels
+                # down, and those are indexed as library clips: every clip
+                # twice over, and a proxy counted as the 4K upscale of
+                # the master it stands in for.
+                if in_ignored_path(path, root):
                     return
                 try:
                     st = os.stat(path)
@@ -4584,9 +4637,16 @@ class LibraryTab(ctk.CTkFrame):
 
             for directory in self.library_dirs():
                 if self.cfg.library_recursive:
-                    for base, _dirs, names in os.walk(directory):
+                    for base, dirs, names in os.walk(directory):
+                        # Pruned, not filtered afterwards. This is what
+                        # prune_dirs is for and nothing was calling it, so
+                        # the one recursive scan in the app walked every
+                        # proxy tree Resolve had built - stat-ing each file
+                        # in it, over a library of several terabytes, on
+                        # every sync - only to throw the results away.
+                        prune_dirs(dirs)
                         for name in names:
-                            take(os.path.join(base, name))
+                            take(os.path.join(base, name), directory)
                 else:
                     try:
                         with os.scandir(directory) as entries:

@@ -359,11 +359,24 @@ class AppConfig:
         return found
 
     def save(self) -> str | None:
-        """Write the config. Returns an error message on failure, else None."""
+        """Write the config. Returns an error message on failure, else None.
+
+        Written beside itself and moved into place, never over itself.
+        Opening the real file with "w" empties it before a byte is
+        written, and this is saved on a great many small actions - every
+        search, every panel drag, every settings change. A crash, a power
+        cut or a kill in that window left a truncated file, which does not
+        parse, which means every setting in the app gone: the library
+        root, the projects, the scale, the folder choices. os.replace is
+        atomic, so the file on disk is either the old config or the new
+        one.
+        """
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
-            with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+            tmp = CONFIG_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(asdict(self), fh, indent=2)
+            os.replace(tmp, CONFIG_PATH)
             return None
         except OSError as exc:
             return str(exc)

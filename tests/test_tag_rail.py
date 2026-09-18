@@ -17,6 +17,7 @@ that is not hidden still reads as a tag of the current search.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -250,3 +251,189 @@ def test_counting_an_empty_result_is_empty():
     assert all(not c for c in counted.values())
     assert set(counted) == {"artists", "characters", "species", "series",
                             "lore", "other", "projects"}
+
+
+# ── the chips are bound once, not per render ───────────────────────────
+
+@contextlib.contextmanager
+def paper_chips(make):
+    """Stand in for the two things a chip needs a live window for: the
+    CTkButton itself, and the CTkFont handed to it."""
+    import paz_suite.library_tab as lt
+    was_button, was_font = lt.ctk.CTkButton, lt.font
+    lt.ctk.CTkButton = lambda *a, **kw: make()
+    lt.font = lambda *a, **kw: None
+    try:
+        yield
+    finally:
+        lt.ctk.CTkButton, lt.font = was_button, was_font
+
+
+def test_a_chip_is_bound_once_and_carries_its_tag_on_itself():
+    """CTkButton.bind registers a Tcl command on each of the button's two
+    inner widgets, and neither unbind nor rebinding gives them back - so
+    rebinding a pooled chip on every search abandoned two commands per
+    chip, for as long as the app stayed open. The tag lives on the widget
+    instead, and the handler reads it when it fires."""
+    class Chip:
+        def __init__(self):
+            self.binds = 0
+            self.configures = 0
+            self.mapped = False
+            self.opts = {}
+
+        def bind(self, *_a, **_kw):
+            self.binds += 1
+
+        def configure(self, **kw):
+            self.configures += 1
+            self.opts.update(kw)
+
+        def cget(self, name):
+            return self.opts.get(name)
+
+        def winfo_ismapped(self):
+            return self.mapped
+
+        def pack(self, **_kw):
+            self.mapped = True
+
+    made = []
+
+    class Tab:
+        _rail_chip = LibraryTab._rail_chip
+
+        def __init__(self):
+            self._rail_slots = [[]]
+            self._rail_rows = [object()]
+
+        def add_token(self, token):
+            made.append(token)
+
+    tab = Tab()
+    with paper_chips(Chip):
+        tab._rail_chip(0, 0, "wolf  12", 80, "#fff", None, "wolf", "wolf", True)
+        chip = tab._rail_slots[0][0]
+        first_binds = chip.binds
+        assert first_binds == 1
+        assert chip.paz_token == "wolf"
+        # The click goes through the command, which reads the tag off the
+        # widget - so it has to be the tag the chip is showing now.
+        chip.opts["command"]()
+        assert made == ["wolf"]
+
+        # A later search puts a different tag in the same slot.
+        tab._rail_chip(0, 0, "fox  3", 70, "#fff", None, "fox", "fox", True)
+        assert chip.binds == first_binds, "rebound a chip it had already bound"
+        assert chip.paz_token == "fox", "the chip still carries the old tag"
+        made.clear()
+        chip.opts["command"]()
+        assert made == ["fox"], "the chip acted on the tag it used to show"
+
+
+def test_a_project_chip_offers_no_tag_menu():
+    """The right-click menu is for tags, not for projects - and with one
+    binding for the life of the chip, that has to be a check inside the
+    handler rather than a binding that is or is not there."""
+    offered = []
+
+    class Chip:
+        def __init__(self):
+            self.opts = {}
+            self.handler = None
+
+        def bind(self, _sequence, func, *_a, **_kw):
+            self.handler = func
+
+        def configure(self, **kw):
+            self.opts.update(kw)
+
+        def cget(self, name):
+            return self.opts.get(name)
+
+        def winfo_ismapped(self):
+            return True
+
+        def pack(self, **_kw):
+            pass
+
+    class Tab:
+        _rail_chip = LibraryTab._rail_chip
+
+        def __init__(self):
+            self._rail_slots = [[]]
+            self._rail_rows = [object()]
+
+        def add_token(self, token):
+            pass
+
+        def _tag_menu(self, _event, token, name):
+            offered.append((token, name))
+
+    tab = Tab()
+    with paper_chips(Chip):
+        tab._rail_chip(0, 0, "PMV  4", 80, "#fff", "#f0f", 'used:"PMV"',
+                       "PMV", False)
+        chip = tab._rail_slots[0][0]
+        chip.handler(object())
+        assert offered == [], "a project chip offered a tag menu"
+
+        # The same chip, reused for a tag, does offer one.
+        tab._rail_chip(0, 0, "wolf  4", 80, "#fff", None, "wolf", "wolf", True)
+        chip.handler(object())
+        assert offered == [("wolf", "wolf")]
+
+
+def test_the_inspectors_tag_buttons_are_bound_once_too():
+    """The same pool, the same leak: forty tag buttons rebound on every
+    click of a clip. Forty clips is sixteen hundred Tcl commands Tk will
+    hold until the app closes."""
+    clicked, offered = [], []
+
+    class Button:
+        def __init__(self):
+            self.binds = 0
+            self.opts = {}
+            self.handler = None
+
+        def bind(self, _sequence, func, *_a, **_kw):
+            self.binds += 1
+            self.handler = func
+
+        def configure(self, **kw):
+            self.opts.update(kw)
+
+        def cget(self, name):
+            return self.opts.get(name)
+
+        def grid(self, **_kw):
+            pass
+
+    class Tab:
+        _tag_button = LibraryTab._tag_button
+
+        def __init__(self):
+            self._tag_pool = []
+            self._tags_used = 0
+            self.detail_tags = object()
+
+        def add_token(self, token):
+            clicked.append(token)
+
+        def _tag_menu(self, _event, token, label):
+            offered.append((token, label))
+
+    tab = Tab()
+    with paper_chips(Button):
+        tab._tag_button("artist:kenket", "kenket", "#fff", 0)
+        button = tab._tag_pool[0]
+        assert button.binds == 1
+
+        # A second clip reuses the pool from the top.
+        tab._tags_used = 0
+        tab._tag_button("artist:wolfy", "wolfy", "#fff", 0)
+        assert button.binds == 1, "rebound a button it had already bound"
+        button.opts["command"]()
+        button.handler(object())
+        assert clicked == ["artist:wolfy"]
+        assert offered == [("artist:wolfy", "wolfy")]
