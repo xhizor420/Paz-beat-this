@@ -93,6 +93,7 @@ class FakeFrames:
 
 
 class FakeTab:
+    _text_w = LibraryTab._text_w
     """Just enough of the tab to exercise the gesture, without Tk."""
 
     CARD_W = 200
@@ -122,6 +123,9 @@ class FakeTab:
         self.gallery = FakeCanvas()
         self.frames = FakeFrames()
         self._badge_font = FakeFont()
+        # Widths go through the app's shared remembering path, which is
+        # what the real tab uses - see theme.text_width.
+        self._measure_fonts = {"badge": self._badge_font}
         self._layout = [{"rec": r, "x": i * card_w, "y": 0, "tag": f"card{i}"}
                         for i, r in enumerate(recs or [Rec()])]
         self._static_thumb = {}

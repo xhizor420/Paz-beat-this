@@ -18,7 +18,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, pt, px, unscaled
+from .theme import T, font, pt, px, text_width, unscaled
 from .format import fmt_clock, fmt_short
 from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
@@ -296,7 +296,7 @@ class InlinePlayer:
         # scales a width it is given, so the button came out half as wide
         # again as the text it was sized to.
         self.sync_btn.configure(text=label, text_color=colour,
-                                width=unscaled(self._btn_font.measure(label) + px(12)))
+                                width=unscaled(text_width(self._btn_font, label) + px(12)))
 
     def playback_report(self) -> str:
         """Which player is running and what the others would do. When
@@ -496,7 +496,8 @@ class InlinePlayer:
         room = width - fixed
         # The player-name button is the flexible one: full name if the row
         # can take it, a dot if it cannot.
-        name_width = self._btn_font.measure(
+        name_width = text_width(
+            self._btn_font,
             self.SHORT_NAMES.get(self.backend, "player")) + px(12)
         tight = room - sum(w.winfo_reqwidth() + 12 for w, _ in optional) < name_width
         if tight != self._tight:
@@ -876,6 +877,18 @@ class InlinePlayer:
 
     # ── seek bar ────────────────────────────────────────────────────────
 
+    # The longest the clock can read: hours if the clip is that long,
+    # minutes otherwise, either side of the separator.
+    CLOCK_SHAPES = ("00:00.0 / 00:00", "0:00:00.0 / 0:00:00")
+
+    def _clock_room(self) -> int:
+        """Pixels to keep clear for the clock, measured once per font."""
+        font_obj = getattr(self, "_clock_font", None)
+        if font_obj is None:
+            return 0
+        shape = self.CLOCK_SHAPES[1 if self.engine.duration >= 3600 else 0]
+        return text_width(font_obj, shape)
+
     def _draw_bar(self):
         """The scrubber, with the time on its right-hand end.
 
@@ -895,7 +908,13 @@ class InlinePlayer:
         if self.engine.duration > 0 and clock_font is not None:
             text = (f"{fmt_clock(self.engine.position)} / "
                     f"{fmt_short(self.engine.duration)}")
-            track_end = width - clock_font.measure(text) - 10
+            # The room is reserved for the widest shape the clock can
+            # take, not measured for the string it happens to read right
+            # now. Two reasons: this runs on every playback tick and the
+            # string is different every time, so measuring it is a fresh
+            # round trip into Tcl each frame; and a width that follows the
+            # digits makes the track end twitch as 9:59 becomes 10:00.
+            track_end = width - self._clock_room() - 10
             c.create_text(width - 2, y, text=text, fill=T.DIM,
                           font=(T.MONO, pt(9)), anchor="e")
         c.create_line(2, y, track_end, y, fill=T.LINE, width=4, capstyle="round")

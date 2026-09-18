@@ -16,6 +16,7 @@ a wall of thumbnails, not politely muted next to safe and questionable.
 
 from __future__ import annotations
 
+import itertools
 import os
 
 import customtkinter as ctk
@@ -218,6 +219,133 @@ def unscaled(value: float) -> int:
     """
     scale = T.SCALE or 1.0
     return max(int(round(value / scale)), 1)
+
+
+# ── how wide is this text? ──────────────────────────────────────────────
+#
+# Asking Tk costs 424 microseconds. Drawing a canvas item costs 4.6, so
+# one measurement is worth ninety of them - and Tk does not remember the
+# answer, so asking twice about the same string costs twice. Measured on
+# a 4K-scaled UI font; the absolute number will differ per platform and
+# font backend, but the shape (measuring text costs far more than drawing
+# it) does not.
+#
+# A gallery page asks about forty-eight clip names, a tag rail about a
+# hundred and twenty chips, and the seek bar asks again on every playback
+# tick. Two thirds of what drawing a page of the gallery cost was this.
+#
+# So there are two ways out, and this module offers both: remember every
+# answer, and - better - do not ask when the answer cannot matter.
+_WIDEST: dict = {}
+_WIDTHS: dict = {}
+# Enough for a large library's worth of distinct strings; cleared rather
+# than evicted one by one, because the answers are cheap to re-earn and
+# the point is to bound the memory, not to be clever about it.
+WIDTH_CACHE = 8000
+
+# The guard below needs a character at least as wide as any in the text,
+# and that is only knowable for a repertoire you have looked at. So it is
+# only offered for ASCII text: a filename carrying a CJK character or an
+# emoji gets measured properly instead. (e621 tags are romanised by
+# convention, but a filename can be anything.)
+#
+# Seven candidates rather than the whole printable range, because every
+# one of these is a measurement paid at startup, per font. Checked
+# against all of printable ASCII across the families and sizes this app
+# resolves to, and they contain the widest glyph in every one - see
+# test_text_width.py, which fails if that ever stops being true. If an
+# unusual font did hide something wider, a caption would come out a
+# pixel or two over its card and be clipped, which is cosmetic.
+_WIDE_SAMPLE = "W@%M#m&"
+
+
+_KEYS = itertools.count()
+
+
+def _font_key(font_obj):
+    """What identifies a font for caching.
+
+    A number handed to the font object itself and kept there. Not its
+    repr or its id: both are addresses, and CPython reuses an address as
+    soon as the object at it is collected - so a new font could inherit
+    a dead one's cached widths and silently draw at the wrong size. A
+    tag that lives on the object cannot outlive it.
+    """
+    key = getattr(font_obj, "_paz_width_key", None)
+    if key is None:
+        key = next(_KEYS)
+        try:
+            font_obj._paz_width_key = key
+        except Exception:
+            # Cannot be tagged, so it gets no cache rather than a
+            # possibly-wrong one.
+            return None
+    return key
+
+
+def widest_char(font_obj) -> int:
+    """The widest ASCII character in this font, measured once.
+
+    An n-character ASCII string cannot be wider than n times this, which
+    is what makes text_fits able to answer without asking Tk.
+    """
+    key = _font_key(font_obj)
+    got = _WIDEST.get(key) if key is not None else None
+    if got is None:
+        try:
+            got = max(font_obj.measure(ch) for ch in _WIDE_SAMPLE)
+        except Exception:
+            got = 0          # a font that cannot measure gets no shortcut
+        if key is not None:
+            _WIDEST[key] = got
+    return got
+
+
+def text_width(font_obj, text: str) -> int:
+    """How wide `text` is, remembered. 0 if the font cannot say."""
+    name = _font_key(font_obj)
+    key = (name, text)
+    got = _WIDTHS.get(key) if name is not None else None
+    if got is None:
+        try:
+            got = int(font_obj.measure(text))
+        except Exception:
+            return 0
+        if name is not None:
+            if len(_WIDTHS) >= WIDTH_CACHE:
+                _WIDTHS.clear()
+            _WIDTHS[key] = got
+    return got
+
+
+def text_fits(font_obj, text: str, room: int) -> bool:
+    """True when `text` fits in `room` pixels.
+
+    Answers without measuring whenever it can prove the answer: the
+    widest character times the length is an upper bound on the width, so
+    if that fits, the text fits. Every string this app puts on a card, a
+    badge or a chip - post IDs, "1080p.60", "2 min", an artist name -
+    clears that bar, which is why a page of the gallery now measures
+    nothing at all.
+    """
+    room = int(room)
+    if room <= 0:
+        return not text
+    if not text:
+        return True
+    if text.isascii():
+        wide = widest_char(font_obj)
+        if wide and len(text) * wide <= room:
+            return True
+    return text_width(font_obj, text) <= room
+
+
+def forget_text_widths() -> None:
+    """Drop every remembered width. Only needed if the fonts change,
+    which in this app means a restart - the display scale is applied
+    once, before any widget exists."""
+    _WIDEST.clear()
+    _WIDTHS.clear()
 
 
 def font(size: int = 12, weight: str = "normal", mono: bool = False,
