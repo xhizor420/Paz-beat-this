@@ -74,6 +74,10 @@ class VaultTab(ctk.CTkFrame):
         # player growing a second way to ask.
         self.frames = app.cache
         self.peek = app.peek
+        # Whether anyone is looking, and whether the player still owes
+        # itself a fit - see _fit_player.
+        self._visible = False
+        self._fit_wanted = False
 
         self._results: dict = {}   # tree iid -> Rec
         self._unmatched: list = []
@@ -346,6 +350,8 @@ class VaultTab(ctk.CTkFrame):
         # Sized once the panel has a real width, not from the numbers above.
         self.after(250, self._fit_player)
         self.bind("<Configure>", lambda e: self._player_resize(), add="+")
+        self.bind("<Map>", self._on_map, add="+")
+        self.bind("<Unmap>", self._on_unmap, add="+")
 
     def _player_resize(self) -> None:
         if getattr(self, "_player_job", None):
@@ -372,8 +378,16 @@ class VaultTab(ctk.CTkFrame):
         except tk.TclError:
             return
         if room <= 1:
-            self.after(300, self._fit_player)
+            # No width yet, which for a tab that is not in front means no
+            # width ever. This used to reschedule itself every 300ms for
+            # as long as the app was open - three times a second, forever,
+            # retrying something that could not succeed until someone
+            # looked at this tab. It waits to be shown instead.
+            self._fit_wanted = True
+            if self.visible():
+                self.after(300, self._fit_player)
             return
+        self._fit_wanted = False
         # As wide as the row can spare once the clip list has its minimum.
         # A share of the row was the old rule and it left the picture small
         # on a wide window while the space went nowhere.
@@ -424,9 +438,29 @@ class VaultTab(ctk.CTkFrame):
             bits.append(", ".join(rec.artists[:2]))
         self.player_caption.configure(text="  ·  ".join(bits), text_color=T.DIM)
 
+    def visible(self) -> bool:
+        """Whether this tab is the one on screen. A flag kept by the
+        events, not winfo_ismapped(), which Tk updates a turn late - see
+        LibraryTab.visible for the whole story."""
+        return self._visible
+
+    def _on_map(self, _event=None):
+        self.on_shown()
+
+    def _on_unmap(self, _event=None):
+        self._visible = False
+
+    def on_shown(self) -> None:
+        """This tab is in front now. It has a width at last, so anything
+        that gave up waiting for one can be fitted."""
+        self._visible = True
+        if self._fit_wanted:
+            self._player_resize()
+
     def on_hidden(self) -> None:
         """Another tab is in front now. Sound coming out of a page nobody
         can see is worse than no sound at all."""
+        self._visible = False
         player = getattr(self, "player", None)
         if player is not None and player.playing:
             player.pause()
