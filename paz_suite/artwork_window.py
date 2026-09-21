@@ -60,7 +60,7 @@ class ArtworkWindow(ctk.CTkToplevel):
         # the bottom off the one preview that shows what you are actually
         # going to get.
         extra = 60 if slot.treatments else 0
-        self.geometry(window_size(self, 620, 830 + extra))
+        self.geometry(window_size(self, 670, 830 + extra))
         self.minsize(px(480), px(640 + extra))
         self.configure(fg_color=T.BG)
         self.transient(parent)
