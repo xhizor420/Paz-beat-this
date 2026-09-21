@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .theme import T, font
+from .theme import T, font, window_size
 from .config import AppConfig, CONFIG_PATH
 from .convert_engine import GPU_ENCODERS
 from .media import available_encoders
@@ -26,7 +26,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.app = app
         self.cfg: AppConfig = app.cfg
         self.title("Settings")
-        self.geometry("820x720")
+        self.geometry(window_size(self, 820, 720))
         self.configure(fg_color=T.BG)
         self.transient(parent)
         self.after(120, self.lift)

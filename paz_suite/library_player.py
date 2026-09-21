@@ -92,7 +92,7 @@ class InlinePlayer:
         self.engine.muted = bool(tab.cfg.player_muted) or not HAS_AUDIO
         self._apply_av_offset()
 
-        self.bar = tk.Canvas(self.frame, height=20, bg=T.SURFACE,
+        self.bar = tk.Canvas(self.frame, height=px(self.BAR_H), bg=T.SURFACE,
                               highlightthickness=0, bd=0,
                               cursor="hand2", width=self.VIEW_W)
         self.bar.pack(fill="x", pady=(4, 2))
@@ -619,7 +619,7 @@ class InlinePlayer:
         self._show_stage(False)
         self.canvas.delete("all")
         self.canvas.create_text(self.engine.view_w // 2, self.engine.view_h // 2,
-                                text=text, fill=T.FAINT, font=(T.UI, 11))
+                                text=text, fill=T.FAINT, font=(T.UI, pt(11)))
 
     def _show_thumb(self, rec, delay: int = 0):
         """Draw the resting still. `delay` coalesces a burst of these.
@@ -663,7 +663,7 @@ class InlinePlayer:
                                      image=photo, anchor="center")
             self.canvas.image = photo   # keep a reference
             self.canvas.create_text(self.engine.view_w // 2, self.engine.view_h - 14,
-                                    text="▶ play", fill=T.TEXT, font=(T.UI, 9))
+                                    text="▶ play", fill=T.TEXT, font=(T.UI, pt(9)))
         except Exception:
             self._show_idle_text("no thumbnail")
 
@@ -881,6 +881,21 @@ class InlinePlayer:
     # minutes otherwise, either side of the separator.
     CLOCK_SHAPES = ("00:00.0 / 00:00", "0:00:00.0 / 0:00:00")
 
+    # Hand-drawn sizes for the scrubber, in design pixels - everything
+    # below runs them through px(). The bar is a raw tk.Canvas, which
+    # CustomTkinter does not scale for us, so these were the literal
+    # numbers on screen at every display scaling: a twenty-pixel bar
+    # with a ten-pixel playhead sitting next to a clock that DID scale,
+    # and a grab target on a 4K screen a third the size it was drawn to
+    # be. The pad is shared with _track_width and _scrub_to, which map a
+    # click back to a position and have to agree with what was drawn or
+    # the playhead lands somewhere other than the pointer.
+    BAR_H = 20
+    BAR_PAD = 2
+    BAR_TRACK = 4
+    BAR_HEAD = 5
+    BAR_CLOCK_GAP = 10
+
     def _clock_room(self) -> int:
         """Pixels to keep clear for the clock, measured once per font."""
         font_obj = getattr(self, "_clock_font", None)
@@ -900,10 +915,14 @@ class InlinePlayer:
         c = self.bar
         c.delete("all")
         width = c.winfo_width()
-        if width < 20:
+        if width < px(self.BAR_H):
             return
-        y = 10
-        track_end = width - 2
+        pad = px(self.BAR_PAD)
+        head_r = px(self.BAR_HEAD)
+        # Centred in whatever height the canvas actually got, rather than
+        # half of the height it was asked for.
+        y = max(c.winfo_height() // 2, head_r)
+        track_end = width - pad
         clock_font = getattr(self, "_clock_font", None)
         if self.engine.duration > 0 and clock_font is not None:
             text = (f"{fmt_clock(self.engine.position)} / "
@@ -914,16 +933,19 @@ class InlinePlayer:
             # string is different every time, so measuring it is a fresh
             # round trip into Tcl each frame; and a width that follows the
             # digits makes the track end twitch as 9:59 becomes 10:00.
-            track_end = width - self._clock_room() - 10
-            c.create_text(width - 2, y, text=text, fill=T.DIM,
+            track_end = width - self._clock_room() - px(self.BAR_CLOCK_GAP)
+            c.create_text(width - pad, y, text=text, fill=T.DIM,
                           font=(T.MONO, pt(9)), anchor="e")
-        c.create_line(2, y, track_end, y, fill=T.LINE, width=4, capstyle="round")
+        track = px(self.BAR_TRACK)
+        c.create_line(pad, y, track_end, y, fill=T.LINE, width=track,
+                      capstyle="round")
         if self.engine.duration <= 0:
             return
         frac = max(0.0, min(self.engine.position / self.engine.duration, 1.0))
-        head = 2 + frac * max(track_end - 4, 1)
-        c.create_line(2, y, head, y, fill=T.ACCENT, width=4, capstyle="round")
-        c.create_oval(head - 5, y - 5, head + 5, y + 5,
+        head = pad + frac * max(track_end - 2 * pad, 1)
+        c.create_line(pad, y, head, y, fill=T.ACCENT, width=track,
+                      capstyle="round")
+        c.create_oval(head - head_r, y - head_r, head + head_r, y + head_r,
                       fill=T.ACCENT_HOV, outline="")
         self._track_end = track_end
 
@@ -973,12 +995,13 @@ class InlinePlayer:
         the time sits on the right-hand end, and mapping clicks against
         the full width would put the playhead a little further along than
         wherever you pressed."""
-        end = getattr(self, "_track_end", None) or self.bar.winfo_width() - 2
-        return max(int(end) - 4, 1)
+        pad = px(self.BAR_PAD)
+        end = getattr(self, "_track_end", None) or self.bar.winfo_width() - pad
+        return max(int(end) - 2 * pad, 1)
 
     def _scrub_to(self, x: int, commit: bool) -> None:
         width = self._track_width()
-        frac = max(0.0, min((x - 2) / width, 1.0))
+        frac = max(0.0, min((x - px(self.BAR_PAD)) / width, 1.0))
         position = frac * self.engine.duration
         self._pending_pos = position
         # The bar and clock track the cursor on every event regardless of

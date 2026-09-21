@@ -14,7 +14,8 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import ImageTk
 
-from .theme import (T, BANNER_H, banner_image, font, mark_photo, mix, resolve_fonts)
+from .theme import (T, BANNER_H, banner_image, font, mark_photo, mix, px, pt,
+                    resolve_fonts)
 from .config import AppConfig, CONFIG_DIR
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
@@ -43,12 +44,18 @@ class PazApp:
         self.emeta = E621Meta()
         set_probe_cache_limit(self.cfg.probe_cache_limit)
         self.cache = ThumbCache(limit=self.cfg.frame_cache_limit)  # shared frame/thumbnail cache
+
+        # Before anything that could ask px() or pt() a question. It used
+        # to sit below the two lines after it, and anything either of
+        # them worked out in its constructor was worked out at 100%
+        # whatever the display was doing - which is how the hover bubble
+        # came to be 380 pixels wide on a 150% screen.
+        self._apply_scaling()
+
         self.toaster = Toaster(root)
         self.peek = PeekWindow(root)
         self._icon = None
         self._header_icon = None
-
-        self._apply_scaling()
 
         # Sized to the display rather than to a fixed number. 1760x1020 is
         # a good window on a 1080p screen and a postage stamp on a 4K one -
@@ -201,15 +208,27 @@ class PazApp:
     # just the one piece of chrome no tab should have to own twice: the
     # suite's own name.
 
+    def _band(self) -> int:
+        """The header strip's height in real pixels.
+
+        BANNER_H is a hand-drawn number and this is a raw tk.Canvas, so
+        nothing scaled it: on a 4K screen at 150% the suite's own name
+        sat in a 58-pixel band in 19pt type while every tab below it had
+        grown by half. Read rather than stored, because T.SCALE is
+        settled before any of this is built and the picture is rendered
+        to whatever this returns.
+        """
+        return px(BANNER_H)
+
     def _build_header(self) -> None:
-        self.header = tk.Canvas(self.root, height=BANNER_H, bg=T.BG,
+        self.header = tk.Canvas(self.root, height=self._band(), bg=T.BG,
                                 highlightthickness=0, bd=0)
         self.header.pack(fill="x", side="top")
         self._banner_photo = None
         self._banner_job = None
         self._banner_width = 0
         self._banner_key = None
-        self._header_icon = mark_photo(22, T.ACCENT)
+        self._header_icon = mark_photo(px(22), T.ACCENT)
         self._header_text = ""
         self._header_colour = T.OK
         self.header.bind("<Configure>", self._banner_resized)
@@ -257,7 +276,7 @@ class PazApp:
         """Decode, crop, scale and scrim the header picture. Worker."""
         slot, width = key
         try:
-            picture = banner_image(slot[0], width, BANNER_H,
+            picture = banner_image(slot[0], width, self._band(),
                                    slot[2], slot[3], slot[4])
         except Exception:
             picture = None
@@ -286,17 +305,18 @@ class PazApp:
             if self._banner_photo is not None:
                 self.header.create_image(0, 0, image=self._banner_photo,
                                          anchor="nw")
-            mid = BANNER_H // 2
-            self.header.create_image(20, mid, image=self._header_icon, anchor="w")
-            name = self.header.create_text(52, mid + 1, text="PAZ", anchor="w",
-                                           fill=T.ACCENT,
-                                           font=(T.DISPLAY, 19, "bold"))
+            mid = self._band() // 2
+            self.header.create_image(px(20), mid, image=self._header_icon,
+                                     anchor="w")
+            name = self.header.create_text(px(52), mid + px(1), text="PAZ",
+                                           anchor="w", fill=T.ACCENT,
+                                           font=(T.DISPLAY, pt(19), "bold"))
             # Measured, not guessed: the display family is whatever
             # resolve_fonts() found installed, so "PAZ" is a different
             # width on every machine and a fixed offset collides with it.
-            self.header.create_text(self.header.bbox(name)[2] + 9, mid + 4,
-                                    text="S U I T E", anchor="w",
-                                    fill=T.DIM, font=(T.MONO, 9))
+            self.header.create_text(self.header.bbox(name)[2] + px(9),
+                                    mid + px(4), text="S U I T E", anchor="w",
+                                    fill=T.DIM, font=(T.MONO, pt(9)))
             self._paint_header_status()
         except tk.TclError:
             pass
@@ -310,12 +330,13 @@ class PazApp:
                 return
             width = max(self._banner_width or self.root.winfo_width() or 1760,
                         320)
-            mid = BANNER_H // 2
+            mid = self._band() // 2
             item = self.header.create_text(
-                width - 20, mid, text=self._header_text, anchor="e",
-                fill=T.DIM, font=(T.MONO, 10), tags=("hstatus",))
+                width - px(20), mid, text=self._header_text, anchor="e",
+                fill=T.DIM, font=(T.MONO, pt(10)), tags=("hstatus",))
             left = self.header.bbox(item)[0]
-            self.header.create_oval(left - 15, mid - 4, left - 8, mid + 3,
+            self.header.create_oval(left - px(15), mid - px(4),
+                                    left - px(8), mid + px(3),
                                     fill=self._header_colour, outline="",
                                     tags=("hstatus",))
         except tk.TclError:

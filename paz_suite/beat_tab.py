@@ -19,7 +19,7 @@ from tkinter import filedialog, ttk
 
 import customtkinter as ctk
 
-from .theme import T, font, BEAT_LABELS
+from .theme import T, font, px, pt, column_width, BEAT_LABELS, window_size
 from .format import fmt_clock, fmt_len
 from . import beat_engine as be
 from . import uithread
@@ -362,7 +362,8 @@ class BeatTab(ctk.CTkFrame):
         for key, title, width, anchor in (
                 ("time", "Time", 90, "e"), ("beat", "Beat", 60, "center"),
                 ("kind", "", 110, "w")):
-            self.tree.column(key, width=width, minwidth=40, anchor=anchor)
+            self.tree.column(key, width=column_width(title, width),
+                             minwidth=px(40), anchor=anchor)
             self.tree.heading(key, text=title)
         self.tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         scroll = ctk.CTkScrollbar(tree_wrap, command=self.tree.yview, width=12,
@@ -479,10 +480,17 @@ class BeatTab(ctk.CTkFrame):
             style.theme_use("clam")
         except tk.TclError:
             pass
+        # ttk is raw Tk: CustomTkinter scales nothing here, so a bare
+        # rowheight and a bare point size are the literal numbers on
+        # screen at any display scaling. On a 4K screen at 150% the rows
+        # of this table stayed at their 100% size while every control
+        # around them grew.
         style.configure("B.Treeview", background=T.ROW, fieldbackground=T.ROW,
-                        foreground=T.TEXT, rowheight=26, borderwidth=0, font=(T.UI, 10))
+                        foreground=T.TEXT, rowheight=px(26), borderwidth=0,
+                        font=(T.UI, pt(10)))
         style.configure("B.Treeview.Heading", background=T.ELEVATED, foreground=T.FAINT,
-                        relief="flat", borderwidth=0, font=(T.UI, 9, "bold"), padding=(8, 7))
+                        relief="flat", borderwidth=0, font=(T.UI, pt(9), "bold"),
+                        padding=(px(8), px(7)))
         style.map("B.Treeview.Heading", background=[("active", T.BTN_HOV)])
         style.map("B.Treeview", background=[("selected", T.ROW_SEL)],
                   foreground=[("selected", T.TEXT)])
@@ -498,7 +506,7 @@ class BeatTab(ctk.CTkFrame):
     def _open_help(self) -> None:
         win = ctk.CTkToplevel(self.root)
         win.title("Beat This help")
-        win.geometry("560x420")
+        win.geometry(window_size(win, 560, 420))
         win.configure(fg_color=T.BG)
         text = ctk.CTkTextbox(win, fg_color=T.SURFACE, text_color=T.TEXT,
                               font=font(11), wrap="word")

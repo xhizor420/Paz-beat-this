@@ -12,7 +12,7 @@ from datetime import datetime
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font
+from .theme import T, font, pt, px
 from .format import fmt_size
 
 
@@ -37,7 +37,10 @@ def popup_menu(parent, **kw) -> tk.Menu:
     kw.setdefault("activeforeground", T.ACCENT)
     kw.setdefault("disabledforeground", T.FAINT)
     kw.setdefault("selectcolor", T.ACCENT)
-    kw.setdefault("font", (T.UI, 11))
+    # pt(), not a bare 11: a tk.Menu is raw Tk, so the size it is given
+    # is the size on screen. Every right-click menu in the app comes
+    # through here, and all of them stayed at their 100% size.
+    kw.setdefault("font", (T.UI, pt(11)))
     # bd/relief kill the raised outer frame; activeborderwidth kills the
     # bevel Tk draws around the hovered entry (the single ugliest default).
     kw.setdefault("bd", 0)
@@ -142,8 +145,23 @@ class PeekWindow:
     but disappear).
     """
 
-    W, H, CAP = 380, 214, 24
-    BAR_H = 5
+    # Hand-drawn, at 100%. The bubble is a raw tk.Canvas, which nothing
+    # scales for us, so every one of these is run through px() on the way
+    # out. Read each time rather than resolved once in __init__: the app
+    # builds this object four lines BEFORE it applies the display
+    # scaling, so anything worked out in the constructor is worked out
+    # at 100% whatever the display is doing. (Measured, not assumed -
+    # the first attempt did exactly that and produced a 380px bubble on
+    # a 150% screen.) px() is a multiply and a round.
+    DESIGN_W, DESIGN_H, DESIGN_CAP = 380, 214, 24
+    DESIGN_BAR_H = 5
+    DESIGN_EDGE = 3
+
+    W = property(lambda self: px(self.DESIGN_W))
+    H = property(lambda self: px(self.DESIGN_H))
+    CAP = property(lambda self: px(self.DESIGN_CAP))
+    BAR_H = property(lambda self: px(self.DESIGN_BAR_H))
+    EDGE = property(lambda self: px(self.DESIGN_EDGE))
 
     def __init__(self, master):
         self.master = master
@@ -170,16 +188,16 @@ class PeekWindow:
 
     def _place(self, x_root: int, y_root: int) -> None:
         w, h = self.W + 2, self.H + self.BAR_H + self.CAP + 2
-        x = x_root + 18
-        y = y_root - h - 16
+        x = x_root + px(18)
+        y = y_root - h - px(16)
         screen_w = self.win.winfo_screenwidth()
         screen_h = self.win.winfo_screenheight()
-        if x + w > screen_w - 8:
-            x = x_root - w - 18
-        if y < 8:
-            y = y_root + 24
-        if y + h > screen_h - 8:
-            y = screen_h - h - 8
+        if x + w > screen_w - px(8):
+            x = x_root - w - px(18)
+        if y < px(8):
+            y = y_root + px(24)
+        if y + h > screen_h - px(8):
+            y = screen_h - h - px(8)
         self.win.geometry(f"{w}x{h}+{max(int(x), 0)}+{max(int(y), 0)}")
 
     def _progress_bar(self, fraction: float | None) -> None:
@@ -192,7 +210,7 @@ class PeekWindow:
             return
         self.canvas.create_rectangle(0, y0, fill_w, y1, fill=T.ACCENT, outline="")
         # a bright leading edge, like the scrub head on a real seek bar
-        head = max(fill_w - 3, 0)
+        head = max(fill_w - self.EDGE, 0)
         self.canvas.create_rectangle(head, y0, fill_w, y1, fill=T.ACCENT_HOV, outline="")
 
     def _caption(self, title: str, sub: str) -> None:
@@ -201,11 +219,11 @@ class PeekWindow:
         self.canvas.create_rectangle(0, top, self.W, top + self.CAP,
                                       fill=T.ELEVATED, outline="")
         if title:
-            self.canvas.create_text(10, y, text=title, fill=T.DIM,
-                                     font=(T.UI, 9), anchor="w")
+            self.canvas.create_text(px(10), y, text=title, fill=T.DIM,
+                                     font=(T.UI, pt(9)), anchor="w")
         if sub:
-            self.canvas.create_text(self.W - 10, y, text=sub, fill=T.ACCENT,
-                                     font=(T.MONO, 9), anchor="e")
+            self.canvas.create_text(self.W - px(10), y, text=sub, fill=T.ACCENT,
+                                     font=(T.MONO, pt(9)), anchor="e")
 
     def show_frame(self, data: bytes | None, title: str, sub: str,
                    x_root: int, y_root: int, fraction: float | None = None) -> None:
@@ -230,7 +248,7 @@ class PeekWindow:
                 data = None
         if not data:
             self.canvas.create_text(self.W // 2, self.H // 2, text="no frame",
-                                     fill=T.FAINT, font=(T.UI, 10))
+                                     fill=T.FAINT, font=(T.UI, pt(10)))
         self._progress_bar(fraction)
         self._caption(title, sub)
         self._place(x_root, y_root)
@@ -243,7 +261,7 @@ class PeekWindow:
         self.canvas.delete("all")
         self._img = None
         self.canvas.create_text(self.W // 2, self.H // 2, text=message,
-                                 fill=T.FAINT, font=(T.UI, 10))
+                                 fill=T.FAINT, font=(T.UI, pt(10)))
         self._progress_bar(None)
         self._caption(title, "")
         self._place(x_root, y_root)
@@ -283,11 +301,11 @@ class Toaster:
         outer.pack(fill="both", expand=True)
         inner = tk.Frame(outer, bg=T.ELEVATED, bd=0)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
-        self.stripe = tk.Frame(inner, bg=T.ACCENT, width=4)
+        self.stripe = tk.Frame(inner, bg=T.ACCENT, width=px(4))
         self.stripe.pack(side="left", fill="y")
         self.label = tk.Label(inner, bg=T.ELEVATED, fg=T.TEXT,
-                               font=(T.UI, 10), justify="left",
-                               wraplength=330, padx=12, pady=10)
+                               font=(T.UI, pt(10)), justify="left",
+                               wraplength=px(330), padx=px(12), pady=px(10))
         self.label.pack(side="left", fill="both", expand=True)
 
     def show(self, text: str, level: str = "ok", ms: int = 4200) -> None:
@@ -307,8 +325,8 @@ class Toaster:
         self.win.update_idletasks()
         w = self.win.winfo_reqwidth()
         h = self.win.winfo_reqheight()
-        x = self.root.winfo_rootx() + self.root.winfo_width() - w - 24
-        y = self.root.winfo_rooty() + self.root.winfo_height() - h - 24
+        x = self.root.winfo_rootx() + self.root.winfo_width() - w - px(24)
+        y = self.root.winfo_rooty() + self.root.winfo_height() - h - px(24)
         self.win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
         self.win.deiconify()
         self._after = self.root.after(ms, self.hide)
@@ -412,8 +430,10 @@ class LogView(ctk.CTkFrame):
                       text_color=T.DIM, command=self.clear).grid(row=0, column=2)
 
         self.text = tk.Text(
-            self, wrap=tk.WORD, font=(T.MONO, 10), bg=T.INPUT, fg=T.DIM,
-            relief=tk.FLAT, padx=12, pady=9, borderwidth=0,
+            self, wrap=tk.WORD, font=(T.MONO, pt(10)), bg=T.INPUT, fg=T.DIM,
+            # height is in lines, so it follows the font by itself;
+            # the padding is pixels and does not.
+            relief=tk.FLAT, padx=px(12), pady=px(9), borderwidth=0,
             insertbackground=T.DIM, selectbackground=T.ACCENT_DEEP,
             selectforeground=T.TEXT, state="disabled", height=8,
         )

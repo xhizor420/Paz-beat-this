@@ -29,7 +29,7 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, unscaled, VAULT_LABELS
+from .theme import T, font, px, pt, unscaled, column_width, VAULT_LABELS
 from .format import fmt_clock, fmt_short, fmt_size
 from .config import THUMB_DIR
 from .media import fit_frame, round_corners, thumb_key
@@ -190,7 +190,8 @@ class VaultTab(ctk.CTkFrame):
                 ("name", "File", 220, "w"), ("artist", "Artist", 130, "w"),
                 ("res", "Resolution", 90, "w"), ("len", "Length", 64, "e"),
                 ("used", "Already used in", 190, "w")):
-            self.tree.column(key, width=width, minwidth=60, anchor=anchor)
+            self.tree.column(key, width=column_width(title, width),
+                             minwidth=px(60), anchor=anchor)
             self.tree.heading(key, text=title)
         self.tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         scroll = ctk.CTkScrollbar(tree_wrap, command=self.tree.yview, width=12,
@@ -222,10 +223,15 @@ class VaultTab(ctk.CTkFrame):
             style.theme_use("clam")
         except tk.TclError:
             pass
+        # ttk is raw Tk - see the same style in convert_widgets and
+        # beat_tab. None of these numbers were scaled, so the table sat
+        # at its 100% size on a display where everything else had grown.
         style.configure("V.Treeview", background=T.ROW, fieldbackground=T.ROW,
-                        foreground=T.TEXT, rowheight=26, borderwidth=0, font=(T.UI, 10))
+                        foreground=T.TEXT, rowheight=px(26), borderwidth=0,
+                        font=(T.UI, pt(10)))
         style.configure("V.Treeview.Heading", background=T.ELEVATED, foreground=T.FAINT,
-                        relief="flat", borderwidth=0, font=(T.UI, 9, "bold"), padding=(8, 7))
+                        relief="flat", borderwidth=0, font=(T.UI, pt(9), "bold"),
+                        padding=(px(8), px(7)))
         style.map("V.Treeview.Heading", background=[("active", T.BTN_HOV)])
         style.map("V.Treeview", background=[("selected", T.ROW_SEL)],
                   foreground=[("selected", T.TEXT)])
@@ -311,8 +317,9 @@ class VaultTab(ctk.CTkFrame):
         for key, title, width, anchor, stretch in (
                 ("name", "File", 150, "w", True),
                 ("len", "Len", 58, "e", False)):
-            self.project_tree.column(key, width=width, minwidth=48,
-                                     anchor=anchor, stretch=stretch)
+            self.project_tree.column(key, width=column_width(title, width),
+                                     minwidth=px(48), anchor=anchor,
+                                     stretch=stretch)
             self.project_tree.heading(key, text=title)
         self.project_tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         list_scroll = ctk.CTkScrollbar(list_wrap, command=self.project_tree.yview, width=12,
@@ -866,7 +873,7 @@ class VaultTab(ctk.CTkFrame):
         c = self.strip_canvas
         c.delete("all")
         c.create_text(10, (self.STRIP_H + 8) // 2, text=text, fill=T.FAINT,
-                      font=(T.UI, 10), anchor="w")
+                      font=(T.UI, pt(10)), anchor="w")
         c.configure(scrollregion=(0, 0, 0, self.STRIP_H + 8))
 
     def _draw_strip(self) -> None:
@@ -884,7 +891,7 @@ class VaultTab(ctk.CTkFrame):
                                fill=T.INPUT, outline=T.ACCENT3 if selected else T.LINE,
                                width=2 if selected else 1, tags=(f"cell{index}", f"rect{index}"))
             c.create_text(x + self.STRIP_W // 2, 2 + self.STRIP_H // 2, text="…",
-                          fill=T.FAINT, font=(T.UI, 9), tags=(f"ph{index}", f"cell{index}"))
+                          fill=T.FAINT, font=(T.UI, pt(9)), tags=(f"ph{index}", f"cell{index}"))
             x += self.STRIP_W + self.STRIP_GAP
         c.configure(scrollregion=(0, 0, x, self.STRIP_H + 8))
         clips = list(self._project_clips)

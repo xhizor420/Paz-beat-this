@@ -31,6 +31,19 @@ E621_API = "https://e621.net/posts/{pid}.json"
 E621_POST = "https://e621.net/posts/{pid}"
 E621_UA = f"{APP_NAME}/{APP_VERSION} (personal library tagger)"
 
+# The only answers that mean "this post is not coming back": it does not
+# exist, or it has been deleted. Those are worth remembering, so the post
+# is never asked about again. Every other HTTP status is about the
+# request rather than the post - see fetch().
+GONE_FOR_GOOD = frozenset({404, 410})
+
+# How many failures in an unbroken run mean a fetch run should stop. One
+# post can fail on its own; this many cannot, and at a second apiece a
+# ten-thousand-post library would spend three hours finding that out.
+# Nothing is cached from a failed fetch, so the posts not reached are
+# simply first in the queue next time.
+GIVE_UP_AFTER = 8
+
 # Artist-category tags that aren't actually artists.
 _ARTIST_NOISE = {"conditional_dnp", "avoid_posting", "unknown_artist",
                   "sound_warning", "epilepsy_warning", "third-party_edit"}
@@ -179,6 +192,18 @@ class E621Meta:
             with urllib.request.urlopen(request, timeout=20) as resp:
                 payload = json.load(resp)
         except urllib.error.HTTPError as exc:
+            if exc.code not in GONE_FOR_GOOD:
+                # Everything else is about the request, not the post. A
+                # 429 is the rate limit, a 503 is e621 or its front end
+                # having a moment, a 401 is a key that has expired, a 500
+                # is their problem. Caching any of those as `missing` was
+                # permanent: `missing` is the one flag is_stale() will
+                # never re-check and _fetch_tags only queues posts with
+                # no record at all, so a post marked that way is never
+                # asked about again. One rate-limited run through a
+                # ten-thousand-clip library would have silently condemned
+                # every post it touched to stay untagged for good.
+                return {"error": f"HTTP {exc.code}"}
             record = {"missing": True, "error": f"HTTP {exc.code}"}
         except (urllib.error.URLError, OSError, ValueError) as exc:
             return {"error": str(exc)}          # transient: do not cache
