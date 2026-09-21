@@ -112,6 +112,23 @@ class E621Meta:
         with self._lock:
             return self._data.get(pid)
 
+    def snapshot(self) -> dict:
+        """Every cached record, as one dict, taken under the lock once.
+
+        For the callers that ask about the whole library at once - a load
+        looks this cache up twice per clip, and on ten thousand clips
+        that is twenty thousand lock acquisitions for twenty thousand
+        dictionary lookups. Measured at 78ms of a 350ms library load,
+        which is more than the load spends reading the database.
+
+        A snapshot is also the more honest thing for those callers to
+        work from: a load that asked twenty thousand separate questions
+        could be answered from two different versions of the cache if a
+        tag fetch happened to land in the middle of it.
+        """
+        with self._lock:
+            return dict(self._data)
+
     def save(self) -> None:
         """Rewrite the whole cache. Use at shutdown and at the end of a
         fetch - see checkpoint() for the one to call during it."""

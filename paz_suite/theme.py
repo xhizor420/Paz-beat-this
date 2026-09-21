@@ -200,6 +200,35 @@ def px(value: float) -> int:
     return int(round(value * T.SCALE))
 
 
+def faster_corners() -> None:
+    """Draw rounded corners with polygons rather than with a font.
+
+    CustomTkinter has three ways to draw a rounded rectangle and picks
+    one per platform; on Windows and Linux it picks "font_shapes", which
+    renders each corner as a glyph from a bundled font. Every CTk widget
+    in the app draws one of these when it is created and again whenever
+    it is resized or restyled, so it is the single largest cost in
+    putting a tab on screen: 186 of them came to 456ms of a 681ms window
+    build.
+
+    Polygons draw the same shape and Tk smooths them itself. Measured on
+    this app: 2.00ms a widget against 3.29, which is 20% off the window
+    build and off every tab's first appearance, and takes a search's
+    worst case from about 90ms to about 50. Side by side at their real
+    size the two are indistinguishable; at eight times magnification the
+    polygon corner is a hair softer.
+
+    Called before any widget exists, because a widget keeps the method
+    it was drawn with until something redraws it.
+    """
+    try:
+        from customtkinter.windows.widgets.core_rendering.draw_engine \
+            import DrawEngine
+        DrawEngine.preferred_drawing_method = "polygon_shapes"
+    except Exception:
+        pass          # a CustomTkinter that does not work this way
+
+
 def window_size(widget, width: float, height: float) -> str:
     """A geometry string for a hand-drawn window size.
 

@@ -171,6 +171,11 @@ class FakeTab:
     def _draw_progress(self, index, frac):
         self.painted.append((index, round(frac, 4)))
 
+    def _restyle_card(self, index):
+        # Hovering repaints the two cards whose outline changes, not the
+        # whole page - see LibraryTab._set_hover.
+        self.restyled += 1
+
     def _restyle_cards(self):
         self.restyled += 1
 

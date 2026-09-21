@@ -80,6 +80,11 @@ class FakeTab:
     def _restyle_cards(self):
         self.repainted.append("cards")
 
+    def _restyle_these(self, *recs):
+        # A mark repaints the clips that were marked, not the page -
+        # see LibraryTab._after_vault_change.
+        self.repainted.append("cards")
+
     def _draw_badges(self, index, rec, slot):
         self.repainted.append(rec.name)
 

@@ -14,8 +14,8 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import ImageTk
 
-from .theme import (T, BANNER_H, banner_image, font, mark_photo, mix, px, pt,
-                    resolve_fonts)
+from .theme import (T, BANNER_H, banner_image, faster_corners, font,
+                    mark_photo, mix, px, pt, resolve_fonts)
 from .config import AppConfig, CONFIG_DIR
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
@@ -45,11 +45,13 @@ class PazApp:
         set_probe_cache_limit(self.cfg.probe_cache_limit)
         self.cache = ThumbCache(limit=self.cfg.frame_cache_limit)  # shared frame/thumbnail cache
 
-        # Before anything that could ask px() or pt() a question. It used
-        # to sit below the two lines after it, and anything either of
-        # them worked out in its constructor was worked out at 100%
-        # whatever the display was doing - which is how the hover bubble
-        # came to be 380 pixels wide on a 150% screen.
+        # Both before anything that could ask px() or pt() a question,
+        # or draw a rounded corner. _apply_scaling used to sit below the
+        # two lines after it, and anything either of them worked out in
+        # its constructor was worked out at 100% whatever the display
+        # was doing - which is how the hover bubble came to be 380
+        # pixels wide on a 150% screen.
+        faster_corners()
         self._apply_scaling()
 
         self.toaster = Toaster(root)

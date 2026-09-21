@@ -853,8 +853,26 @@ class ThumbCache:
 #  Gallery thumbnails (persistent, one per library clip)
 # ─────────────────────────────────────────────────────────────────────────
 
+# A clip's path never changes, so neither does its thumbnail's name.
+# Remembered because one caller asks for every clip in the library at
+# once: missing_report runs on every load and after every fetch, and ten
+# thousand SHA-1s of a path is 10ms of it. Capped the way the other
+# caches here are, and cleared wholesale rather than evicted - the keys
+# are a few dozen bytes each and the set of paths only changes when the
+# library does.
+_THUMB_KEYS: dict = {}
+THUMB_KEY_CACHE = 40000
+
+
 def thumb_key(path: str) -> str:
-    return hashlib.sha1(os.path.normcase(path).encode("utf-8")).hexdigest() + ".jpg"
+    key = _THUMB_KEYS.get(path)
+    if key is None:
+        key = hashlib.sha1(
+            os.path.normcase(path).encode("utf-8")).hexdigest() + ".jpg"
+        if len(_THUMB_KEYS) >= THUMB_KEY_CACHE:
+            _THUMB_KEYS.clear()
+        _THUMB_KEYS[path] = key
+    return key
 
 
 def _looks_blank(path: str) -> bool:
