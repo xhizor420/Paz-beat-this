@@ -3019,10 +3019,25 @@ class LibraryTab(ctk.CTkFrame):
         self._draw_tick(index, slot["rec"], slot)
 
     def _restyle_cards(self):
-        """The whole page. For what changes a page at a time - marking,
-        a project colour, the selection moving by keyboard."""
+        """The whole page. For what changes a page at a time - marking
+        a batch, a project colour, a fresh set of tags."""
         for index in range(len(self._layout)):
             self._restyle_card(index)
+
+    def _restyle_these(self, *recs) -> None:
+        """Just the cards showing these clips.
+
+        Moving the selection changes two outlines - the clip leaving it
+        and the clip taking it - and _card_outline reads nothing else
+        that a selection touches. Walking forty-eight slots in Python to
+        find the two is free; sending forty-eight repaints into Tcl is
+        not."""
+        wanted = {rec.path for rec in recs if rec is not None}
+        if not wanted:
+            return
+        for index, slot in enumerate(self._layout):
+            if slot["rec"].path in wanted:
+                self._restyle_card(index)
 
     def _set_hover(self, index):
         was = self._hover_index
@@ -3832,8 +3847,8 @@ class LibraryTab(ctk.CTkFrame):
         self._said_marks = bool(count)
 
     def _select(self, rec: Rec):
-        self.selected = rec
-        self._restyle_cards()
+        was, self.selected = self.selected, rec
+        self._restyle_these(was, rec)
         self._render_details()
         self._report_marks()
 
