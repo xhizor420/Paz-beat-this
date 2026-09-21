@@ -96,9 +96,15 @@ def rank(records, target, weights: dict) -> list:
     if not target_tags:
         return list(records)
 
+    # Rec caches its own lowercased name, but everything else in this
+    # module reads its records through getattr so it can be handed any
+    # record-shaped object. Keep that here too.
+    def tie(rec) -> str:
+        return getattr(rec, "sort_name", "") or rec.name.lower()
+
     def key(rec):
         if rec.path == target.path:
-            return (-1e9, rec.name.lower())
-        return (-score(rec, target_tags, target_named, weights), rec.name.lower())
+            return (-1e9, tie(rec))
+        return (-score(rec, target_tags, target_named, weights), tie(rec))
 
     return sorted(records, key=key)

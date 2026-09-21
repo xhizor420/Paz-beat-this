@@ -1535,7 +1535,7 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── library loading ─────────────────────────────────────────────────────
 
-    def _apply_meta(self, rec: Rec, universe=None) -> None:
+    def _apply_meta(self, rec: Rec, universe=None, cached=None) -> None:
         """Fold this clip's cached e621 record into it. Split out of the
         load so a fetch can update the handful of clips it touched instead
         of re-reading the whole library, which is over a second once the
@@ -1544,10 +1544,19 @@ class LibraryTab(ctk.CTkFrame):
         `universe` is where the tags are collected: a load off the UI
         thread passes its own set, so it cannot write into the one the
         window is currently searching against.
+
+        `cached` is an E621Meta.snapshot(), for the caller doing this ten
+        thousand times in a row - emeta.get() takes a lock, and twenty
+        thousand of those was 78ms of a library load.
         """
         if universe is None:
             universe = self.tag_universe
-        meta = self.emeta.get(rec.pid) if rec.pid else None
+        if not rec.pid:
+            meta = None
+        elif cached is not None:
+            meta = cached.get(rec.pid)
+        else:
+            meta = self.emeta.get(rec.pid)
         if not meta or meta.get("missing"):
             return
         rec.artists = list(meta.get("artist") or [])
@@ -1710,9 +1719,10 @@ class LibraryTab(ctk.CTkFrame):
                 pass
 
         records, by_path, universe = [], {}, set()
+        cached = self.emeta.snapshot()
         for row in rows:
             rec = Rec(*row)
-            self._apply_meta(rec, universe)
+            self._apply_meta(rec, universe, cached)
             alt_path = premium.get(rec.folder, {}).get(rec.name)
             rec.premium = rec.height >= 2000 or alt_path is not None
             rec.premium_path = alt_path or ""
@@ -4812,19 +4822,39 @@ class LibraryTab(ctk.CTkFrame):
         get permanently stuck (a Sync, not Fix missing, is what clears a
         deleted file out of the index).
         """
+        # The thumbnails are one flat folder, so ask the filesystem for
+        # its contents once instead of asking it about ten thousand
+        # files one at a time. Measured on this library: 18ms of stat
+        # calls became 1.7ms of listdir plus 0.6ms of set lookups.
+        try:
+            have_thumbs = set(os.listdir(THUMB_DIR))
+        except OSError:
+            have_thumbs = set()
+
+        cached = self.emeta.snapshot()
         no_tags, no_probe, no_thumb, no_id = [], [], [], 0
         seen_pid = set()
         for rec in self.records:
             if not rec.pid:
                 no_id += 1
-            elif self.emeta.get(rec.pid) is None and rec.pid not in seen_pid:
+            elif rec.pid not in cached and rec.pid not in seen_pid:
                 seen_pid.add(rec.pid)
                 no_tags.append(rec.pid)
+            needs_probe = rec.duration <= 0 or not rec.width
+            # Asked last, and only of a clip that is actually missing
+            # something. A clip with a duration and a thumbnail is
+            # counted in neither list whatever this answers, so the
+            # question was pure cost - and it is a stat against the
+            # library drive, which on a three-terabyte external disk is
+            # the slowest question this app asks. Ten thousand of them
+            # ran on every load, on the UI thread.
+            if not needs_probe and thumb_key(rec.path) in have_thumbs:
+                continue
             if not os.path.exists(rec.path):
                 continue
-            if rec.duration <= 0 or not rec.width:
+            if needs_probe:
                 no_probe.append(rec)
-            elif not os.path.exists(os.path.join(THUMB_DIR, thumb_key(rec.path))):
+            else:
                 no_thumb.append(rec)
         return {"tags": no_tags, "probe": no_probe, "thumbs": no_thumb, "no_id": no_id}
 
