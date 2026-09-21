@@ -44,12 +44,18 @@ class PazApp:
         self.emeta = E621Meta()
         set_probe_cache_limit(self.cfg.probe_cache_limit)
         self.cache = ThumbCache(limit=self.cfg.frame_cache_limit)  # shared frame/thumbnail cache
+
+        # Before anything that could ask px() or pt() a question. It used
+        # to sit below the two lines after it, and anything either of
+        # them worked out in its constructor was worked out at 100%
+        # whatever the display was doing - which is how the hover bubble
+        # came to be 380 pixels wide on a 150% screen.
+        self._apply_scaling()
+
         self.toaster = Toaster(root)
         self.peek = PeekWindow(root)
         self._icon = None
         self._header_icon = None
-
-        self._apply_scaling()
 
         # Sized to the display rather than to a fixed number. 1760x1020 is
         # a good window on a 1080p screen and a postage stamp on a 4K one -

@@ -192,8 +192,12 @@ def offenders(pattern):
 
 def test_no_raw_tk_font_size_is_left_unscaled():
     """font=(T.UI, 10) is 10pt on every display. pt(10) is 10pt at 100%
-    and 15 at 150%, which is the same size to the eye."""
-    assert offenders(r"font=\(T\.(UI|MONO|DISPLAY),\s*\d") == []
+    and 15 at 150%, which is the same size to the eye.
+
+    The pattern catches a tuple font wherever it is written - handed to a
+    canvas item, a ttk style, or defaulted into a tk.Menu, which is how
+    every right-click menu in the app stayed small."""
+    assert offenders(r"\(T\.(UI|MONO|DISPLAY),\s*\d") == []
 
 
 def test_no_treeview_row_height_is_left_unscaled():
