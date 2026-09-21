@@ -1319,8 +1319,8 @@ class LibraryTab(ctk.CTkFrame):
         elif self.player.playing:
             self.player.pause()
         elif self.selected:
-            self.selected = None
-            self._restyle_cards()
+            was, self.selected = self.selected, None
+            self._restyle_these(was)
             self._render_details()
         return "break"
 
@@ -4612,7 +4612,12 @@ class LibraryTab(ctk.CTkFrame):
         """Repaint what a mark or unmark actually changed - and nothing
         else. The page, the scroll position, the selection and the search
         results all stay exactly as they were."""
-        self._restyle_cards()
+        # The clips that were marked, not the page. A mark changes
+        # used_projects and used_color on those records and on nothing
+        # else, and _card_outline reads nothing else a mark touches - so
+        # the other cards were being repainted to look exactly as they
+        # already did. A picking session is hundreds of marks.
+        self._restyle_these(*recs)
         for index, slot in enumerate(self._layout):
             if any(slot["rec"] is rec for rec in recs):
                 self._draw_badges(index, slot["rec"], slot)
