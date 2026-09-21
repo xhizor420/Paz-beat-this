@@ -3004,18 +3004,33 @@ class LibraryTab(ctk.CTkFrame):
             return T.ACCENT2, 2
         return T.LINE, 1
 
+    def _restyle_card(self, index: int) -> None:
+        """One card's outline and tick. Hovering changes exactly two of
+        them - the card being left and the card being entered - and a
+        sweep across the gallery raises that several times a second, so
+        it is worth not repainting the other forty-six each time."""
+        if index is None or not (0 <= index < len(self._layout)):
+            return
+        slot = self._layout[index]
+        colour, width = self._card_outline(
+            slot["rec"], hover=(index == self._hover_index))
+        self.gallery.itemconfigure(f"cardline{index}", outline=colour,
+                                   width=width)
+        self._draw_tick(index, slot["rec"], slot)
+
     def _restyle_cards(self):
-        for index, slot in enumerate(self._layout):
-            colour, width = self._card_outline(
-                slot["rec"], hover=(index == self._hover_index))
-            self.gallery.itemconfigure(f"cardline{index}", outline=colour, width=width)
-            self._draw_tick(index, slot["rec"], slot)
+        """The whole page. For what changes a page at a time - marking,
+        a project colour, the selection moving by keyboard."""
+        for index in range(len(self._layout)):
+            self._restyle_card(index)
 
     def _set_hover(self, index):
-        if index == self._hover_index:
+        was = self._hover_index
+        if index == was:
             return
         self._hover_index = index
-        self._restyle_cards()
+        self._restyle_card(was)
+        self._restyle_card(index)
         self._scrub_stop()
         self._preview_stop()
         self._preview_arm(index)
@@ -3061,7 +3076,7 @@ class LibraryTab(ctk.CTkFrame):
             return
         if self._hover_index == index:
             self._hover_index = None
-            self._restyle_cards()
+            self._restyle_card(index)
         self._scrub_stop()
         self._preview_stop()
 
