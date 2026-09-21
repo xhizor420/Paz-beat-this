@@ -431,7 +431,9 @@ class LogView(ctk.CTkFrame):
 
         self.text = tk.Text(
             self, wrap=tk.WORD, font=(T.MONO, pt(10)), bg=T.INPUT, fg=T.DIM,
-            relief=tk.FLAT, padx=12, pady=9, borderwidth=0,
+            # height is in lines, so it follows the font by itself;
+            # the padding is pixels and does not.
+            relief=tk.FLAT, padx=px(12), pady=px(9), borderwidth=0,
             insertbackground=T.DIM, selectbackground=T.ACCENT_DEEP,
             selectforeground=T.TEXT, state="disabled", height=8,
         )
