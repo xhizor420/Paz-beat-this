@@ -200,6 +200,29 @@ def px(value: float) -> int:
     return int(round(value * T.SCALE))
 
 
+def window_size(widget, width: float, height: float) -> str:
+    """A geometry string for a hand-drawn window size.
+
+    Two things have to happen and neither is optional. The size is
+    scaled, because CustomTkinter draws the contents at the display
+    scaling while a geometry string is literal screen pixels - a window
+    asked for at a bare 640x560 fits its own contents at 100% and
+    squeezes them at anything above it. And the result is clamped to the
+    screen, because scaling a big window at 200% can ask for more room
+    than the display has, and a window taller than the desktop puts its
+    own buttons somewhere nobody can click. The main window has done
+    both since it was written; every other window here was doing
+    neither.
+    """
+    want_w, want_h = px(width), px(height)
+    try:
+        room_w = max(int(widget.winfo_screenwidth()) - 80, 480)
+        room_h = max(int(widget.winfo_screenheight()) - 120, 400)
+    except Exception:
+        return f"{want_w}x{want_h}"
+    return f"{min(want_w, room_w)}x{min(want_h, room_h)}"
+
+
 def unscaled(value: float) -> int:
     """Real screen pixels -> the units CustomTkinter wants.
 
@@ -357,6 +380,42 @@ def font(size: int = 12, weight: str = "normal", mono: bool = False,
     else:
         family = T.UI
     return ctk.CTkFont(family=family, size=size, weight=weight)
+
+
+_HEADING_FONTS: dict = {}
+
+
+def column_width(title: str, design_width: float, size: int = 9,
+                 padding: int = 8) -> int:
+    """How wide a ttk table column has to be, in real pixels.
+
+    The hand-drawn width, scaled - but never narrower than the column's
+    own heading. The two do not scale together: a width times 1.5 is
+    exactly 1.5 times as wide, while pt(9) rounds up to 14 and a font's
+    advance widths round again on top of that. Scaling the widths alone
+    left "Resolution" needing 141 pixels in a 132-pixel column and
+    "Length" 100 in 94 - each table clipping its own headings on the one
+    display it was being used on.
+
+    Measured with a real font rather than estimated, once per size, and
+    the answer remembered by text_width.
+    """
+    want = px(design_width)
+    key = (T.UI, pt(size))
+    heading = _HEADING_FONTS.get(key)
+    if heading is None:
+        try:
+            import tkinter.font as tkfont
+            heading = tkfont.Font(family=T.UI, size=pt(size), weight="bold")
+        except Exception:
+            return want          # no root yet; the scaled width will do
+        _HEADING_FONTS[key] = heading
+    return max(want, text_width(heading, title) + 2 * px(padding) + px(4))
+
+
+def forget_heading_fonts() -> None:
+    """Only needed by tests that change the scale between windows."""
+    _HEADING_FONTS.clear()
 
 
 def restyle(widget, **options) -> None:

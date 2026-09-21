@@ -17,7 +17,7 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from . import artwork
-from .theme import T, font, px, pt
+from .theme import T, font, px, pt, window_size
 
 # The source preview, which the crop rectangle is dragged around on.
 VIEW_W, VIEW_H = 520, 300
@@ -59,9 +59,9 @@ class ArtworkWindow(ctk.CTkToplevel):
         # slot's own shape. It was short by about thirty pixels, which cut
         # the bottom off the one preview that shows what you are actually
         # going to get.
-        extra = px(60) if slot.treatments else 0
-        self.geometry(f"{px(600)}x{px(760) + extra}")
-        self.minsize(px(480), px(640) + extra)
+        extra = 60 if slot.treatments else 0
+        self.geometry(window_size(self, 620, 830 + extra))
+        self.minsize(px(480), px(640 + extra))
         self.configure(fg_color=T.BG)
         self.transient(parent)
         self.after(120, self.lift)

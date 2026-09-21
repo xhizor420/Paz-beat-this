@@ -12,7 +12,7 @@ from datetime import datetime
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font
+from .theme import T, font, pt
 from .format import fmt_size
 
 
@@ -202,10 +202,10 @@ class PeekWindow:
                                       fill=T.ELEVATED, outline="")
         if title:
             self.canvas.create_text(10, y, text=title, fill=T.DIM,
-                                     font=(T.UI, 9), anchor="w")
+                                     font=(T.UI, pt(9)), anchor="w")
         if sub:
             self.canvas.create_text(self.W - 10, y, text=sub, fill=T.ACCENT,
-                                     font=(T.MONO, 9), anchor="e")
+                                     font=(T.MONO, pt(9)), anchor="e")
 
     def show_frame(self, data: bytes | None, title: str, sub: str,
                    x_root: int, y_root: int, fraction: float | None = None) -> None:
@@ -230,7 +230,7 @@ class PeekWindow:
                 data = None
         if not data:
             self.canvas.create_text(self.W // 2, self.H // 2, text="no frame",
-                                     fill=T.FAINT, font=(T.UI, 10))
+                                     fill=T.FAINT, font=(T.UI, pt(10)))
         self._progress_bar(fraction)
         self._caption(title, sub)
         self._place(x_root, y_root)
@@ -243,7 +243,7 @@ class PeekWindow:
         self.canvas.delete("all")
         self._img = None
         self.canvas.create_text(self.W // 2, self.H // 2, text=message,
-                                 fill=T.FAINT, font=(T.UI, 10))
+                                 fill=T.FAINT, font=(T.UI, pt(10)))
         self._progress_bar(None)
         self._caption(title, "")
         self._place(x_root, y_root)
@@ -286,7 +286,7 @@ class Toaster:
         self.stripe = tk.Frame(inner, bg=T.ACCENT, width=4)
         self.stripe.pack(side="left", fill="y")
         self.label = tk.Label(inner, bg=T.ELEVATED, fg=T.TEXT,
-                               font=(T.UI, 10), justify="left",
+                               font=(T.UI, pt(10)), justify="left",
                                wraplength=330, padx=12, pady=10)
         self.label.pack(side="left", fill="both", expand=True)
 
@@ -412,7 +412,7 @@ class LogView(ctk.CTkFrame):
                       text_color=T.DIM, command=self.clear).grid(row=0, column=2)
 
         self.text = tk.Text(
-            self, wrap=tk.WORD, font=(T.MONO, 10), bg=T.INPUT, fg=T.DIM,
+            self, wrap=tk.WORD, font=(T.MONO, pt(10)), bg=T.INPUT, fg=T.DIM,
             relief=tk.FLAT, padx=12, pady=9, borderwidth=0,
             insertbackground=T.DIM, selectbackground=T.ACCENT_DEEP,
             selectforeground=T.TEXT, state="disabled", height=8,

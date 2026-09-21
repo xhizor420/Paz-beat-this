@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .theme import T, font, px, unscaled
+from .theme import T, font, px, unscaled, window_size
 from .files import is_ignored_dir, open_in_explorer
 from .convert_engine import verify
 from . import uithread
@@ -25,7 +25,7 @@ class HiddenTagsWindow(ctk.CTkToplevel):
         super().__init__(parent)
         self.tab = tab
         self.title("Hidden tags")
-        self.geometry("420x520")
+        self.geometry(window_size(self, 420, 520))
         self.configure(fg_color=T.BG)
         self.transient(parent)
         self.after(120, self.lift)
@@ -164,7 +164,7 @@ class HelpWindow(ctk.CTkToplevel):
         self.title("Help")
         # Scaled, like every other window. A fixed pixel size here is a
         # postage stamp on a 4K screen.
-        self.geometry(f"{px(560)}x{px(640)}")
+        self.geometry(window_size(self, 560, 640))
         self.minsize(px(360), px(320))
         self.configure(fg_color=T.BG)
         self.transient(parent)
@@ -225,7 +225,7 @@ class FoldersWindow(ctk.CTkToplevel):
                          self.cfg.library_recursive)
 
         self.title("Library folders")
-        self.geometry("640x560")
+        self.geometry(window_size(self, 640, 560))
         self.configure(fg_color=T.BG)
         self.transient(parent)
         self.after(120, self.lift)
@@ -393,7 +393,7 @@ class VerifyWindow(ctk.CTkToplevel):
         self._broken = 0
 
         self.title("Verify library")
-        self.geometry("760x600")
+        self.geometry(window_size(self, 760, 600))
         self.configure(fg_color=T.BG)
         self.transient(parent)
         self.after(120, self.lift)

@@ -14,7 +14,7 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, px
+from .theme import T, font, px, pt, column_width, window_size
 from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
@@ -115,10 +115,13 @@ class QueueTable(ctk.CTkFrame):
         self.tree.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=(0, 10))
 
         self._configure_tags()
-        self.tree.column("#0", width=26, minwidth=26, stretch=False, anchor="center")
+        # Column widths are real pixels, like everything else ttk takes.
+        self.tree.column("#0", width=px(26), minwidth=px(26), stretch=False,
+                          anchor="center")
         self.tree.heading("#0", text="")
         for key, title, width, anchor in self.COLUMNS:
-            self.tree.column(key, width=width, minwidth=48, anchor=anchor,
+            self.tree.column(key, width=column_width(title, width),
+                              minwidth=px(48), anchor=anchor,
                               stretch=(key == "name"))
             self.tree.heading(key, text=title, command=lambda k=key: self.sort_by(k))
 
@@ -147,12 +150,16 @@ class QueueTable(ctk.CTkFrame):
             style.theme_use("clam")
         except tk.TclError:
             pass
+        # ttk is raw Tk: nothing here is scaled for us, so every one of
+        # these was the literal number on screen whatever the display
+        # scaling was - a 28px row of 10pt text in a window where the
+        # buttons beside it had grown by half.
         style.configure("Q.Treeview", background=T.ROW, fieldbackground=T.ROW,
-                         foreground=T.TEXT, rowheight=28, borderwidth=0,
-                         font=(T.UI, 10))
+                         foreground=T.TEXT, rowheight=px(28), borderwidth=0,
+                         font=(T.UI, pt(10)))
         style.configure("Q.Treeview.Heading", background=T.ELEVATED,
                          foreground=T.FAINT, relief="flat", borderwidth=0,
-                         font=(T.UI, 9, "bold"), padding=(8, 7))
+                         font=(T.UI, pt(9), "bold"), padding=(px(8), px(7)))
         style.map("Q.Treeview.Heading", background=[("active", T.BTN_HOV)])
         style.map("Q.Treeview",
                   background=[("selected", T.ROW_SEL)],
@@ -435,7 +442,7 @@ class ScrubPreview(ctk.CTkFrame):
         self._volume_job = None
 
         self.timeline = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0,
-                                   borderwidth=0, height=26, cursor="hand2")
+                                   borderwidth=0, height=px(self.TL_H), cursor="hand2")
         self.timeline.grid(row=1, column=0, sticky="ew", padx=14)
         self.timeline.bind("<Configure>", lambda e: self._draw_timeline())
         self.timeline.bind("<Button-1>", self._on_press)
@@ -445,7 +452,7 @@ class ScrubPreview(ctk.CTkFrame):
         self.timeline.bind("<Leave>", self._on_timeline_leave)
 
         self.strip = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0,
-                                borderwidth=0, height=48, cursor="hand2")
+                                borderwidth=0, height=px(self.STRIP_H), cursor="hand2")
         self.strip.grid(row=2, column=0, sticky="ew", padx=14, pady=(4, 0))
         self.strip.bind("<Button-1>", self._on_strip_click)
         self.strip.bind("<Configure>", self._on_strip_resize)
@@ -741,7 +748,7 @@ class ScrubPreview(ctk.CTkFrame):
         w = max(self.view.winfo_width(), 40)
         h = max(self.view.winfo_height(), 40)
         self.view.create_text(w // 2, h // 2, text=getattr(self, "_placeholder", ""),
-                               fill=T.FAINT, font=(T.UI, 11), width=w - 40)
+                               fill=T.FAINT, font=(T.UI, pt(11)), width=w - 40)
 
     def _show_message(self, text: str) -> None:
         self._image_ref = None
@@ -808,49 +815,76 @@ class ScrubPreview(ctk.CTkFrame):
     def _duration(self) -> float:
         return self._info.duration if (self._info and self._info.duration) else 0.0
 
+    # Hand-drawn sizes for the timeline, in design pixels. It is a raw
+    # tk.Canvas, which CustomTkinter does not scale, so every one of
+    # these used to be the literal number on screen whatever the display
+    # was doing - a 26px strip with an 8px playhead and a clock set in
+    # bare 9pt, beside a Convert tab where everything else grew. The pad
+    # is shared with _time_at, which maps a click back to a position and
+    # has to agree with what was drawn.
+    TL_H = 26
+    TL_PAD = 2
+    TL_TRACK = 4
+    TL_HEAD = 4
+    TL_TICK = 8
+    TL_EDGE = 30
+
     def _draw_timeline(self, hover_x: int | None = None) -> None:
         c = self.timeline
         c.delete("all")
         w = c.winfo_width()
-        if w < 20:
+        pad = px(self.TL_PAD)
+        if w < px(20):
             return
-        y = 15
-        pad = 2
+        # Centred in the height the canvas actually got, and the labels
+        # ride just above the track rather than at a fixed offset.
+        y = max(c.winfo_height() // 2, px(self.TL_TICK))
+        top = px(3)
+        track = px(self.TL_TRACK)
+        tick = px(self.TL_TICK)
         duration = self._duration()
 
-        c.create_line(pad, y, w - pad, y, fill=T.LINE, width=4, capstyle="round")
+        c.create_line(pad, y, w - pad, y, fill=T.LINE, width=track,
+                      capstyle="round")
 
         if duration <= 0:
-            c.create_text(w // 2, 5, text="no timeline", fill=T.FAINT,
-                           font=(T.MONO, 8), anchor="n")
+            c.create_text(w // 2, px(5), text="no timeline", fill=T.FAINT,
+                           font=(T.MONO, pt(8)), anchor="n")
             return
 
         frac = self._pos / duration
-        px = pad + frac * (w - pad * 2)
-        c.create_line(pad, y, px, y, fill=T.ACCENT, width=4, capstyle="round")
+        head = pad + frac * (w - pad * 2)
+        c.create_line(pad, y, head, y, fill=T.ACCENT, width=track,
+                      capstyle="round")
 
         for mark in self._strip_marks:
             mx = pad + (mark / duration) * (w - pad * 2)
-            c.create_line(mx, y - 6, mx, y - 3, fill=T.LINE, width=1)
+            c.create_line(mx, y - px(6), mx, y - px(3), fill=T.LINE, width=1)
 
-        c.create_line(px, y - 8, px, y + 8, fill=T.ACCENT_HOV, width=2)
-        c.create_oval(px - 4, y - 4, px + 4, y + 4, fill=T.ACCENT_HOV, outline="")
+        radius = px(self.TL_HEAD)
+        c.create_line(head, y - tick, head, y + tick, fill=T.ACCENT_HOV, width=2)
+        c.create_oval(head - radius, y - radius, head + radius, y + radius,
+                      fill=T.ACCENT_HOV, outline="")
 
-        c.create_text(pad, 3, text=fmt_clock(self._pos), fill=T.TEXT,
-                       font=(T.MONO, 9), anchor="nw")
-        c.create_text(w - pad, 3, text=fmt_clock(duration), fill=T.FAINT,
-                       font=(T.MONO, 9), anchor="ne")
+        c.create_text(pad, top, text=fmt_clock(self._pos), fill=T.TEXT,
+                       font=(T.MONO, pt(9)), anchor="nw")
+        c.create_text(w - pad, top, text=fmt_clock(duration), fill=T.FAINT,
+                       font=(T.MONO, pt(9)), anchor="ne")
 
         if hover_x is not None:
             hover_t = self._time_at(hover_x)
-            c.create_line(hover_x, y - 8, hover_x, y + 8, fill=T.FAINT, width=1)
-            anchor = "n" if pad + 30 < hover_x < w - 30 else ("nw" if hover_x <= pad + 30 else "ne")
-            c.create_text(hover_x, 3, text=fmt_clock(hover_t), fill=T.DIM,
-                           font=(T.MONO, 9), anchor=anchor)
+            edge = px(self.TL_EDGE)
+            c.create_line(hover_x, y - tick, hover_x, y + tick, fill=T.FAINT,
+                          width=1)
+            anchor = ("n" if pad + edge < hover_x < w - edge
+                      else ("nw" if hover_x <= pad + edge else "ne"))
+            c.create_text(hover_x, top, text=fmt_clock(hover_t), fill=T.DIM,
+                           font=(T.MONO, pt(9)), anchor=anchor)
 
     def _time_at(self, x: int) -> float:
-        w = max(self.timeline.winfo_width() - 4, 1)
-        frac = max(0.0, min((x - 2) / w, 1.0))
+        pad = px(self.TL_PAD)
+        w = max(self.timeline.winfo_width() - 2 * pad, 1)
+        frac = max(0.0, min((x - pad) / w, 1.0))
         return frac * self._duration()
 
     def _on_press(self, event):
@@ -1009,14 +1043,22 @@ class ScrubPreview(ctk.CTkFrame):
         except Exception:
             return 10
 
+    # Design pixels, like the timeline above. The cap has to scale with
+    # the canvas it sits in - left at a literal 44 in a strip that is now
+    # px(48) tall, a 150% display got a band of empty panel under every
+    # thumbnail.
+    STRIP_H = 48
+    STRIP_GAP = 3
+    STRIP_CELL_H = 44
+
     def _cell_geometry(self):
         count = len(self._strip_marks)
         if not count:
             return 0, 0, 0
-        gap = 3
-        total = max(self.strip.winfo_width(), 200)
+        gap = px(self.STRIP_GAP)
+        total = max(self.strip.winfo_width(), px(200))
         cell_w = int((total - gap * (count - 1)) / count)
-        cell_h = min(int(cell_w * 9 / 16), 44)
+        cell_h = min(int(cell_w * 9 / 16), px(self.STRIP_CELL_H))
         return cell_w, cell_h, gap
 
     def _layout_strip(self) -> None:
@@ -1157,7 +1199,7 @@ class ContactSheet(ctk.CTkToplevel):
         if duration <= 0:
             self._post(lambda: self.canvas.create_text(
                 40, 30, text="This file has no readable timeline.",
-                fill=T.FAINT, font=(T.UI, 11), anchor="w"))
+                fill=T.FAINT, font=(T.UI, pt(11)), anchor="w"))
             return
         count = self.COLS * self.ROWS
         self._marks = [duration * (i + 0.5) / count for i in range(count)]
@@ -1173,7 +1215,7 @@ class ContactSheet(ctk.CTkToplevel):
                 self.canvas.create_text(
                     x + self.CELL_W // 2, y + self.cell_h + self.cap // 2,
                     text=fmt_clock(self._marks[i]), fill=T.FAINT,
-                    font=(T.MONO, 9))
+                    font=(T.MONO, pt(9)))
         if not self._post(slots):
             return
 
@@ -1221,7 +1263,7 @@ class DuplicateWindow(ctk.CTkToplevel):
         self.tab = tab
         self.alive = True
         self.title("Duplicate finder")
-        self.geometry("760x600")
+        self.geometry(window_size(self, 760, 600))
         self.configure(fg_color=T.BG)
         self.transient(parent)
         self.after(120, self.lift)
