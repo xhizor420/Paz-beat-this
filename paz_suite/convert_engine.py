@@ -331,8 +331,40 @@ def _snapshot(stats: dict, duration: float) -> dict:
     }
 
 
-def verify(path: str, timeout: int = 120) -> tuple:
-    """Full decode pass to catch a truncated or corrupt result."""
+# How long a full decode of the result is allowed to take, as a multiple
+# of the clip's own length. Decoding 4K/60 is not free and it is not
+# always faster than real time: measured here, a thirty-second 4K/60 file
+# decodes in 12s with every core available and in 46s - half again longer
+# than the clip - pinned to one. One core is the realistic case, because
+# the machine is usually encoding the next file, upscaling in another
+# program, or editing at the same time. Four times the duration leaves
+# room above even that, and the floor keeps short clips exactly as
+# forgiving as they were.
+VERIFY_PER_SECOND = 4
+VERIFY_FLOOR = 120
+
+
+def verify_budget(duration: float, ceiling: int = 0) -> int:
+    """Seconds to allow a verification of a clip this long."""
+    budget = max(VERIFY_FLOOR, int(float(duration or 0) * VERIFY_PER_SECOND))
+    if ceiling and ceiling > 0:
+        budget = min(budget, max(int(ceiling), VERIFY_FLOOR))
+    return budget
+
+
+class Unverifiable(Exception):
+    """The check could not be carried out - which is not the same as the
+    file being bad, and must not be treated as it. A timed-out or
+    un-runnable decode says nothing about the encode."""
+
+
+def verify(path: str, timeout: int = VERIFY_FLOOR) -> tuple:
+    """Full decode pass to catch a truncated or corrupt result.
+
+    (True, None) when it decodes, (False, why) when ffmpeg reports the
+    file is broken. Raises Unverifiable when the check itself could not
+    be completed.
+    """
     try:
         result = subprocess.run(
             ["ffmpeg", "-v", "error", "-i", path, "-f", "null", "-"],
@@ -344,9 +376,10 @@ def verify(path: str, timeout: int = 120) -> tuple:
             return True, None
         return False, clean_stderr(result.stderr, 5)
     except subprocess.TimeoutExpired:
-        return False, "Verification timed out"
+        raise Unverifiable(
+            f"could not decode it within {fmt_time(timeout)}") from None
     except (OSError, subprocess.SubprocessError) as exc:
-        return False, str(exc)
+        raise Unverifiable(str(exc)) from exc
 
 
 def convert(source: str, target: str, cfg: AppConfig,
@@ -387,9 +420,26 @@ def convert(source: str, target: str, cfg: AppConfig,
             raise
 
         if ok and cfg.verify_output:
-            ok, error = verify(target)
-            if not ok:
-                error = f"Output failed verification: {error}"
+            # The budget is sized from the clip, not fixed. A flat two
+            # minutes meant any result that took longer than that to
+            # decode was called corrupt - and the file, which was fine,
+            # was deleted below and the whole encode run again on the
+            # CPU, where it failed the same way. An hour of encoding
+            # thrown away, and no file at the end of it, for a clip that
+            # was never broken.
+            try:
+                ok, error = verify(target, verify_budget(recipe.duration,
+                                                         cfg.hard_timeout))
+                if not ok:
+                    error = f"Output failed verification: {error}"
+            except Unverifiable as why:
+                # Not being able to run the check is not a verdict on the
+                # file. Keeping an encode that might be imperfect beats
+                # deleting one that is fine, so it is kept and said out
+                # loud rather than thrown away in silence.
+                if log:
+                    log(f"Encoded, but not verified - {why}. The file is "
+                        "there; play it before you rely on it.", "warn")
 
         if ok:
             return True, None, label

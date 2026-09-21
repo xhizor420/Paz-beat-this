@@ -26,7 +26,7 @@ from .files import (
 )
 from .config import THUMB_DIR
 from .media import tile_image, thumb_key, make_thumb, probe
-from .e621 import E621_POST
+from .e621 import E621_POST, GIVE_UP_AFTER
 from .similar import rank as rank_similar, tag_weights
 from .library_db import (
     db_connect, Rec, parse_query, rec_matches, SORTS, SIMILAR_SORT,
@@ -4740,6 +4740,7 @@ class LibraryTab(ctk.CTkFrame):
     SYNC_GUARD_FLOOR = 40
     SYNC_GUARD_SHARE = 0.30
 
+
     def _refuse_mass_delete(self, gone: list, known: dict, on_disk: dict):
         """A reason to refuse this sync, or None to let it run."""
         if not known or not gone:
@@ -5088,6 +5089,7 @@ class LibraryTab(ctk.CTkFrame):
             hits = missing = failed = 0
             last_error = ""
             done = 0
+            in_a_row = 0
             try:
                 for index, pid in enumerate(todo):
                     if stop.is_set():
@@ -5096,11 +5098,23 @@ class LibraryTab(ctk.CTkFrame):
                     done = index + 1
                     if record.get("missing"):
                         missing += 1
+                        in_a_row = 0
                     elif record.get("error"):
                         failed += 1
                         last_error = record["error"]
+                        # One post can fail on its own. This many in an
+                        # unbroken run is the connection, the rate limit
+                        # or e621 itself, and asking ten thousand more
+                        # times at a second apiece helps nobody. Nothing
+                        # is cached from a failure, so stopping costs
+                        # only the posts not reached - they are still
+                        # first in the queue next time.
+                        in_a_row += 1
+                        if in_a_row >= GIVE_UP_AFTER:
+                            break
                     else:
                         hits += 1
+                        in_a_row = 0
                     self.ui(self.progress.set, done / len(todo))
                     if index % 5 == 0:
                         self.ui(self.set_status,

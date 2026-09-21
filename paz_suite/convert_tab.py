@@ -22,6 +22,7 @@ from .theme import T, font, text_width, CONVERT_LABELS
 from .format import fmt_time, fmt_clock, fmt_size
 from .files import is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer
 from .media import check_dependencies, available_encoders, probe
+from .e621 import GIVE_UP_AFTER
 from .convert_engine import (
     Task, GPU_ENCODERS, classify, plan_recipe, convert, transfer,
     Cancelled, _discard,
@@ -565,17 +566,29 @@ class ConvertTab(ctk.CTkFrame):
 
         def work():
             hits = miss = 0
+            in_a_row = 0
             try:
                 for index, task in enumerate(todo):
                     record = self.emeta.fetch(task.pid, self.cfg.e621_user, self.cfg.e621_key)
                     if record.get("error") and not record.get("missing"):
                         miss += 1
                         self.log(f"  #{task.pid}: {record['error']}", "warn")
+                        # A run of failures is the connection or the rate
+                        # limit, not the posts. Nothing is cached from
+                        # one, so stopping loses nothing but the wait.
+                        in_a_row += 1
+                        if in_a_row >= GIVE_UP_AFTER:
+                            self.log(f"Stopped after {in_a_row} failures in a "
+                                     "row - e621 is not answering. Nothing was "
+                                     "cached; press Fetch again later.", "warn")
+                            break
                     elif record.get("missing"):
                         miss += 1
+                        in_a_row = 0
                         self.ui(self._apply_meta, task)
                     else:
                         hits += 1
+                        in_a_row = 0
                         self.ui(self._apply_meta, task)
                     if index % 5 == 0:
                         self.ui(self._set_status,
