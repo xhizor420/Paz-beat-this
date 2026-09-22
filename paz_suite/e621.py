@@ -96,19 +96,70 @@ class E621Meta:
         self._lock = threading.Lock()
         self._dirty = False
         self._pending: set = set()
+        self._data: dict = {}
+        # Where this cache lives, settled here rather than read from the
+        # module every time. The read and the writes happen on another
+        # thread, and a thread that looks up a module global does it at
+        # whatever moment it gets there - which is not the moment the
+        # object was made. That is how a test's cache came to write
+        # itself over the real one: the test had moved the globals,
+        # the thread wrote after the test put them back. An object's file
+        # should not be able to change underneath it.
+        self._path = E621_META_PATH
+        self._log = E621_META_LOG
+        self._dir = CONFIG_DIR
+        # Read on a thread, not here. On this library the cache is 7.5MB
+        # of JSON and parsing it is 283ms - and this object is built
+        # before the window exists, so that was 283ms of nothing on
+        # screen at all, growing with the library. Everything that reads
+        # the cache waits for it below, and the thing that asks first is
+        # the library load, which is already on a worker: so the wait
+        # lands there, off the UI thread, overlapping the widget build
+        # rather than preceding it.
+        #
+        # Never worse than doing it here. The old code always stalled the
+        # UI thread for the whole parse; this one only stalls a caller
+        # that asks before the parse is done, and the one early caller is
+        # not the UI thread.
+        self._ready = threading.Event()
+        threading.Thread(target=self._read_cache, daemon=True).start()
+
+    def _read_cache(self) -> None:
         try:
-            with open(E621_META_PATH, "r", encoding="utf-8") as fh:
-                self._data = json.load(fh)
+            with open(self._path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
         except (OSError, ValueError):
-            self._data = {}
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        with self._lock:
+            # Merged, not assigned. fetch() deliberately does not wait
+            # for this read - it is a network call, and blocking one on a
+            # disk parse would be backwards - so a record could already
+            # be in memory by the time the file arrives. What was just
+            # fetched is newer than what is on disk, so it wins.
+            data.update(self._data)
+            self._data = data
         if self._replay_log():
             # A previous run was interrupted mid-fetch. Fold its journal
-            # back into the cache and start clean - once, at startup,
-            # where a hundred milliseconds does not matter.
+            # back into the cache and start clean. Done before anyone is
+            # let in, so nobody ever sees the cache without the journal
+            # already folded into it - and it only happens after a run
+            # that was cut short, not on an ordinary launch.
             self._dirty = True
-            self.save()
+            self._write_cache()
+        self._ready.set()
+
+    def wait_until_read(self, timeout: float = 60.0) -> bool:
+        """Block until the cache is in memory. True if it got there.
+
+        Public because the Library's loader wants to wait deliberately,
+        on its own thread, rather than discover the wait inside a lookup.
+        """
+        return self._ready.wait(timeout)
 
     def get(self, pid: str) -> dict | None:
+        self._ready.wait(60.0)
         with self._lock:
             return self._data.get(pid)
 
@@ -126,12 +177,25 @@ class E621Meta:
         could be answered from two different versions of the cache if a
         tag fetch happened to land in the middle of it.
         """
+        self._ready.wait(60.0)
         with self._lock:
             return dict(self._data)
 
     def save(self) -> None:
         """Rewrite the whole cache. Use at shutdown and at the end of a
-        fetch - see checkpoint() for the one to call during it."""
+        fetch - see checkpoint() for the one to call during it.
+
+        Waits for the read first: writing what is in memory before the
+        file has been read into it would put an empty cache over ten
+        thousand posts.
+        """
+        self._ready.wait(60.0)
+        self._write_cache()
+
+    def _write_cache(self) -> None:
+        """The write itself, without waiting for the read. Called by
+        save(), which waits, and by the reader thread once it has folded
+        in a journal - where waiting would be waiting on itself."""
         with self._lock:
             if not self._dirty:
                 return
@@ -139,15 +203,15 @@ class E621Meta:
             self._dirty = False
             self._pending.clear()
         try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-            tmp = E621_META_PATH + ".tmp"
+            os.makedirs(self._dir, exist_ok=True)
+            tmp = self._path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(data, fh)
-            os.replace(tmp, E621_META_PATH)
+            os.replace(tmp, self._path)
         except OSError:
             return
         try:
-            os.remove(E621_META_LOG)
+            os.remove(self._log)
         except OSError:
             pass
 
@@ -170,8 +234,8 @@ class E621Meta:
         if not rows:
             return
         try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-            with open(E621_META_LOG, "a", encoding="utf-8") as fh:
+            os.makedirs(self._dir, exist_ok=True)
+            with open(self._log, "a", encoding="utf-8") as fh:
                 for pid, record in rows:
                     fh.write(json.dumps({"pid": pid, "rec": record}) + "\n")
         except OSError:
@@ -181,7 +245,7 @@ class E621Meta:
         """Apply a journal left by an interrupted run. Returns how many."""
         count = 0
         try:
-            with open(E621_META_LOG, "r", encoding="utf-8") as fh:
+            with open(self._log, "r", encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
                     if not line:
@@ -284,6 +348,7 @@ class E621Meta:
         """
         if budget <= 0:
             return []
+        self._ready.wait(60.0)
         exclude = set(exclude)
         now = time.time()
         with self._lock:
