@@ -340,16 +340,36 @@ class E621Meta:
         post_age = max(now - (record.get("created_at") or fetched_at), 0)
         return (now - fetched_at) >= _refresh_interval_seconds(post_age)
 
-    def due_for_refresh(self, pids, budget: int, exclude=()) -> list:
+    def due_for_refresh(self, pids, budget: int, exclude=(),
+                        prefer=()) -> list:
         """
-        Up to `budget` stale pids from `pids`, freshest post first (posts
-        still gaining votes/tags matter more to keep current than ones
-        that settled down years ago).
+        Up to `budget` stale pids from `pids`, most worth re-checking
+        first.
+
+        Three things decide the order, and they are not the same
+        question as "is it due", which is_stale already answered:
+
+          * whether you have actually used the clip. A post on a clip
+            that has been in an edit is one you will reach for again,
+            and its tags and score are what you would find it by. The
+            caller knows which those are - see `prefer`.
+          * whether it has never come back with anything. A record with
+            no tags at all is either a post that gained them since, or
+            one whose tags were lost to a bad fetch; either way there is
+            more to gain from asking again than from re-checking a post
+            that already has forty.
+          * how new the post is. A post still gaining votes and tags
+            moves; one that settled down years ago does not.
+
+        In that order, because the first two are about whether an answer
+        is worth having and the third is only about how likely it is to
+        have changed.
         """
         if budget <= 0:
             return []
         self._ready.wait(60.0)
         exclude = set(exclude)
+        wanted = set(prefer)
         now = time.time()
         with self._lock:
             candidates = [pid for pid in dict.fromkeys(pids)
@@ -358,7 +378,10 @@ class E621Meta:
             def sort_key(pid):
                 record = self._data.get(pid) or {}
                 fetched_at = record.get("fetched_at") or 0
-                return now - (record.get("created_at") or fetched_at)
+                age = now - (record.get("created_at") or fetched_at)
+                return (0 if pid in wanted else 1,
+                        0 if not record.get("tags") else 1,
+                        age)
 
             candidates.sort(key=sort_key)
         return candidates[:budget]
