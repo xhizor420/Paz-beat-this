@@ -31,7 +31,13 @@ def cache(tmp_path, monkeypatch):
     monkeypatch.setattr(e621, "E621_META_LOG", str(main) + ".log")
 
     def make():
-        return e621.E621Meta()
+        meta = e621.E621Meta()
+        # The file is read on a thread now, so the cache is not settled
+        # the instant the constructor returns - it is settled by the time
+        # anything is allowed to read it, which is what this waits for.
+        # Every test here wants a settled cache.
+        assert meta.wait_until_read(10.0), "the cache never finished loading"
+        return meta
 
     make.main = main
     make.log = tmp_path / "e621_meta.json.log"
@@ -209,3 +215,108 @@ def test_loading_a_cache_with_no_files_at_all_is_empty(cache):
     meta = cache()
     assert meta._data == {}
     assert not cache.log.exists()
+
+
+# ── the file is read off the UI thread ─────────────────────────────────
+#
+# On the real library the cache is 7.5MB of JSON and parsing it is 283ms.
+# E621Meta is built before the window exists, so that was 283ms of
+# nothing on screen at all, growing with the library. It is read on a
+# thread now, and everything that reads the cache waits for it - which
+# means the wait lands on whoever asks first, and the thing that asks
+# first is the library load, already on a worker of its own.
+
+def test_the_constructor_does_not_read_the_file(cache, monkeypatch):
+    """Nothing about the parse may happen on the calling thread."""
+    import threading
+    cache.main.write_text(json.dumps({"1": {"tags": "wolf"}}), encoding="utf-8")
+    here = threading.get_ident()
+    read_on = []
+    real_open = e621.open if hasattr(e621, "open") else open
+
+    def watched(path, *a, **kw):
+        if str(path) == str(cache.main):
+            read_on.append(threading.get_ident())
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr("builtins.open", watched)
+    meta = e621.E621Meta()
+    assert meta.wait_until_read(10.0)
+    assert read_on, "the cache file was never read"
+    assert here not in read_on, "the file was parsed on the calling thread"
+
+
+def test_a_reader_gets_the_cache_once_it_is_there(cache):
+    cache.main.write_text(json.dumps({"1": {"tags": "wolf", "score": 3}}),
+                          encoding="utf-8")
+    meta = e621.E621Meta()
+    assert (meta.get("1") or {}).get("tags") == "wolf"
+    assert "1" in meta.snapshot()
+
+
+def test_a_post_fetched_before_the_file_arrives_is_not_lost(cache):
+    """fetch() deliberately does not wait for the read - blocking a
+    network call on a disk parse would be backwards - so a record can be
+    in memory before the file is. What was just fetched is newer."""
+    cache.main.write_text(json.dumps({"1": {"tags": "old"}}), encoding="utf-8")
+    meta = e621.E621Meta()
+    with meta._lock:
+        meta._data["2"] = {"tags": "just fetched"}
+        meta._dirty = True
+    assert meta.wait_until_read(10.0)
+    held = meta.snapshot()
+    assert held["1"]["tags"] == "old", "the file was not read in"
+    assert held["2"]["tags"] == "just fetched", "the fetched record was lost"
+
+
+def test_a_missing_file_is_simply_an_empty_cache(cache):
+    meta = e621.E621Meta()
+    assert meta.wait_until_read(10.0)
+    assert meta.snapshot() == {}
+    assert meta.get("123") is None
+
+
+def test_rubbish_in_the_file_is_an_empty_cache_not_a_crash(cache):
+    cache.main.write_text("[1, 2, 3]", encoding="utf-8")
+    meta = e621.E621Meta()
+    assert meta.wait_until_read(10.0)
+    assert meta.snapshot() == {}
+
+
+def test_a_save_cannot_overwrite_the_file_before_it_is_read(cache):
+    """save() waits, because writing what is in memory before the file
+    has been read into it would put an empty cache over ten thousand
+    posts."""
+    cache.main.write_text(json.dumps({"1": {"tags": "wolf"}}), encoding="utf-8")
+    meta = e621.E621Meta()
+    with meta._lock:
+        meta._dirty = True
+    meta.save()
+    back = json.loads(cache.main.read_text(encoding="utf-8"))
+    assert "1" in back, "a save before the read wiped the cache"
+
+
+def test_the_cache_writes_only_where_it_was_pointed(cache, monkeypatch):
+    """The read and the writes are on another thread, and a thread that
+    looks up a module global does it whenever it gets there - not when
+    the object was made. This caught a real one: a test's cache wrote
+    itself over the real 7.5MB file, because the test had moved the
+    module globals and the thread wrote after the test put them back.
+    """
+    cache.main.write_text(json.dumps({"1": {"tags": "wolf"}}), encoding="utf-8")
+    meta = e621.E621Meta()
+    assert meta.wait_until_read(10.0)
+
+    # The object is built. Now move the globals, the way pytest's
+    # monkeypatch does when a test ends, and make it write.
+    elsewhere = str(cache.main) + ".WRONG"
+    monkeypatch.setattr(e621, "E621_META_PATH", elsewhere)
+    monkeypatch.setattr(e621, "E621_META_LOG", elsewhere + ".log")
+    stash(meta, "2")
+    meta.checkpoint()
+    meta.save()
+
+    assert not os.path.exists(elsewhere), \
+        "the cache followed the module global instead of its own path"
+    assert not os.path.exists(elsewhere + ".log")
+    assert "2" in json.loads(cache.main.read_text(encoding="utf-8"))

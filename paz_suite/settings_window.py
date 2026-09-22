@@ -347,23 +347,34 @@ class SettingsWindow(ctk.CTkToplevel):
         self._section(tab, "Tagging", 14)
         self._switch(tab, 15, "library_autofetch",
                     "Fetch missing tags automatically after a sync")
-        self._number(tab, 16, "library_stale_refresh_budget",
-                    "Soft-refresh budget per fetch", 0, 2000)
-        self._hint(tab, 17, "Every tag fetch also quietly re-checks up to this "
-                           "many already-tagged posts that are \"due\" - fresh "
-                           "posts get re-checked every few days for new votes/"
-                           "tags, old ones every few months - so scores stay "
-                           "current without ever re-fetching the whole library "
-                           "at once. 0 turns this off (right-click Fetch e621 "
-                           "tags still lets you force a bigger catch-up pass).")
+        self._number(tab, 16, "library_fetch_budget",
+                    "New posts per background fetch", 0, 20000)
+        self._hint(tab, 17, "How many never-tagged posts the app quietly "
+                           "fetches each time the Library opens or a sync "
+                           "finishes. An untagged clip can't be found by "
+                           "artist, character or species at all, so this is "
+                           "the number worth raising - it runs in the "
+                           "background and never blocks the tab, anything you "
+                           "ask for cancels it, and the rest is picked up next "
+                           "time. At the default delay 600 posts is about six "
+                           "minutes. 0 means no limit.")
+        self._number(tab, 18, "library_stale_refresh_budget",
+                    "Re-checks per background fetch", 0, 20000)
+        self._hint(tab, 19, "Each fetch also re-checks this many posts it "
+                           "already has, oldest answer first - clips you've "
+                           "used in a project come first, then posts with no "
+                           "tags at all, then the newest posts, since those "
+                           "are the ones still gaining votes and tags. Fresh "
+                           "posts come round every few days, old ones every "
+                           "few months. 0 turns re-checking off.")
 
-        self._section(tab, "Performance", 18)
-        self._number(tab, 19, "probe_cache_limit", "ffprobe results cached", 2000, 500000)
-        self._hint(tab, 20, "In-memory only, a few hundred bytes each - raise "
+        self._section(tab, "Performance", 20)
+        self._number(tab, 21, "probe_cache_limit", "ffprobe results cached", 2000, 500000)
+        self._hint(tab, 22, "In-memory only, a few hundred bytes each - raise "
                            "this as your library grows so browsing doesn't "
                            "keep re-reading files ffprobe already looked at.")
-        self._number(tab, 21, "frame_cache_limit", "Scrub/hover frames cached", 500, 200000)
-        self._hint(tab, 22, "On-disk JPEGs in your temp folder, a few KB each "
+        self._number(tab, 23, "frame_cache_limit", "Scrub/hover frames cached", 500, 200000)
+        self._hint(tab, 24, "On-disk JPEGs in your temp folder, a few KB each "
                            "- this is the hover-preview/scrub cache, separate "
                            "from the permanent one-per-clip gallery thumbnails.")
 

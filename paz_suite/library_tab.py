@@ -5025,20 +5025,33 @@ class LibraryTab(ctk.CTkFrame):
                 seen.add(rec.pid)
                 todo.append(rec.pid)
 
-        budget = len(all_pids) if full else self.cfg.library_stale_refresh_budget
-        # The ambient fetch is budgeted on BOTH halves, not just the
-        # refreshes. An untagged batch is however big it is - a first run
-        # against this library is ten thousand posts, which at the rate
-        # e621 allows is hours - and while it runs the tab is busy, which
-        # means Sync and Fetch are both refused. Quietly tagging what is
-        # new must not lock the tab for an evening: take a batch now, the
-        # rest next time, and say how many are left. Pressing Fetch
-        # (full=True) is the unbudgeted way, and is still there.
+        # Two budgets, not one. They are different jobs: an untagged
+        # clip cannot be searched by artist, character or species at all,
+        # while a refresh only sharpens a score that is already roughly
+        # right - so the backlog gets the bigger allowance.
+        #
+        # An untagged batch is however big it is: a first run against
+        # this library is ten thousand posts, which at the rate e621
+        # allows is hours. The ambient fetch does not make the tab busy,
+        # so a long one is a trickle rather than a wait - but it is still
+        # bounded, so the app can say how many are left and so that
+        # anything the user asks for gets a clean run at it. Pressing
+        # Fetch (full=True) is the unbudgeted way and is still there.
+        if full:
+            catch_up = refresh_cap = len(all_pids)
+        else:
+            catch_up = self.cfg.library_fetch_budget or len(all_pids)
+            refresh_cap = self.cfg.library_stale_refresh_budget
         waiting = 0
-        if not full and len(todo) > budget:
-            waiting = len(todo) - budget
-            todo = todo[:budget]
-        refreshing = self.emeta.due_for_refresh(all_pids, budget, exclude=todo)
+        if len(todo) > catch_up:
+            waiting = len(todo) - catch_up
+            todo = todo[:catch_up]
+        # Clips that have been used in an edit come first among the
+        # refreshes - see due_for_refresh.
+        used = {rec.pid for rec in self.records
+                if rec.pid and rec.used_projects}
+        refreshing = self.emeta.due_for_refresh(
+            all_pids, refresh_cap, exclude=todo, prefer=used)
         todo.extend(refreshing)
 
         if not todo:

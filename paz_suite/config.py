@@ -143,7 +143,21 @@ class AppConfig:
     # uncached ones, so scores/tags on posts already in the library
     # quietly stay current without ever re-checking the whole library
     # at once. 0 disables the ambient refresh (manual only).
-    library_stale_refresh_budget: int = 40
+    library_stale_refresh_budget: int = 150
+    # And how many never-fetched posts one ambient run may pull. A
+    # separate, larger number than the refresh budget on purpose: an
+    # untagged clip cannot be searched by artist, character or species
+    # at all, so clearing that backlog is worth more than topping up a
+    # score that is already roughly right. The ambient fetch does not
+    # make the tab busy (see _run_fetch), so this is a trickle in the
+    # background rather than a wait - at the default delay, 600 posts is
+    # about six minutes of it, and anything the user asks for cancels it
+    # and picks up where it left off next time. 0 means "as many as
+    # there are".
+    library_fetch_budget: int = 600
+    # Set once, when the two budgets were split - see
+    # _upgrade_fetch_budget.
+    fetch_budget_upgraded: bool = False
     # Width of the Library's inspector column in pixels, as dragged by its
     # handle. 0 means "work it out from the window", which is the default
     # and what the handle's double-click restores.
@@ -236,6 +250,7 @@ class AppConfig:
             changed = cfg._upgrade_beat_default()
             changed = cfg._upgrade_banner_slot() or changed
             changed = cfg._upgrade_layout_sizes() or changed
+            changed = cfg._upgrade_fetch_budget() or changed
             if changed:
                 cfg.save()
             return cfg
@@ -305,6 +320,35 @@ class AppConfig:
             # per clip.
             self.player_prefer_premium = AppConfig.player_prefer_premium
         return changed
+
+    # What the re-check budget used to default to, before it was split
+    # from the new-post budget. Anyone with a config has this number
+    # whether they chose it or not.
+    OLD_REFRESH_BUDGET = 40
+
+    def _upgrade_fetch_budget(self) -> bool:
+        """Raise a re-check budget that is only 40 because 40 used to be
+        the default.
+
+        The two budgets were one number, so the smaller job governed the
+        bigger one: forty new posts a run, on a library with thousands
+        untagged. Splitting them fixes that for a fresh install and does
+        nothing at all for anyone who already has a config, which is
+        everyone it was split for.
+
+        Only moved when it is exactly the old default. Forty chosen
+        deliberately and forty left over from a default look identical
+        from here, so this errs towards the number the app now thinks is
+        right - it is a background trickle that never blocks the tab, and
+        Settings still has it.
+        """
+        if self.fetch_budget_upgraded:
+            return False
+        self.fetch_budget_upgraded = True
+        if self.library_stale_refresh_budget == self.OLD_REFRESH_BUDGET:
+            self.library_stale_refresh_budget = \
+                AppConfig.library_stale_refresh_budget
+        return True
 
     def _read(self, path: str) -> None:
         try:
