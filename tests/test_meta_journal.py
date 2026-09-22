@@ -303,7 +303,6 @@ def test_the_cache_writes_only_where_it_was_pointed(cache, monkeypatch):
     itself over the real 7.5MB file, because the test had moved the
     module globals and the thread wrote after the test put them back.
     """
-    import threading
     cache.main.write_text(json.dumps({"1": {"tags": "wolf"}}), encoding="utf-8")
     meta = e621.E621Meta()
     assert meta.wait_until_read(10.0)
