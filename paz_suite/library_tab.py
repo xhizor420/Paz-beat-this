@@ -27,7 +27,7 @@ from .files import (
 )
 from .config import THUMB_DIR
 from .media import tile_image, thumb_key, make_thumb, probe
-from .e621 import E621_POST, GIVE_UP_AFTER
+from .e621 import BATCH_SIZE, E621_POST, GIVE_UP_AFTER
 from .similar import rank as rank_similar, tag_weights
 from .library_db import (
     db_connect, Rec, parse_query, rec_matches, SORTS, SIMILAR_SORT,
@@ -5198,58 +5198,117 @@ class LibraryTab(ctk.CTkFrame):
         status = f"{self.F('fetching')} · {note or f'{len(todo)} posts'}"
         if refreshing:
             status += f" ({refreshing} refreshed for freshness)"
-        status += f" (~{fmt_len(len(todo) * (delay + 0.1))})"
+        requests = (-(-len(todo) // BATCH_SIZE)
+                    if getattr(self.emeta, "batching", False)
+                    else len(todo))
+        status += f" (~{fmt_len(requests * (delay + 0.5))})"
         # Ambient work speaks quietly: the status line is how the app
         # answers the user, not a place for a background job to shout.
         self.set_status(status, T.FAINT if ambient else T.ACCENT2)
         self.progress.set(0)
 
+        user, key = self.cfg.e621_user, self.cfg.e621_key
+        total = len(todo)
+        tone = T.FAINT if ambient else T.ACCENT2
+
         def work():
-            hits = missing = failed = 0
+            counts = {"hits": 0, "missing": 0, "failed": 0, "in_a_row": 0,
+                      "requests": 0}
             last_error = ""
-            done = 0
-            in_a_row = 0
+            asked: list = []            # every post that got an answer
+
+            def report():
+                self.ui(self.progress.set, len(asked) / total)
+                self.ui(self.set_status,
+                        f"{self.F('fetching')} {len(asked)}/{total}", tone)
+
+            def pause() -> None:
+                # wait(), not sleep(): a cancel lands at once rather than
+                # after the pause e621's rate limit asks for.
+                if counts["requests"]:
+                    stop.wait(delay)
+                counts["requests"] += 1
+
+            def failed_again(error: str) -> bool:
+                """One post can fail on its own. This many in an unbroken
+                run is the connection, the rate limit or e621 itself, and
+                asking thousands more times helps nobody. Nothing is
+                cached from a failure, so stopping costs only the posts
+                not reached - they are still first in the queue next
+                time. True means stop."""
+                nonlocal last_error
+                last_error = error
+                counts["in_a_row"] += 1
+                return counts["in_a_row"] >= GIVE_UP_AFTER
+
+            def one(pid) -> bool:
+                """Ask about one post. False means stop the run."""
+                pause()
+                if stop.is_set():
+                    return False
+                record = self.emeta.fetch(pid, user, key)
+                if record.get("error") and not record.get("missing"):
+                    counts["failed"] += 1
+                    if failed_again(record["error"]):
+                        return False
+                else:
+                    counts["missing" if record.get("missing") else "hits"] += 1
+                    counts["in_a_row"] = 0
+                asked.append(pid)
+                if len(asked) % 5 == 0:
+                    report()
+                if len(asked) % 10 == 0:
+                    self.emeta.checkpoint()
+                return True
+
+            at = 0
             try:
-                for index, pid in enumerate(todo):
+                while at < total and not stop.is_set():
+                    if not getattr(self.emeta, "batching", False):
+                        if not one(todo[at]):
+                            break
+                        at += 1
+                        continue
+                    # A hundred at a time - see E621Meta.fetch_many.
+                    chunk = todo[at:at + BATCH_SIZE]
+                    pause()
                     if stop.is_set():
                         break
-                    record = self.emeta.fetch(pid, self.cfg.e621_user, self.cfg.e621_key)
-                    done = index + 1
-                    if record.get("missing"):
-                        missing += 1
-                        in_a_row = 0
-                    elif record.get("error"):
-                        failed += 1
-                        last_error = record["error"]
-                        # One post can fail on its own. This many in an
-                        # unbroken run is the connection, the rate limit
-                        # or e621 itself, and asking ten thousand more
-                        # times at a second apiece helps nobody. Nothing
-                        # is cached from a failure, so stopping costs
-                        # only the posts not reached - they are still
-                        # first in the queue next time.
-                        in_a_row += 1
-                        if in_a_row >= GIVE_UP_AFTER:
+                    answer = self.emeta.fetch_many(chunk, user, key)
+                    if answer.get("unsupported"):
+                        # e621 would not do this search, or did something
+                        # else with it. One post at a time is slower but
+                        # known to work; the loop carries on that way.
+                        self.emeta.batching = False
+                        last_error = answer.get("error", "")
+                        continue
+                    if answer.get("error"):
+                        # The same hundred again after the pause, unless
+                        # this has become a pattern.
+                        if failed_again(answer["error"]):
+                            counts["failed"] += len(chunk)
                             break
-                    else:
-                        hits += 1
-                        in_a_row = 0
-                    self.ui(self.progress.set, done / len(todo))
-                    if index % 5 == 0:
-                        self.ui(self.set_status,
-                                f"{self.F('fetching')} {done}/{len(todo)}",
-                                T.FAINT if ambient else T.ACCENT2)
-                    if index % 10 == 9:
-                        self.emeta.checkpoint()
-                    # wait(), not sleep(): a cancel lands at once rather
-                    # than after the pause e621's rate limit asks for.
-                    if index + 1 < len(todo):
-                        stop.wait(delay)
+                        continue
+                    records = answer["records"]
+                    counts["hits"] += len(records)
+                    counts["in_a_row"] = 0
+                    asked.extend(pid for pid in chunk if pid in records)
+                    self.emeta.checkpoint()
+                    report()
+                    # What the search left out is asked about on its own:
+                    # deleted, hidden or not there at all, only a lookup
+                    # can say which, and only a lookup may mark it missing.
+                    for pid in chunk:
+                        if pid not in records and not one(pid):
+                            at = total
+                            break
+                    at += len(chunk)
             finally:
                 self.emeta.save()
                 self._fetch_release(stop, ambient)
-                self.ui(self._fetch_done, hits, missing, failed, last_error,
-                        refreshing, list(todo[:done]), stop.is_set(), ambient)
+                self.ui(self._fetch_done, counts["hits"], counts["missing"],
+                        counts["failed"], last_error, refreshing, list(asked),
+                        stop.is_set(), ambient)
 
         threading.Thread(target=work, daemon=True).start()
 
