@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import shlex
 import sqlite3
 import threading
@@ -134,6 +135,11 @@ class Rec:
     # filter chips and is:portrait recomputed it per clip per pass.
     sort_name: str = ""
     orientation: str = ""
+    # Every tag, one per line, for the search box's substring match: one
+    # `in` over one string instead of a Python loop over forty tags, on
+    # every clip, for every keystroke. Kept with the tags by
+    # compute_named(), which runs whenever they change.
+    tag_text: str = ""
 
     def __post_init__(self) -> None:
         self.sort_name = self.name.lower()
@@ -163,6 +169,7 @@ class Rec:
         self.named = frozenset(chain(
             self.artists, self.characters, self.species,
             self.copyrights, self.lore))
+        self.tag_text = "\n".join(self.tags)
 
 
 
@@ -197,74 +204,128 @@ def parse_query(text: str) -> tuple:
     return includes, excludes
 
 
-def term_hits(rec: Rec, kind: str, value: str) -> bool:
+_WILD = set("*?[")
+
+
+def _pattern(value: str):
+    """A glob as a compiled regex, or None when `value` has no wildcard.
+    Tags are lower case already, so matching is case-sensitive - which is
+    also what makes the no-wildcard case a plain equality test."""
+    if not _WILD & set(value):
+        return None
+    return re.compile(fnmatch.translate(value)).match
+
+
+def _named_test(field_name: str, value: str):
+    """artist:, character:, species:, copyright: and lore: - an exact
+    name, or a glob over the names."""
+    match = _pattern(value)
+    if match is None:
+        return lambda rec: value in getattr(rec, field_name)
+    # The exact name as well: a name can hold a bracket, and read as a
+    # pattern it would no longer match itself.
+    return lambda rec: any(item == value or match(item)
+                           for item in getattr(rec, field_name))
+
+
+_IS_TESTS = {
+    "untagged": lambda rec: not rec.tags,
+    "notags": lambda rec: not rec.tags,
+    "tagged": lambda rec: bool(rec.tags),
+    "noid": lambda rec: not rec.pid,
+    "unknown": lambda rec: not rec.pid,
+    "silent": lambda rec: rec.duration <= 0,
+    "4k": lambda rec: rec.premium,
+    "premium": lambda rec: rec.premium,
+    "no4k": lambda rec: not rec.premium,
+    "sd": lambda rec: not rec.premium,
+    "portrait": lambda rec: rec.orientation == "portrait",
+    "phone": lambda rec: rec.orientation == "portrait",
+    "vertical": lambda rec: rec.orientation == "portrait",
+    "widescreen": lambda rec: rec.orientation == "widescreen",
+    "landscape": lambda rec: rec.orientation == "widescreen",
+    "horizontal": lambda rec: rec.orientation == "widescreen",
+    "square": lambda rec: rec.orientation == "square",
+    # "Never gone into any project" - the clips still worth reaching
+    # for. `-used:any` says the same thing; this is the version that
+    # fits on a chip.
+    "unused": lambda rec: not rec.used_projects,
+    "fresh": lambda rec: not rec.used_projects,
+    "new": lambda rec: not rec.used_projects,
+    "used": lambda rec: bool(rec.used_projects),
+}
+
+_NAMED_FIELDS = {"artist": "artists", "character": "characters",
+                 "species": "species", "copyright": "copyrights",
+                 "series": "copyrights", "lore": "lore"}
+
+
+def term_test(kind: str, value: str):
+    """One search term, worked out once, as a test of one clip.
+
+    A search asks the same question of ten thousand clips. Deciding what
+    the question is - which kind of term, whether it has a wildcard - used
+    to happen inside the loop, ten thousand times; now it happens here,
+    once, and the loop runs the answer.
+    """
     if kind == "is":
-        if value in ("untagged", "notags"):
-            return not rec.tags
-        if value == "tagged":
-            return bool(rec.tags)
-        if value in ("noid", "unknown"):
-            return not rec.pid
-        if value == "silent":
-            return rec.duration <= 0
-        if value in ("4k", "premium"):
-            return rec.premium
-        if value in ("no4k", "sd"):
-            return not rec.premium
-        if value in ("portrait", "phone", "vertical"):
-            return rec.orientation == "portrait"
-        if value in ("widescreen", "landscape", "horizontal"):
-            return rec.orientation == "widescreen"
-        if value == "square":
-            return rec.orientation == "square"
-        # "Never gone into any project" - the clips still worth reaching
-        # for. `-used:any` says the same thing; this is the version that
-        # fits on a chip.
-        if value in ("unused", "fresh", "new"):
-            return not rec.used_projects
-        if value == "used":
-            return bool(rec.used_projects)
-        return False
-    if kind == "artist":
-        return any(value == a or fnmatch.fnmatch(a, value) for a in rec.artists)
-    if kind == "character":
-        return any(value == c or fnmatch.fnmatch(c, value) for c in rec.characters)
-    if kind == "species":
-        return any(value == s or fnmatch.fnmatch(s, value) for s in rec.species)
-    if kind in ("copyright", "series"):
-        return any(value == c or fnmatch.fnmatch(c, value) for c in rec.copyrights)
-    if kind == "lore":
-        return any(value == item or fnmatch.fnmatch(item, value)
-                   for item in rec.lore)
+        return _IS_TESTS.get(value, lambda rec: False)
+    if kind in _NAMED_FIELDS:
+        return _named_test(_NAMED_FIELDS[kind], value)
     if kind == "rating":
-        return rec.rating == value[:1]
+        first = value[:1]
+        return lambda rec: rec.rating == first
     if kind == "folder":
-        return value in rec.folder.lower()
+        return lambda rec: value in rec.folder.lower()
     if kind == "id":
-        return rec.pid == value
+        return lambda rec: rec.pid == value
     if kind == "used":
         if value in ("", "any"):
-            return bool(rec.used_projects)
-        return any(value == p.lower() for p in rec.used_projects)
-    # plain tag term
+            return lambda rec: bool(rec.used_projects)
+        return lambda rec: any(value == p.lower() for p in rec.used_projects)
+    # A plain word: a tag, else part of a tag, the file name or the post
+    # ID. Only * makes it a glob - a word with a ? or a bracket in it is
+    # still looked for as written.
     if "*" in value:
-        return any(fnmatch.fnmatch(t, value) for t in rec.tags)
-    if value in rec.tags:
+        match = re.compile(fnmatch.translate(value)).match
+        return lambda rec: any(match(t) for t in rec.tags)
+    if "\n" in value:
+        # Could span two tags in tag_text; no real tag holds one, so ask
+        # the tags themselves.
+        return lambda rec: (value in rec.sort_name or value in rec.pid
+                            or any(value in t for t in rec.tags))
+    # An exact tag is also a substring of tag_text, so this one test
+    # covers both.
+    return lambda rec: (value in rec.tag_text or value in rec.sort_name
+                        or value in rec.pid)
+
+
+def compile_query(includes: list, excludes: list):
+    """The whole query as one test of a clip."""
+    wanted = [term_test(k, v) for k, v in includes]
+    unwanted = [term_test(k, v) for k, v in excludes]
+    if not wanted and not unwanted:
+        return lambda rec: True
+    if len(wanted) == 1 and not unwanted:
+        return wanted[0]
+
+    def matches(rec) -> bool:
+        for test in wanted:
+            if not test(rec):
+                return False
+        for test in unwanted:
+            if test(rec):
+                return False
         return True
-    # substring fallback: tags, filename, post id
-    if value in rec.sort_name or value in rec.pid:
-        return True
-    return any(value in t for t in rec.tags)
+    return matches
+
+
+def term_hits(rec: Rec, kind: str, value: str) -> bool:
+    return term_test(kind, value)(rec)
 
 
 def rec_matches(rec: Rec, includes: list, excludes: list) -> bool:
-    for kind, value in includes:
-        if not term_hits(rec, kind, value):
-            return False
-    for kind, value in excludes:
-        if term_hits(rec, kind, value):
-            return False
-    return True
+    return compile_query(includes, excludes)(rec)
 
 
 SIMILAR_SORT = "Like this"

@@ -392,16 +392,51 @@ def widest_char(font_obj) -> int:
     return got
 
 
+# Per font key: the advance of one character when the font is fixed-
+# width, or 0 when it is not. See text_width.
+_ADVANCE: dict = {}
+
+
+def _fixed_advance(font_obj, name) -> int:
+    advance = _ADVANCE.get(name)
+    if advance is None:
+        advance = 0
+        try:
+            if int(font_obj.metrics("fixed")):
+                # Checked, not assumed: two different letters must agree,
+                # or the font only calls itself fixed.
+                narrow, wide = int(font_obj.measure("i")), int(font_obj.measure("W"))
+                if narrow == wide and narrow > 0:
+                    advance = narrow
+        except Exception:
+            advance = 0
+        _ADVANCE[name] = advance
+    return advance
+
+
 def text_width(font_obj, text: str) -> int:
-    """How wide `text` is, remembered. 0 if the font cannot say."""
+    """How wide `text` is, remembered. 0 if the font cannot say.
+
+    Asking Tk costs about 0.4ms a string, and the gallery's badges put
+    around fifty new strings - lengths, sizes, scores - on every page
+    that has not been seen before. Those are in the mono font, where
+    every ASCII character has the same advance, so the width is a
+    multiplication and Tk is not asked at all.
+    """
     name = _font_key(font_obj)
     key = (name, text)
     got = _WIDTHS.get(key) if name is not None else None
     if got is None:
-        try:
-            got = int(font_obj.measure(text))
-        except Exception:
-            return 0
+        advance = (_fixed_advance(font_obj, name)
+                   if name is not None and text.isascii() and text.isprintable()
+                   else 0)
+        if advance:
+            got = advance * len(text)
+        else:
+            try:
+                got = int(font_obj.measure(text))
+            except Exception:
+                return 0
         if name is not None:
             if len(_WIDTHS) >= WIDTH_CACHE:
                 _WIDTHS.clear()

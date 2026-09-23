@@ -30,11 +30,12 @@ from .media import tile_image, thumb_key, make_thumb, probe
 from .e621 import BATCH_SIZE, E621_POST, GIVE_UP_AFTER
 from .similar import rank as rank_similar, tag_weights
 from .library_db import (
-    db_connect, Rec, parse_query, rec_matches, SORTS, SIMILAR_SORT,
+    db_connect, Rec, compile_query, parse_query, SORTS, SIMILAR_SORT,
     vault_marks_by_path, vault_unmark, vault_projects_list, vault_ensure_project, vault_mark,
 )
 from .library_player import InlinePlayer
-from . import artwork, uithread
+from .tag_rail import Chip as RailChip, Section as RailSection, TagList, TagRail
+from . import artwork, heap, uithread
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
 from .widgets import popup_menu, menu_rule
@@ -138,30 +139,11 @@ class LibraryTab(ctk.CTkFrame):
         self._results_bytes = 0
         self._results_secs = 0.0
         self._project_colors: dict = {}
-        # Reused tag widgets - see _tag_button. Forty CTkButtons per clip,
-        # built fresh on every click, was 85ms of the 100ms it took to
-        # select a clip.
-        self._tag_pool: list = []
-        self._group_pool: list = []
-        self._tags_used = 0
-        self._groups_used = 0
+        # The inspector's tag list, drawn a moment after the clip is
+        # picked - see _queue_tag_list. _tags_for is the clip it shows,
+        # so redrawing the same clip keeps its scroll position.
         self._tags_job = None
-        self._chunk_job = None
-        self._tag_plan: list = []
-        self._detail_empty = None
-        # The tag rail's own pools - see _plan_chips. Chips are pooled by
-        # the position they occupy, because Tk cannot move a widget to a
-        # different parent and they live inside per-row frames.
-        self._rail_heads: list = []
-        self._rail_rows: list = []
-        self._rail_slots: list = []
-        self._rail_plan: list = []
-        self._rail_job = None
-        self._rail_at = 0
-        self._heads_planned = 0
-        self._rows_planned = 0
-        self._heads_done = 0
-        self._slots_planned: dict = {}
+        self._tags_for = None
         self._rail_gen = 0
         # The last tag counts, kept until the results or their tags change
         # - see _render_tagpanel.
@@ -175,7 +157,6 @@ class LibraryTab(ctk.CTkFrame):
         self._visible = False
         self._page_dirty = False
         self._rail_dirty = False
-        self._hidden_btn = None
         # Prepared gallery tiles - see TILE_CACHE. Written by the page
         # loader and the prefetch, read by both, so it takes a lock.
         self._tiles: collections.OrderedDict = collections.OrderedDict()
@@ -183,6 +164,9 @@ class LibraryTab(ctk.CTkFrame):
         self._prefetch_token = 0
         # Finished Tk images. UI thread only, so no lock.
         self._photos: collections.OrderedDict = collections.OrderedDict()
+        # Photos held on a hidden canvas so Tk has their display copies
+        # ready before a flip needs them - see _hold_warm.
+        self._warm: dict = {}
         self.page = 0
         self.selected: Rec | None = None
         # Paths rather than records: the record objects are rebuilt on
@@ -238,7 +222,6 @@ class LibraryTab(ctk.CTkFrame):
         self._card_font = tkfont.Font(family=T.UI, size=pt(12))
         self._badge_font = tkfont.Font(family=T.MONO, size=pt(10))
         self._spec_font = tkfont.Font(family=T.MONO, size=pt(11))
-        self._chip_font = tkfont.Font(family=T.UI, size=pt(11))
         self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
         # Remembered string widths - see _text_w. Keyed by which font, so
         # the same word in two sizes is two answers.
@@ -251,7 +234,6 @@ class LibraryTab(ctk.CTkFrame):
         self._measure_fonts = {"card": self._card_font,
                                "badge": self._badge_font,
                                "spec": self._spec_font,
-                               "chip": self._chip_font,
                                "quick": self._quick_font}
 
         self._build()
@@ -510,12 +492,11 @@ class LibraryTab(ctk.CTkFrame):
                                        font=font(9), text_color=T.FAINT, anchor="w")
         self.side_hint.grid(row=1, column=1, sticky="w")
 
-        self.tagpanel = ctk.CTkScrollableFrame(
-            self.side, fg_color=T.SURFACE, corner_radius=12, border_width=1,
-            border_color=T.ACCENT2_DEEP, scrollbar_button_color=T.LINE,
-            scrollbar_button_hover_color=T.FAINT)
+        # One canvas, not five hundred widgets - see tag_rail.
+        self.tagpanel = TagRail(
+            self.side, on_chip=self.add_token, on_menu=self._tag_menu,
+            on_toggle=self._toggle_sidebar_group, on_manage=self._manage_hidden)
         self.tagpanel.grid(row=1, column=0, sticky="nsew", pady=(2, 10))
-        self.tagpanel.grid_columnconfigure(0, weight=1)
 
         self.folders_label = ctk.CTkLabel(self.side, text="")
 
@@ -1212,12 +1193,11 @@ class LibraryTab(ctk.CTkFrame):
             font=font(11, "bold"), text_color=T.FAINT, anchor="w")
         self.detail_tags_head.grid(row=3, column=0, sticky="ew", padx=6, pady=(4, 4))
 
-        self.detail_tags = ctk.CTkScrollableFrame(
-            panel, fg_color=T.SURFACE, corner_radius=12, border_width=1,
-            border_color=T.LINE, scrollbar_button_color=T.LINE,
-            scrollbar_button_hover_color=T.FAINT)
+        # One canvas, not a CTkButton per tag - see tag_rail.
+        self.detail_tags = TagList(panel, on_chip=self.add_token,
+                                   on_menu=self._tag_menu,
+                                   on_toggle=self._toggle_group)
         self.detail_tags.grid(row=4, column=0, sticky="nsew", pady=(0, 10))
-        self.detail_tags.grid_columnconfigure(0, weight=1)
         # Theater is remembered between runs, so the column has to open in
         # whichever state it was left in.
         self._show_tags_panel(not self.cfg.theater)
@@ -1794,6 +1774,11 @@ class LibraryTab(ctk.CTkFrame):
             self._adopt_library(loaded)
             if then is not None:
                 then()
+            # The library is what the collector would spend its time
+            # scanning; take it out of the scan once it has settled.
+            heap.settle_soon(self)
+            # And have "Like this" ready before it is first asked for.
+            self.after(1500, self._warm_weights)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -2154,7 +2139,8 @@ class LibraryTab(ctk.CTkFrame):
         self._search_after = None
         query = self.search.get().strip()
         includes, excludes = parse_query(query)
-        self.filtered = [r for r in self.records if rec_matches(r, includes, excludes)]
+        matches = compile_query(includes, excludes)
+        self.filtered = [r for r in self.records if matches(r)]
         # The line under the gallery reads "N clips · X GB · Y hr of
         # footage" - totals over the whole result, not the page. Summed
         # here, where the result set changes, rather than in render_page:
@@ -2180,6 +2166,24 @@ class LibraryTab(ctk.CTkFrame):
                                          self._tag_weights())
             return
         self.filtered.sort(key=SORTS.get(choice, SORTS["Newest"]))
+
+    def _warm_weights(self) -> None:
+        """Work out the similarity weights on a worker, so the first
+        "Like this" after a load does not pay for them inside the click."""
+        if getattr(self, "_weights", None) is not None:
+            return
+        records = self.records
+
+        def work():
+            weights = tag_weights(records)
+            self.ui(adopt, weights)
+
+        def adopt(weights):
+            # Only for the library it was built from.
+            if self.records is records and getattr(self, "_weights", None) is None:
+                self._weights = weights
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _tag_weights(self) -> dict:
         """How much each tag is worth as a similarity signal, for this
@@ -2225,7 +2229,9 @@ class LibraryTab(ctk.CTkFrame):
                     font=font(9), width=10, hover_color=T.BTN_HOV)
                 pool.append(chip)
                 # Bound once - the chip outlives any one token, so the
-                # handler reads the token off it. See _tag_button.
+                # handler reads the token off it. Rebinding a pooled
+                # CTkButton leaks: its bind() registers a Tcl command on
+                # each inner widget, and nothing gives them back.
                 chip.configure(command=lambda c=chip: self._remove_token(
                     getattr(c, "paz_token", "")))
             chip.paz_token = token
@@ -2312,154 +2318,9 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── tag panel ────────────────────────────────────────────────────────
     #
-    # Tags render as chips packed into rows, the way the design has them,
+    # Tags render as chips wrapped into lines, the way the design has them,
     # not one full-width button per tag: the sidebar holds three or four
-    # times as many that way, and a wall of identical full-width rows is
-    # exactly the "not clean" part. Tk has no flex-wrap, so rows are
-    # measured and filled by hand.
-
-    CHIP_PAD = 18        # chip padding + border, on top of the text width
-    CHIP_ROOM = 236      # fallback usable width, before the rail is mapped
-
-    def _chip_room(self) -> int:
-        """The real usable width inside the rail, in screen pixels.
-
-        Measured rather than assumed. The constant said 236 while the
-        sidebar is actually over 400 wide at this scale, so a row that
-        could hold three chips was told it could hold one - which is how
-        a design of wrapped chips ended up rendering as the single column
-        of full-width rows it exists to avoid.
-        """
-        try:
-            room = int(self.tagpanel.winfo_width())
-        except tk.TclError:
-            room = 0
-        if room < px(80):
-            room = px(self.CHIP_ROOM)
-        # Its own padding, and the scrollbar down the right-hand side.
-        return max(room - px(26), px(110))
-
-    # The rail is rebuilt on every search, and building a chip - a
-    # CTkButton with a border and a rounded corner - costs three and a
-    # half milliseconds. A hundred and seventy of them is a six-hundred
-    # millisecond freeze, which was the largest single stall left in the
-    # app and is what the rail's 240ms deferral was hiding rather than
-    # fixing. So the chips are kept and pointed at different words, the
-    # way the inspector's tag list is.
-    #
-    # Tk cannot reparent a widget, and the chips live inside per-row
-    # frames so they can wrap. So a chip is pooled by the position it
-    # occupies - row three, slot four - which never changes parent. The
-    # wrap is worked out during planning, before anything is placed, so
-    # every chip's position is known in advance.
-
-    def _plan_header(self, title: str, key: str, open_now: bool,
-                     count: int, row: int, plan: list) -> int:
-        plan.append(("head", title, key, open_now, count, row))
-        self._heads_planned += 1
-        return row + 1
-
-    def _plan_chips(self, items: list, row: int, menu: bool, plan: list) -> int:
-        """items: (name, count, token, text colour, swatch colour or None).
-        Works out which row and slot each chip lands in, wrapping when the
-        next one will not fit. Measures, places nothing."""
-        used = 0
-        slot = 0
-        line = -1
-        room = self._chip_room()
-        # Everything here is in real screen pixels, because that is what
-        # the font reports. The design numbers go through px() to join it.
-        pad = px(self.CHIP_PAD)
-        gap = px(4)
-        for name, count, token, colour, swatch in items:
-            label = f"{name}  {count}"
-            width = self._text_w("chip", label) + pad
-            if swatch:
-                width += px(10)
-            if line < 0 or used + width > room:
-                line = self._rows_planned
-                self._rows_planned += 1
-                plan.append(("row", line, row))
-                row += 1
-                used = 0
-                slot = 0
-            plan.append(("chip", line, slot, label, width, colour, swatch,
-                         token, name, menu))
-            self._slots_planned[line] = slot + 1
-            slot += 1
-            used += width + gap
-        return row
-
-    def _rail_row(self, index: int, row: int) -> None:
-        """The frame one wrapped line of chips packs into."""
-        while index >= len(self._rail_rows):
-            self._rail_rows.append(
-                ctk.CTkFrame(self.tagpanel, fg_color="transparent"))
-            self._rail_slots.append([])
-        self._rail_rows[index].grid(row=row, column=0, sticky="w",
-                                    padx=5, pady=1)
-
-    def _rail_chip(self, line: int, slot: int, label: str, width: int,
-                   colour: str, swatch, token: str, name: str,
-                   menu: bool) -> None:
-        slots = self._rail_slots[line]
-        if slot < len(slots):
-            chip = slots[slot]
-        else:
-            chip = ctk.CTkButton(
-                self._rail_rows[line], text="", height=24, corner_radius=6,
-                font=font(11), fg_color=T.SURFACE, hover_color=T.BTN_HOV,
-                border_width=1, border_color=T.LINE)
-            slots.append(chip)
-            # Bound once - see _tag_button for why rebinding leaks. The
-            # right-click menu is offered for tag chips and not for
-            # project chips, so the handler checks rather than the
-            # binding existing or not.
-            chip.bind("<Button-3>", lambda e, c=chip: (
-                self._tag_menu(e, getattr(c, "paz_token", ""),
-                               getattr(c, "paz_name", ""))
-                if getattr(c, "paz_menu", False) else None))
-            chip.configure(command=lambda c=chip: self.add_token(
-                getattr(c, "paz_token", "")))
-        chip.paz_token = token
-        chip.paz_name = name
-        chip.paz_menu = bool(menu)
-        # unscaled(), because `width` is a measured screen width and CTk
-        # multiplies whatever it is handed by the widget scaling. Passing
-        # it straight through made every chip half again as wide as its
-        # own text, which is the other half of why they would not fit
-        # two to a row. See theme.unscaled.
-        restyle(chip, text=label, width=unscaled(width), text_color=colour)
-        if not chip.winfo_ismapped():
-            chip.pack(side="left", padx=(0, 4))
-
-    def _rail_head(self, index: int, title: str, key: str, open_now: bool,
-                   count: int, row: int) -> None:
-        while index >= len(self._rail_heads):
-            self._rail_heads.append(ctk.CTkButton(
-                self.tagpanel, text="", height=22, corner_radius=5,
-                font=font(9, "bold"), anchor="w", fg_color="transparent",
-                hover_color=T.BTN_HOV, text_color=T.FAINT))
-        header = self._rail_heads[index]
-        restyle(header,
-                text=("▾  " if open_now else "▸  ") + f"{title}   {count}",
-                command=lambda k=key: self._toggle_sidebar_group(k))
-        header.grid(row=row, column=0, sticky="ew", padx=6,
-                    pady=(12 if row else 4, 3))
-
-    def _park_rail(self) -> None:
-        """Hide what this rail does not need. Called as soon as the plan
-        is known, not after the last chunk, so the previous search's tags
-        never sit under this one's."""
-        for header in self._rail_heads[self._heads_planned:]:
-            header.grid_remove()
-        for frame in self._rail_rows[self._rows_planned:]:
-            frame.grid_remove()
-        for line, slots in enumerate(self._rail_slots):
-            keep = self._slots_planned.get(line, 0) if line < self._rows_planned else 0
-            for chip in slots[keep:]:
-                if chip.winfo_ismapped():
-                    chip.pack_forget()
+    # times as many that way. The rail draws them - see tag_rail.
 
     TAGPANEL_DELAY_MS = 240
 
@@ -2525,7 +2386,6 @@ class LibraryTab(ctk.CTkFrame):
         # Stop placing the last rail's chips now rather than when the new
         # counts land: they are the previous search's tags, and they are
         # going into the same pooled widgets.
-        self._cancel_rail_chunks()
         self._rail_gen += 1
         gen = self._rail_gen
         # Folding a group or hiding a tag changes what the rail shows, not
@@ -2550,21 +2410,7 @@ class LibraryTab(ctk.CTkFrame):
         if gen != self._rail_gen:
             return                  # a newer search is already counting
         self._rail_counts = counted
-        self._cancel_rail_chunks()
-        self._heads_planned = 0
-        self._rows_planned = 0
-        self._slots_planned = {}
-        self._heads_done = 0
-        artists = counted["artists"]
-        characters = counted["characters"]
-        species = counted["species"]
-        series = counted["series"]
-        lore = counted["lore"]
-        other = counted["other"]
-        projects = counted["projects"]
-
         hidden = set(self.cfg.hidden_tags)
-        row = 0
         # e621's category colours, because that is what a tag rail on a
         # library of e621 posts should look like. These briefly went
         # neutral on the grounds that colour ought to carry state rather
@@ -2575,94 +2421,40 @@ class LibraryTab(ctk.CTkFrame):
         # actually wrong before was that the colours were arbitrary and
         # disagreed between the rail and the inspector; now they are the
         # site's own, and the same in both.
-        groups = (("ARTISTS", artists, "artist:", T.TAG["artist"]),
-                 ("CHARACTERS", characters, "character:", T.TAG["character"]),
-                 ("SPECIES", species, "species:", T.TAG["species"]),
-                 ("SERIES", series, "copyright:", T.TAG["copyright"]),
-                 ("LORE", lore, "lore:", T.TAG["lore"]),
-                 ("TAGS", other, "", T.TAG["general"]))
-        plan: list = []
+        groups = (("ARTISTS", counted["artists"], "artist:", T.TAG["artist"]),
+                  ("CHARACTERS", counted["characters"], "character:", T.TAG["character"]),
+                  ("SPECIES", counted["species"], "species:", T.TAG["species"]),
+                  ("SERIES", counted["series"], "copyright:", T.TAG["copyright"]),
+                  ("LORE", counted["lore"], "lore:", T.TAG["lore"]),
+                  ("TAGS", counted["other"], "", T.TAG["general"]))
+        sections: list = []
         for title, counter, prefix, colour in groups:
             visible = [(n, c) for n, c in counter.most_common(60) if n not in hidden][:24]
             if not visible:
                 continue
             key = title.lower()
-            open_now = self.cfg.sidebar_group_open.get(key, True)
-            row = self._plan_header(title, key, open_now, len(visible), row, plan)
-            if not open_now:
-                continue
-            row = self._plan_chips(
-                [(name, count, prefix + name, colour, None) for name, count in visible],
-                row, True, plan)
+            sections.append(RailSection(
+                title, key, self.cfg.sidebar_group_open.get(key, True),
+                [RailChip(name, count, prefix + name, colour)
+                 for name, count in visible],
+                len(visible)))
 
-        # PROJECTS gets its own block instead of the loop above - project
-        # names are free text (can hold spaces), so the search token needs
-        # quoting, and each one gets its own Vault-assigned colour rather
-        # than one fixed colour for the whole group.
+        # PROJECTS is built apart from the loop above - project names are
+        # free text (can hold spaces), so the search token needs quoting,
+        # and each one gets its own Vault-assigned colour rather than one
+        # fixed colour for the whole group. No right-click menu: hiding
+        # and excluding are things done to tags.
+        projects = counted["projects"]
         if projects:
-            key = "projects"
-            open_now = self.cfg.sidebar_group_open.get(key, True)
-            row = self._plan_header("PROJECTS", key, open_now, len(projects),
-                                    row, plan)
-            if open_now:
-                row = self._plan_chips(
-                    [(name, count, f'used:"{name}"',
-                      self._project_colors.get(name, T.DIM), self._project_colors.get(name))
-                     for name, count in projects.most_common(60)],
-                    row, False, plan)
-
-        # Everything this rail needs is now known, so everything it does
-        # not need can go at once - before a single chip is placed.
-        self._park_rail()
-        self._rail_plan = plan
-        self._rail_at = 0
-        self._render_rail_chunk()
-
-        if self._hidden_btn is None:
-            self._hidden_btn = ctk.CTkButton(
-                self.tagpanel, text="", height=24, corner_radius=5,
-                font=font(9), fg_color="transparent", hover_color=T.BTN_HOV,
-                text_color=T.FAINT, command=self._manage_hidden)
-        if hidden:
-            self._hidden_btn.configure(
-                text=f"{len(hidden)} hidden tag{'s' if len(hidden) != 1 else ''} "
-                     f"· manage")
-            self._hidden_btn.grid(row=row, column=0, sticky="ew",
-                                  padx=8, pady=(10, 6))
-        else:
-            self._hidden_btn.grid_remove()
-
-    def _cancel_rail_chunks(self) -> None:
-        if self._rail_job is not None:
-            try:
-                self.after_cancel(self._rail_job)
-            except ValueError:
-                pass
-            self._rail_job = None
-
-    def _render_rail_chunk(self) -> None:
-        """Place planned rail widgets for up to CHUNK_MS, then yield.
-
-        With a warm pool the whole rail lands in one pass. The budget is
-        for the first rail of a session, when every chip has to be built
-        rather than reused."""
-        self._rail_job = None
-        plan = self._rail_plan
-        deadline = time.perf_counter() + self.CHUNK_MS / 1000.0
-        while self._rail_at < len(plan):
-            item = plan[self._rail_at]
-            self._rail_at += 1
-            if item[0] == "head":
-                self._rail_head(self._heads_done, *item[1:])
-                self._heads_done += 1
-            elif item[0] == "row":
-                self._rail_row(item[1], item[2])
-            else:
-                self._rail_chip(*item[1:])
-            if time.perf_counter() >= deadline:
-                break
-        if self._rail_at < len(plan):
-            self._rail_job = self.after(16, self._render_rail_chunk)
+            sections.append(RailSection(
+                "PROJECTS", "projects",
+                self.cfg.sidebar_group_open.get("projects", True),
+                [RailChip(name, count, f'used:"{name}"',
+                          self._project_colors.get(name, T.DIM),
+                          self._project_colors.get(name), menu=False)
+                 for name, count in projects.most_common(60)],
+                len(projects)))
+        self.tagpanel.show(sections, len(hidden))
 
     # ── gallery ─────────────────────────────────────────────────────────────
 
@@ -3097,6 +2889,8 @@ class LibraryTab(ctk.CTkFrame):
             rec = self._layout[index]["rec"]
             if rec.duration > 0:
                 self.frames.prime_hover(rec.path, rec.duration)
+            # And its still, so clicking it is only a Tk image away.
+            self._prepare_stills([rec])
 
     def _card_box(self, index: int) -> tuple:
         slot = self._layout[index]
@@ -3560,7 +3354,9 @@ class LibraryTab(ctk.CTkFrame):
         self._photos[key] = photo
         self._photos.move_to_end(key)
         while len(self._photos) > self.PHOTO_CACHE:
-            self._photos.popitem(last=False)
+            gone, _photo = self._photos.popitem(last=False)
+            if gone in self._warm:
+                self._release_warm(keep=set(self._warm) - {gone})
         # The composed picture existed only to become this. Nothing will
         # ask for it again, and it is the larger of the two.
         with self._tiles_lock:
@@ -3671,15 +3467,21 @@ class LibraryTab(ctk.CTkFrame):
         token = self._prefetch_token
 
         def work():
+            keys = []
             for rec in wanted:
                 # A newer prefetch, or a page turn, means these are no
                 # longer the tiles anyone is about to want.
                 if token != self._prefetch_token:
                     return
                 key = (rec.path, width, height, fit)
+                keys.append(key)
+                if key in self._photos:
+                    continue
                 if self._tile_get(key) is None:
                     self._tile_put(key, self._tile_build(rec, width, height, fit))
                     time.sleep(self.PREFETCH_PAUSE)
+            if token == self._prefetch_token:
+                self.ui(self._promote_tiles, token, keys)
 
         def begin():
             if token != self._prefetch_token:
@@ -3690,6 +3492,75 @@ class LibraryTab(ctk.CTkFrame):
         # settling its own tiles, and they matter more than the next
         # page's.
         self.after(self.PREFETCH_AFTER_MS, begin)
+
+    # How many prepared tiles become Tk images per frame, once the pages
+    # either side have been prepared. Each is a millisecond or so of the
+    # UI thread; three is well inside a frame, and two pages' worth is
+    # done in about half a second of otherwise idle time.
+    PROMOTE_PER_TICK = 3
+
+    def _promote_tiles(self, token: int, keys: list) -> None:
+        """Turn the prefetched tiles into Tk images, a few per frame.
+
+        The prefetch leaves the pages either side composed but not yet
+        drawable, and making the Tk image is the one step that has to
+        happen on this thread - so a flip to a prepared page still spent
+        a tenth of a second making forty-eight of them. Done here, in
+        slices too small to notice, the flip only has to place them."""
+        if token != self._prefetch_token:
+            return
+        if getattr(self, "_warm_token", None) != token:
+            # A new pair of neighbour pages: stop holding the last pair's.
+            self._warm_token = token
+            self._release_warm(keep=set(keys))
+        done = 0
+        while keys and done < self.PROMOTE_PER_TICK:
+            key = keys.pop(0)
+            photo = self._photos.get(key)
+            if photo is None:
+                image = self._tile_get(key)
+                if image is None:
+                    continue
+                try:
+                    photo = ImageTk.PhotoImage(image)
+                except Exception:
+                    continue
+                self._photo_put(key, photo)
+            elif key in self._warm:
+                continue
+            self._hold_warm(key, photo)
+            done += 1
+        if keys:
+            self.after(16, lambda: self._promote_tiles(token, keys))
+
+    # Tk keeps a second copy of every photo, converted for the display,
+    # and makes it the first time the photo is put on screen - about a
+    # millisecond per card, forty-eight times, inside the page flip. It
+    # makes that copy for a canvas that is never shown just the same, and
+    # keeps it while anything there uses the photo. So the pages either
+    # side are "shown" on this one, ahead of time, and the flip finds the
+    # copies made. (Measured: 42ms to put 48 new photos on the gallery,
+    # 0.3ms when they are held here first.)
+
+    def _hold_warm(self, key, photo) -> None:
+        holder = getattr(self, "_warm_holder", None)
+        if holder is None:
+            holder = self._warm_holder = tk.Canvas(self, width=1, height=1,
+                                                   highlightthickness=0)
+        try:
+            self._warm[key] = holder.create_image(0, 0, image=photo, anchor="nw")
+        except tk.TclError:
+            pass
+
+    def _release_warm(self, keep=()) -> None:
+        holder = getattr(self, "_warm_holder", None)
+        for key in [k for k in self._warm if k not in keep]:
+            item = self._warm.pop(key)
+            if holder is not None:
+                try:
+                    holder.delete(item)
+                except tk.TclError:
+                    pass
 
     def _place_thumb(self, index: int, rec: Rec, image, token: int, key=None):
         if token != self._page_token or index >= len(self._layout):
@@ -3889,6 +3760,30 @@ class LibraryTab(ctk.CTkFrame):
         self._restyle_these(was, rec)
         self._render_details()
         self._report_marks()
+        # The arrow keys go to a neighbour next; have its still ready.
+        page = self._layout
+        for index, slot in enumerate(page):
+            if slot["rec"] is rec:
+                self._prepare_stills([page[i]["rec"] for i in (index + 1, index - 1)
+                                      if 0 <= i < len(page)])
+                break
+
+    def _prepare_stills(self, recs) -> None:
+        """Have the player make these clips' stills ahead of a click -
+        each at the size its own box will be, since the box takes the
+        clip's shape. See InlinePlayer.prepare_stills."""
+        fitted = getattr(self, "_panel_fit", None)
+        if not fitted:
+            return
+        inner = fitted[0] - 26
+        jobs = []
+        for rec in recs:
+            if rec is None or rec is self.selected:
+                continue
+            width, height = self._picture_box(inner, rec)
+            jobs.append((rec.path, width, height))
+        if jobs:
+            self.player.prepare_stills(jobs)
 
     def _select_and_play(self, rec: Rec):
         self._select(rec)
@@ -3921,7 +3816,7 @@ class LibraryTab(ctk.CTkFrame):
 
     DEFAULT_ASPECT = 16 / 9
 
-    def clip_aspect(self) -> float:
+    def clip_aspect(self, rec=None) -> float:
         """The shape of the clip on screen, width over height.
 
         The picture box is built to this rather than to a fixed 16:9, so a
@@ -3929,7 +3824,8 @@ class LibraryTab(ctk.CTkFrame):
         stands up in it. Either way the video fills the box exactly: no
         bars around it, and nothing cropped off it.
         """
-        rec = self.selected
+        if rec is None:
+            rec = self.selected
         width = getattr(rec, "width", 0) or 0
         height = getattr(rec, "height", 0) or 0
         if width > 0 and height > 0:
@@ -3991,7 +3887,7 @@ class LibraryTab(ctk.CTkFrame):
             return max(min(room - chrome, int(room * self.PICTURE_SHARE_MAX)), 0)
         return max(room - chrome, 0)
 
-    def _picture_box(self, inner: int) -> tuple:
+    def _picture_box(self, inner: int, rec=None) -> tuple:
         """The box for the picture: the clip's own shape, at a height that
         does not depend on the clip.
 
@@ -4008,7 +3904,7 @@ class LibraryTab(ctk.CTkFrame):
         centred in the card. Theater and the handles are how it gets
         bigger than that.
         """
-        aspect = self.clip_aspect()
+        aspect = self.clip_aspect(rec)
         width = max(int(inner), 240)
         # Kept as a float for the width below: rounding here and then
         # again there loses a pixel or two off the column's width, which
@@ -4150,115 +4046,63 @@ class LibraryTab(ctk.CTkFrame):
         if not rec:
             self.detail_name.configure(text="Nothing selected")
             self.detail_meta.configure(text="")
-            self._cancel_tag_chunks()
-            self._tags_used = 0
-            self._groups_used = 0
-            self._tag_plan = []
-            self._park_tag_widgets()
-            if self._detail_empty is not None:
-                self._detail_empty.grid_remove()
+            self._cancel_tag_list()
+            self._tags_for = None
+            self.detail_tags.show([], keep_scroll=False)
             return
 
         self.detail_name.configure(text=rec.name)
         self._render_meta_line(rec)
         self._queue_tag_list(rec)
 
+    # How long the tag list waits after a clip is picked. Walking the
+    # results with the arrow keys passes through clips nobody stops on,
+    # and each would otherwise draw its list for nothing. Drawing one is
+    # a few milliseconds now it is a canvas, so this only has to outlast
+    # a key's auto-repeat, not hide a stall.
+    TAG_LIST_DELAY_MS = 40
+
     def _queue_tag_list(self, rec: Rec) -> None:
-        self._cancel_tag_chunks()
+        self._cancel_tag_list()
+        self._tags_job = self.after(self.TAG_LIST_DELAY_MS,
+                                    lambda: self._render_tag_list(rec))
+
+    def _cancel_tag_list(self) -> None:
         if self._tags_job is not None:
             try:
                 self.after_cancel(self._tags_job)
             except ValueError:
                 pass
-        self._tags_job = self.after(90, lambda: self._render_tag_list(rec))
-
-    def _cancel_tag_chunks(self) -> None:
-        if self._chunk_job is not None:
-            try:
-                self.after_cancel(self._chunk_job)
-            except ValueError:
-                pass
-            self._chunk_job = None
-
-    # How long one callback may spend placing tag rows. A well-tagged clip
-    # here carries well over a hundred, and placing them all in one go is
-    # a tenth of a second with the window dead - which is what the panel
-    # felt like on the busiest clips. Only about twenty are on screen at
-    # once anyway, so the first chunk is everything you can see and the
-    # rest arrive over the next few frames.
-    #
-    # A time budget rather than a count of rows, because the two costs
-    # involved differ by a factor of twenty: reconfiguring a pooled
-    # button is a tenth of a millisecond, building one that does not
-    # exist yet is two. A count tuned for the warm case stalls on a cold
-    # pool and a count tuned for the cold case dribbles forever on a warm
-    # one. This asks the only question that matters - is the frame gone
-    # yet - and so needs no tuning per machine either.
-    CHUNK_MS = 12.0
+            self._tags_job = None
 
     def _render_tag_list(self, rec: Rec) -> None:
         self._tags_job = None
-        self._cancel_tag_chunks()
         # The selection may have moved on while this was waiting.
         if rec is not self.selected:
             return
-        self._tags_used = 0
-        self._groups_used = 0
-        groups = [
+        groups = (
             ("Artists", "artist:", rec.artists, T.TAG["artist"]),
             ("Characters", "character:", rec.characters, T.TAG["character"]),
             ("Species", "species:", rec.species, T.TAG["species"]),
             ("Series", "copyright:", rec.copyrights, T.TAG["copyright"]),
             ("Lore", "lore:", rec.lore, T.TAG["lore"]),
             ("Tags", "", sorted(rec.tags - rec.named), T.TAG["general"]),
-        ]
-
-        # The headers go up straight away - there are at most six of them
-        # and they are the shape of the panel. The tag rows under them are
-        # only planned here, as a flat list of placements, and placed a
-        # chunk at a time below.
-        plan: list = []
-        row = 0
-        any_content = False
+        )
+        sections: list = []
         for title, prefix, names, colour in groups:
             if not names:
                 continue
-            any_content = True
-            row = self._detail_group(title, prefix, names, colour, row, plan)
-        self._tag_plan = plan
-
-        # Anything the previous clip used and this one does not, hidden
-        # now rather than after the last chunk - a stale tag left sitting
-        # under a new clip's list reads as this clip's tag.
-        for button in self._tag_pool[len(plan):]:
-            button.grid_remove()
-        for header in self._group_pool[self._groups_used:]:
-            header.grid_remove()
-
-        if self._detail_empty is None:
-            self._detail_empty = ctk.CTkLabel(
-                self.detail_tags,
-                text="No tags for this clip yet - press “Fix missing” up top.",
-                font=font(11), text_color=T.FAINT, wraplength=380,
-                justify="left")
-        if any_content:
-            self._detail_empty.grid_remove()
-        else:
-            self._detail_empty.grid(row=0, column=0, columnspan=2,
-                                    padx=10, pady=10, sticky="w")
-        self._render_tag_chunk()
-
-    def _render_tag_chunk(self) -> None:
-        """Place planned tag rows for up to CHUNK_MS, then yield."""
-        self._chunk_job = None
-        plan = self._tag_plan
-        deadline = time.perf_counter() + self.CHUNK_MS / 1000.0
-        while self._tags_used < len(plan):
-            self._tag_button(*plan[self._tags_used])
-            if time.perf_counter() >= deadline:
-                break
-        if self._tags_used < len(plan):
-            self._chunk_job = self.after(16, self._render_tag_chunk)
+            key = title.lower()
+            sections.append(RailSection(
+                title.upper(), key, self.cfg.detail_open.get(key, True),
+                [RailChip(name, None, prefix + name, colour) for name in names],
+                len(names),
+                # A long list of plain tags goes two-up; names stay one to
+                # a row, because they are the ones worth reading in full.
+                columns=2 if (prefix == "" and len(names) > 6) else 1))
+        same_clip = self._tags_for == rec.path
+        self._tags_for = rec.path
+        self.detail_tags.show(sections, keep_scroll=same_clip, empty=True)
 
     def _render_meta_line(self, rec: Rec) -> None:
         """The one line under the file name. Its own method because a mark
@@ -4276,90 +4120,10 @@ class LibraryTab(ctk.CTkFrame):
             bits.append("used: " + ", ".join(rec.used_projects))
         self.detail_meta.configure(text="  ·  ".join(bits))
 
-    def _detail_group(self, title: str, prefix: str, names: list, colour: str,
-                      row: int, plan: list) -> int:
-        """Grid this group's header and append its tag rows to `plan`.
-        Returns the next free row. The rows are placed by
-        _render_tag_chunk, not here - see TAG_CHUNK."""
-        key = title.lower()
-        open_now = self.cfg.detail_open.get(key, True)
-        pool = self._group_pool
-        if self._groups_used < len(pool):
-            header = pool[self._groups_used]
-        else:
-            header = ctk.CTkButton(
-                self.detail_tags, text="", height=29, corner_radius=7,
-                font=font(11, "bold"), anchor="w", fg_color=T.ELEVATED,
-                hover_color=T.BTN_HOV, text_color=T.FAINT)
-            pool.append(header)
-        self._groups_used += 1
-        header.configure(
-            text=("▾  " if open_now else "▸  ") + f"{title.upper()}   {len(names)}",
-            command=lambda k=key: self._toggle_group(k))
-        header.grid(row=row, column=0, columnspan=2, sticky="ew", padx=6,
-                   pady=(8 if row else 4, 2))
-        row += 1
-        if not open_now:
-            return row
-
-        two_up = len(names) > 6 and prefix == ""
-        shown = names[:160]
-        for index, name in enumerate(shown):
-            token = prefix + name
-            if two_up:
-                plan.append((token, name, colour, row + index // 2, index % 2, 1))
-            else:
-                plan.append((token, name, colour, row + index, 0, 2))
-        row += ((len(shown) + 1) // 2) if two_up else len(shown)
-        return row
-
     def _toggle_group(self, key: str):
         self.cfg.detail_open[key] = not self.cfg.detail_open.get(key, True)
         self.cfg.save_soon()
         self._render_details()
-
-    # ── the tag list, reused rather than rebuilt ─────────────────────────
-    #
-    # A clip here carries forty or more tags, and building forty CTkButtons
-    # costs 85ms - which was paid on every single click of a clip, and
-    # again on every mark. The widgets are kept and reconfigured instead:
-    # the same list, pointed at different words.
-
-    def _tag_button(self, token: str, label: str, colour: str, row: int,
-                    column: int = 0, span: int = 1):
-        pool = self._tag_pool
-        if self._tags_used < len(pool):
-            button = pool[self._tags_used]
-        else:
-            button = ctk.CTkButton(
-                self.detail_tags, text="", height=28, corner_radius=6,
-                font=font(13), anchor="w", fg_color="transparent",
-                hover_color=T.BTN_HOV)
-            pool.append(button)
-            # Bound once, for the life of the pool. Binding per render
-            # leaks: CTkButton.bind registers a Tcl command on each of
-            # its two inner widgets, and neither unbind nor rebinding
-            # gives them back - measured at four hundred and eighty
-            # abandoned commands per lap of ordinary use, climbing for as
-            # long as the app is open. The handlers read the tag off the
-            # widget instead, because the widget outlives the tag.
-            button.bind("<Button-3>", lambda e, b=button: self._tag_menu(
-                e, getattr(b, "paz_token", ""), getattr(b, "paz_label", "")))
-            button.configure(command=lambda b=button: self.add_token(
-                getattr(b, "paz_token", "")))
-        self._tags_used += 1
-        button.paz_token = token
-        button.paz_label = label
-        restyle(button, text=label, text_color=colour)
-        button.grid(row=row, column=column, columnspan=span, sticky="ew", padx=6, pady=2)
-
-    def _park_tag_widgets(self) -> None:
-        """Hide the pooled widgets this render did not need. grid_remove,
-        not destroy - the next clip will almost certainly want them."""
-        for button in self._tag_pool[self._tags_used:]:
-            button.grid_remove()
-        for header in self._group_pool[self._groups_used:]:
-            header.grid_remove()
 
     def _tag_menu(self, event, token: str, name: str):
         menu = popup_menu(self.root)
