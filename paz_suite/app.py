@@ -27,7 +27,7 @@ from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
 from .watchdog import Watchdog
 from . import watchdog
-from . import artwork, audio_out, uithread, vlc_player
+from . import artwork, audio_out, heap, uithread, vlc_player
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
 
@@ -821,6 +821,8 @@ class PazApp:
 
 
 def main() -> None:
+    # No full garbage-collection passes while starting up - see heap.
+    heap.hold()
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
     root = ctk.CTk()
@@ -842,6 +844,7 @@ def main() -> None:
     dog = Watchdog(root, os.path.join(CONFIG_DIR, "freeze.log"))
     dog.start()
     PazApp(root)
+    root.after(heap.HOLD_AT_MOST_MS, heap.release)
     try:
         root.mainloop()
     finally:

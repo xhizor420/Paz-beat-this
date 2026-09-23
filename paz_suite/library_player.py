@@ -45,6 +45,11 @@ class InlinePlayer:
         self._thumb_src = None
         # Finished stills - see STILL_CACHE.
         self._stills: collections.OrderedDict = collections.OrderedDict()
+        # Stills made ahead, off this thread - see prepare_stills.
+        self._prepared: collections.OrderedDict = collections.OrderedDict()
+        self._prep_lock = threading.Lock()
+        self._prep_jobs: list = []
+        self._prep_running = False
         self._peek_token = 0
         self._peek_busy = False
         self._peek_pending = None
@@ -651,11 +656,14 @@ class InlinePlayer:
                    self.engine.view_h, self.tab.cfg.thumb_fit)
             photo = self._stills.get(key)
             if photo is None:
-                image = self._thumb_source(rec)
+                with self._prep_lock:
+                    image = self._prepared.pop(key, None)
                 if image is None:
-                    raise ValueError("no thumbnail")
-                image = fit_frame(image, self.engine.view_w,
-                                  self.engine.view_h, self.tab.cfg.thumb_fit)
+                    image = self._thumb_source(rec)
+                    if image is None:
+                        raise ValueError("no thumbnail")
+                    image = fit_frame(image, self.engine.view_w,
+                                      self.engine.view_h, self.tab.cfg.thumb_fit)
                 photo = ImageTk.PhotoImage(image)
                 self._still_keep(key, photo)
             self.canvas.delete("all")
@@ -675,6 +683,81 @@ class InlinePlayer:
     # largest pictures the app holds, so it keeps a session's worth
     # rather than a library's.
     STILL_CACHE = 24
+
+    # How many ready-made stills wait to be asked for. They are only
+    # ever the clip under the pointer and the two either side of the
+    # selection, so a handful covers every one still likely to be used.
+    PREPARED = 8
+
+    @staticmethod
+    def still_size(width: int, height: int) -> tuple:
+        """The picture size set_size() will actually use for a box of
+        `width` x `height` - so a still made ahead is made at that size."""
+        width = max(int(width) // 2 * 2, 240)
+        height = max(int(height) if height else int(width * 9 / 16) // 2 * 2, 135)
+        return width, height
+
+    def prepare_stills(self, jobs: list) -> None:
+        """Make these clips' resting stills now, off the UI thread.
+
+        `jobs` is [(path, width, height)], each the box that clip will get
+        when it is picked. Showing a clip for the first time decodes its
+        thumbnail and scales it with a blurred letterbox fill - about ten
+        milliseconds, on the UI thread, inside the click. Done while the
+        pointer is still resting on the card, or for the clips an arrow
+        key reaches next, the click only turns it into a Tk image.
+
+        Only the newest request matters: a sweep of the pointer across
+        the grid asks about every card it crosses, and the worker takes
+        whatever was asked for last when it is free.
+        """
+        if self.holds_own_still:
+            return
+        fit = self.tab.cfg.thumb_fit
+        wanted = []
+        for path, width, height in jobs:
+            if not path:
+                continue
+            key = (path, *self.still_size(width, height), fit)
+            if key not in self._stills:
+                wanted.append(key)
+        if not wanted:
+            return
+        with self._prep_lock:
+            wanted = [k for k in wanted if k not in self._prepared]
+            if not wanted:
+                return
+            self._prep_jobs = wanted
+            if self._prep_running:
+                return
+            self._prep_running = True
+        threading.Thread(target=self._prepare_work, daemon=True,
+                         name="still-prep").start()
+
+    def _prepare_work(self) -> None:
+        """Worker thread. Touches no widget and none of the UI thread's
+        caches - only _prepared, under its lock."""
+        while True:
+            with self._prep_lock:
+                if not self._prep_jobs:
+                    self._prep_running = False
+                    return
+                key = self._prep_jobs.pop(0)
+                if key in self._prepared:
+                    continue
+            path, width, height, fit = key
+            try:
+                with open(os.path.join(THUMB_DIR, thumb_key(path)), "rb") as fh:
+                    image = Image.open(io.BytesIO(fh.read()))
+                    image.load()
+                image = fit_frame(image, width, height, fit)
+            except Exception:
+                continue
+            with self._prep_lock:
+                self._prepared[key] = image
+                self._prepared.move_to_end(key)
+                while len(self._prepared) > self.PREPARED:
+                    self._prepared.popitem(last=False)
 
     def _still_keep(self, key, photo) -> None:
         self._stills[key] = photo

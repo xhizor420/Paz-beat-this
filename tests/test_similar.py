@@ -109,3 +109,44 @@ def test_no_target_leaves_the_order_alone():
 def test_an_empty_library_has_no_weights():
     assert similar.tag_weights([]) == {}
     assert similar.tag_weights([Rec("a.mp4", [])]) == {}
+
+
+# ── the fast ranking puts every clip exactly where the full sort did ───
+
+def old_rank(records, target, weights):
+    """rank() as it was before it skipped the clips that score nothing -
+    kept verbatim as the reference."""
+    if target is None:
+        return list(records)
+    target_tags = getattr(target, "tags", None) or set()
+    target_named = getattr(target, "named", frozenset())
+    if not target_tags:
+        return list(records)
+
+    def tie(rec):
+        return getattr(rec, "sort_name", "") or rec.name.lower()
+
+    def key(rec):
+        if rec.path == target.path:
+            return (-1e9, tie(rec))
+        return (-similar.score(rec, target_tags, target_named, weights), tie(rec))
+
+    return sorted(records, key=key)
+
+
+def test_the_fast_ranking_matches_the_full_sort():
+    import random
+    rng = random.Random(7)
+    pool = [f"t{i}" for i in range(60)]
+    recs = []
+    for i in range(800):
+        tags = rng.sample(pool, rng.randint(0, 12))
+        named = [t for t in tags if rng.random() < 0.2]
+        # Duplicate names on purpose: ties have to keep their order.
+        recs.append(Rec(f"clip{rng.randint(0, 300)}.mp4", tags, named))
+        recs[-1].path = f"/p/{i}"
+    weights = similar.tag_weights(recs)
+    for target in rng.sample(recs, 40):
+        expected = [r.path for r in old_rank(recs, target, weights)]
+        got = [r.path for r in similar.rank(recs, target, weights)]
+        assert got == expected

@@ -1,23 +1,21 @@
-"""The tag rail: how chips wrap, and how they are reused.
+"""The tag rail: how chips wrap, and how the pointer finds them.
 
-Two things were wrong here and each one alone was enough to ruin the
+Two things were wrong here once and each one alone was enough to ruin the
 layout. The wrap compared a width measured in real screen pixels against
 a room constant written in design pixels, so at 150% scaling a row that
 could hold three chips was told it could hold one. And the measured width
-was handed straight to CustomTkinter, which multiplies what it is given
-by the widget scaling, so every chip rendered half again as wide as its
-own text. Between them, a design of wrapped chips rendered as a single
-column of full-width rows - the exact thing it exists to avoid.
+was handed to CustomTkinter, which multiplies what it is given by the
+widget scaling, so every chip rendered half again as wide as its own
+text. Between them, a design of wrapped chips rendered as a single column
+of full-width rows - the exact thing it exists to avoid.
 
-Rebuilding it was also the largest stall left in the app: a hundred and
-seventy CTkButtons at three and a half milliseconds each. The chips are
-pooled now, which is why the parking rules below matter - a reused chip
-that is not hidden still reads as a tag of the current search.
+The rail is one canvas now (see paz_suite/tag_rail.py), so the geometry
+is a function of the chips, the width and a font - tested here without a
+window - and clicks are found by hit-testing that geometry.
 """
 
 from __future__ import annotations
 
-import contextlib
 import os
 import sys
 
@@ -26,58 +24,32 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from paz_suite import theme                                 # noqa: E402
+from paz_suite import tag_rail                              # noqa: E402
+from paz_suite.tag_rail import Chip, Section, hit, lay_out  # noqa: E402
 from paz_suite.library_tab import LibraryTab                # noqa: E402
 
 
-class Font:
+def measure(text: str) -> int:
     """A font whose measurements are predictable: 10px per character,
     scaled the way a real one would be."""
-
-    def measure(self, text: str) -> int:
-        return int(len(text) * 10 * theme.T.SCALE)
+    return int(len(text) * 10 * theme.T.SCALE)
 
 
-class Panel:
-    def __init__(self, width):
-        self._width = width
-
-    def winfo_width(self):
-        return self._width
+def chips(names, swatch=None):
+    return [Chip(n, 1, n, "#fff", swatch) for n in names]
 
 
-class FakeTab:
-    CHIP_PAD = LibraryTab.CHIP_PAD
-    CHIP_ROOM = LibraryTab.CHIP_ROOM
-    WIDTH_CACHE = LibraryTab.WIDTH_CACHE
-    _chip_room = LibraryTab._chip_room
-    _plan_chips = LibraryTab._plan_chips
-    _plan_header = LibraryTab._plan_header
-    _text_w = LibraryTab._text_w
-
-    def __init__(self, rail_width=400):
-        self.tagpanel = Panel(rail_width)
-        self._chip_font = Font()
-        # Widths go through the remembered-measurement path, the way the
-        # real rail does - a wrong cache key would look like a wrong wrap.
-        self._widths = {}
-        self._measure_fonts = {"chip": self._chip_font}
-        self._rows_planned = 0
-        self._heads_planned = 0
-        self._slots_planned = {}
+def section(names, open_=True, swatch=None, title="TAGS"):
+    return Section(title, title.lower(), open_, chips(names, swatch), len(names))
 
 
-def chips(names):
-    return [(n, 1, n, "#fff", None) for n in names]
+def chip_boxes(sections, width=400, hidden=0):
+    boxes, _height = lay_out(sections, width, measure, hidden)
+    return [b for b in boxes if b.kind == "chip"]
 
 
-def plan_for(tab, names):
-    plan: list = []
-    tab._plan_chips(chips(names), 0, True, plan)
-    return plan
-
-
-def rows_used(plan):
-    return sum(1 for item in plan if item[0] == "row")
+def lines(boxes):
+    return len({b.y0 for b in boxes})
 
 
 @pytest.fixture(autouse=True)
@@ -92,129 +64,140 @@ def scale_100():
 
 def test_the_room_comes_from_the_rail_not_a_constant():
     """The constant said 236 while the rail is over 400 wide."""
-    tab = FakeTab(rail_width=420)
-    assert tab._chip_room() > tab.CHIP_ROOM
+    assert tag_rail.room_for(420) > tag_rail.FALLBACK_ROOM
 
 
 def test_a_rail_not_on_screen_yet_falls_back_to_the_constant():
-    tab = FakeTab(rail_width=0)
-    assert tab._chip_room() == pytest.approx(theme.px(tab.CHIP_ROOM) - theme.px(26),
-                                             abs=2)
+    assert tag_rail.room_for(1) == pytest.approx(
+        theme.px(tag_rail.FALLBACK_ROOM) - theme.px(tag_rail.LEFT)
+        - theme.px(tag_rail.RIGHT), abs=2)
 
 
-def test_the_room_leaves_space_for_the_scrollbar():
-    tab = FakeTab(rail_width=400)
-    assert tab._chip_room() < 400
+def test_a_silly_narrow_rail_still_gets_a_usable_line():
+    assert tag_rail.room_for(90) >= theme.px(tag_rail.MIN_ROOM)
 
 
-def test_a_silly_narrow_rail_still_gets_a_usable_row():
-    tab = FakeTab(rail_width=40)
-    assert tab._chip_room() >= theme.px(110)
+def test_no_chip_runs_past_the_edge():
+    for box in chip_boxes([section([f"tag{i}" for i in range(40)])], width=300):
+        assert box.x1 <= 300 - theme.px(tag_rail.RIGHT)
 
 
 # ── wrapping ────────────────────────────────────────────────────────────
 
-def test_several_short_chips_share_a_row():
-    tab = FakeTab(rail_width=400)
-    plan = plan_for(tab, ["ab", "cd", "ef"])
-    assert rows_used(plan) == 1
+def test_several_short_chips_share_a_line():
+    assert lines(chip_boxes([section(["ab", "cd", "ef"])])) == 1
 
 
-def test_a_row_wraps_when_the_next_chip_will_not_fit():
-    tab = FakeTab(rail_width=400)
-    plan = plan_for(tab, ["a" * 12, "b" * 12, "c" * 12])
-    assert rows_used(plan) > 1
+def test_a_line_wraps_when_the_next_chip_will_not_fit():
+    assert lines(chip_boxes([section(["a" * 12, "b" * 12, "c" * 12])])) > 1
 
 
-def test_every_chip_is_placed_exactly_once():
-    tab = FakeTab(rail_width=400)
+def test_every_chip_is_placed_exactly_once_and_in_order():
     names = [f"tag{i}" for i in range(20)]
-    plan = plan_for(tab, names)
-    placed = [item[7] for item in plan if item[0] == "chip"]
+    placed = [b.chip.name for b in chip_boxes([section(names)])]
     assert placed == names
 
 
-def test_slots_restart_at_zero_on_each_new_row():
-    tab = FakeTab(rail_width=300)
-    plan = plan_for(tab, [f"tag{i}" for i in range(12)])
-    seen: dict = {}
-    for item in plan:
-        if item[0] != "chip":
-            continue
-        line, slot = item[1], item[2]
-        assert slot == seen.get(line, 0), "a slot was skipped or repeated"
-        seen[line] = slot + 1
-    assert len(seen) > 1, "this case is meant to wrap"
+def test_chips_never_overlap():
+    boxes = chip_boxes([section([f"tag{i}" for i in range(30)])], width=300)
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1:]:
+            apart = a.x1 <= b.x0 or b.x1 <= a.x0 or a.y1 <= b.y0 or b.y1 <= a.y0
+            assert apart, f"{a.chip.name} overlaps {b.chip.name}"
 
 
-def test_the_planned_slot_counts_match_what_was_planned():
-    """_park_rail hides chips past these counts, so a wrong one either
-    leaves a stale tag showing or blanks a real one."""
-    tab = FakeTab(rail_width=300)
-    plan = plan_for(tab, [f"tag{i}" for i in range(15)])
-    actual: dict = {}
-    for item in plan:
-        if item[0] == "chip":
-            actual[item[1]] = actual.get(item[1], 0) + 1
-    assert tab._slots_planned == actual
+def test_a_chip_too_wide_for_any_line_still_gets_one_of_its_own():
+    boxes = chip_boxes([section(["short", "x" * 80, "after"])], width=300)
+    assert [b.chip.name for b in boxes] == ["short", "x" * 80, "after"]
+    assert lines(boxes) == 3
 
 
-def test_the_rows_planned_count_matches_the_rows_in_the_plan():
-    tab = FakeTab(rail_width=300)
-    plan = plan_for(tab, [f"tag{i}" for i in range(15)])
-    assert tab._rows_planned == rows_used(plan)
+def test_a_chip_is_as_wide_as_its_text_needs():
+    """Not scaled a second time: the width is what the font says plus
+    the padding, in the same pixels."""
+    box = chip_boxes([section(["wolf"])])[0]
+    assert box.x1 - box.x0 == measure("wolf  1") + theme.px(tag_rail.CHIP_PAD)
 
 
-def test_a_wider_rail_fits_more_per_row():
-    narrow = FakeTab(rail_width=260)
-    wide = FakeTab(rail_width=900)
+def test_a_wider_rail_fits_more_per_line():
     names = [f"tag{i}" for i in range(18)]
-    assert rows_used(plan_for(wide, names)) < rows_used(plan_for(narrow, names))
+    assert (lines(chip_boxes([section(names)], width=900))
+            < lines(chip_boxes([section(names)], width=260)))
 
 
-def test_nothing_to_show_plans_nothing():
-    tab = FakeTab()
-    plan = plan_for(tab, [])
-    assert plan == []
-    assert tab._rows_planned == 0
+def test_nothing_to_show_draws_nothing():
+    boxes, _height = lay_out([], 400, measure)
+    assert boxes == []
 
 
 def test_a_swatch_is_paid_for_in_the_wrap():
-    """Project chips carry a colour swatch, which takes room."""
-    tab = FakeTab(rail_width=400)
-    plain: list = []
-    tab._plan_chips(chips(["aaaa"] * 6), 0, True, plain)
-    tab2 = FakeTab(rail_width=400)
-    swatched: list = []
-    tab2._plan_chips([("aaaa", 1, "aaaa", "#fff", "#f0f")] * 6, 0, False, swatched)
-    assert rows_used(swatched) >= rows_used(plain)
+    """Project chips carry a colour dot, which takes room."""
+    plain = chip_boxes([section(["aaaa"] * 6)])
+    dotted = chip_boxes([section(["aaaa"] * 6, swatch="#f0f")])
+    assert dotted[0].x1 - dotted[0].x0 > plain[0].x1 - plain[0].x0
+    assert lines(dotted) >= lines(plain)
+
+
+# ── sections ────────────────────────────────────────────────────────────
+
+def test_a_closed_section_is_its_heading_alone():
+    boxes, _ = lay_out([section(["a", "b"], open_=False)], 400, measure)
+    assert [b.kind for b in boxes] == ["head"]
+
+
+def test_sections_stack_without_overlapping():
+    boxes, height = lay_out([section([f"a{i}" for i in range(12)], title="ARTISTS"),
+                             section([f"t{i}" for i in range(12)], title="TAGS")],
+                            300, measure, hidden=2)
+    tops = [b.y0 for b in boxes]
+    assert tops == sorted(tops), "something was drawn above what came before it"
+    heads = [b for b in boxes if b.kind == "head"]
+    first_chips = [b for b in boxes if b.kind == "chip" and b.section is heads[0].section]
+    assert heads[1].y0 > max(b.y1 for b in first_chips)
+    assert boxes[-1].kind == "hidden"
+    assert height >= boxes[-1].y1
+
+
+def test_the_heading_reads_open_or_closed():
+    assert section(["a"]).heading.startswith("▾")
+    assert section(["a"], open_=False).heading.startswith("▸")
+    assert section(["a", "b"]).heading.endswith("2")
 
 
 # ── scaling ─────────────────────────────────────────────────────────────
 
 def test_the_wrap_holds_up_at_150_percent():
     """Both sides of the comparison have to scale together. When only the
-    font did, one chip filled a row that could hold three."""
+    font did, one chip filled a line that could hold three."""
     names = [f"tag{i}" for i in range(18)]
     theme.T.SCALE = 1.0
-    at_100 = rows_used(plan_for(FakeTab(rail_width=400), names))
+    at_100 = lines(chip_boxes([section(names)], width=400))
     theme.T.SCALE = 1.5
-    at_150 = rows_used(plan_for(FakeTab(rail_width=600), names))
+    at_150 = lines(chip_boxes([section(names)], width=600))
     # A rail 1.5x wider holding 1.5x bigger chips wraps the same way.
     assert at_150 == at_100
 
 
-def test_the_grid_rows_advance_past_the_chip_rows():
-    """The rail is one grid: headers and chip rows share its row numbers,
-    so a group has to leave the next one somewhere to go."""
-    tab = FakeTab(rail_width=300)
-    plan: list = []
-    row = tab._plan_header("TAGS", "tags", True, 3, 0, plan)
-    assert row == 1
-    row = tab._plan_chips(chips([f"tag{i}" for i in range(9)]), row, True, plan)
-    assert row > 1
-    grid_rows = [item[2] for item in plan if item[0] == "row"]
-    assert grid_rows == sorted(set(grid_rows)), "two rows claimed one grid row"
+# ── the pointer ─────────────────────────────────────────────────────────
+
+def test_a_point_on_a_chip_finds_that_chip():
+    boxes, _ = lay_out([section(["wolf", "fox", "deer"])], 400, measure)
+    for index, box in enumerate(boxes):
+        assert hit(boxes, (box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2) == index
+
+
+def test_the_gap_between_chips_finds_nothing():
+    boxes = chip_boxes([section(["wolf", "fox"])])
+    between = (boxes[0].x1 + boxes[1].x0) / 2
+    all_boxes, _ = lay_out([section(["wolf", "fox"])], 400, measure)
+    assert hit(all_boxes, between, boxes[0].y0 + 2) == -1
+
+
+def test_the_edges_belong_to_exactly_one_box():
+    boxes, _ = lay_out([section([f"t{i}" for i in range(30)])], 300, measure)
+    for box in boxes:
+        assert hit(boxes, box.x0, box.y0) == boxes.index(box)
+        assert hit(boxes, box.x1, box.y0) != boxes.index(box)
 
 
 # ── the counting happens off the UI thread ─────────────────────────────
@@ -253,187 +236,179 @@ def test_counting_an_empty_result_is_empty():
                             "lore", "other", "projects"}
 
 
-# ── the chips are bound once, not per render ───────────────────────────
-
-@contextlib.contextmanager
-def paper_chips(make):
-    """Stand in for the two things a chip needs a live window for: the
-    CTkButton itself, and the CTkFont handed to it."""
-    import paz_suite.library_tab as lt
-    was_button, was_font = lt.ctk.CTkButton, lt.font
-    lt.ctk.CTkButton = lambda *a, **kw: make()
-    lt.font = lambda *a, **kw: None
-    try:
-        yield
-    finally:
-        lt.ctk.CTkButton, lt.font = was_button, was_font
 
 
-def test_a_chip_is_bound_once_and_carries_its_tag_on_itself():
-    """CTkButton.bind registers a Tcl command on each of the button's two
-    inner widgets, and neither unbind nor rebinding gives them back - so
-    rebinding a pooled chip on every search abandoned two commands per
-    chip, for as long as the app stayed open. The tag lives on the widget
-    instead, and the handler reads it when it fires."""
-    class Chip:
-        def __init__(self):
-            self.binds = 0
-            self.configures = 0
-            self.mapped = False
-            self.opts = {}
+# ── the canvas rail's clicks ───────────────────────────────────────────
 
-        def bind(self, *_a, **_kw):
-            self.binds += 1
-
-        def configure(self, **kw):
-            self.configures += 1
-            self.opts.update(kw)
-
-        def cget(self, name):
-            return self.opts.get(name)
-
-        def winfo_ismapped(self):
-            return self.mapped
-
-        def pack(self, **_kw):
-            self.mapped = True
-
-    made = []
-
-    class Tab:
-        _rail_chip = LibraryTab._rail_chip
-
-        def __init__(self):
-            self._rail_slots = [[]]
-            self._rail_rows = [object()]
-
-        def add_token(self, token):
-            made.append(token)
-
-    tab = Tab()
-    with paper_chips(Chip):
-        tab._rail_chip(0, 0, "wolf  12", 80, "#fff", None, "wolf", "wolf", True)
-        chip = tab._rail_slots[0][0]
-        first_binds = chip.binds
-        assert first_binds == 1
-        assert chip.paz_token == "wolf"
-        # The click goes through the command, which reads the tag off the
-        # widget - so it has to be the tag the chip is showing now.
-        chip.opts["command"]()
-        assert made == ["wolf"]
-
-        # A later search puts a different tag in the same slot.
-        tab._rail_chip(0, 0, "fox  3", 70, "#fff", None, "fox", "fox", True)
-        assert chip.binds == first_binds, "rebound a chip it had already bound"
-        assert chip.paz_token == "fox", "the chip still carries the old tag"
-        made.clear()
-        chip.opts["command"]()
-        assert made == ["fox"], "the chip acted on the tag it used to show"
+class Event:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+        self.x_root, self.y_root = x, y
 
 
-def test_a_project_chip_offers_no_tag_menu():
-    """The right-click menu is for tags, not for projects - and with one
-    binding for the life of the chip, that has to be a check inside the
-    handler rather than a binding that is or is not there."""
-    offered = []
+class PaperCanvas:
+    def canvasx(self, x):
+        return x
 
-    class Chip:
-        def __init__(self):
-            self.opts = {}
-            self.handler = None
+    def canvasy(self, y):
+        return y
 
-        def bind(self, _sequence, func, *_a, **_kw):
-            self.handler = func
+    def itemconfigure(self, *_a, **_kw):
+        pass
 
-        def configure(self, **kw):
-            self.opts.update(kw)
-
-        def cget(self, name):
-            return self.opts.get(name)
-
-        def winfo_ismapped(self):
-            return True
-
-        def pack(self, **_kw):
-            pass
-
-    class Tab:
-        _rail_chip = LibraryTab._rail_chip
-
-        def __init__(self):
-            self._rail_slots = [[]]
-            self._rail_rows = [object()]
-
-        def add_token(self, token):
-            pass
-
-        def _tag_menu(self, _event, token, name):
-            offered.append((token, name))
-
-    tab = Tab()
-    with paper_chips(Chip):
-        tab._rail_chip(0, 0, "PMV  4", 80, "#fff", "#f0f", 'used:"PMV"',
-                       "PMV", False)
-        chip = tab._rail_slots[0][0]
-        chip.handler(object())
-        assert offered == [], "a project chip offered a tag menu"
-
-        # The same chip, reused for a tag, does offer one.
-        tab._rail_chip(0, 0, "wolf  4", 80, "#fff", None, "wolf", "wolf", True)
-        chip.handler(object())
-        assert offered == [("wolf", "wolf")]
+    def configure(self, **_kw):
+        pass
 
 
-def test_the_inspectors_tag_buttons_are_bound_once_too():
-    """The same pool, the same leak: forty tag buttons rebound on every
-    click of a clip. Forty clips is sixteen hundred Tcl commands Tk will
-    hold until the app closes."""
-    clicked, offered = [], []
+def paper_rail(sections, hidden=0):
+    """A TagRail with its geometry laid out and no window behind it."""
+    calls = []
+    rail = tag_rail.TagRail.__new__(tag_rail.TagRail)
+    rail.canvas = PaperCanvas()
+    rail.on_chip = lambda token: calls.append(("chip", token))
+    rail.on_menu = lambda e, token, name: calls.append(("menu", token, name))
+    rail.on_toggle = lambda key: calls.append(("toggle", key))
+    rail.on_manage = lambda: calls.append(("manage",))
+    rail.hidden = hidden
+    rail.boxes, rail._height = lay_out(sections, 400, measure, hidden)
+    rail._plates = [0] * len(rail.boxes)
+    rail._hover = rail._pressed = -1
+    return rail, calls
 
-    class Button:
-        def __init__(self):
-            self.binds = 0
-            self.opts = {}
-            self.handler = None
 
-        def bind(self, _sequence, func, *_a, **_kw):
-            self.binds += 1
-            self.handler = func
+def centre(box):
+    return Event((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2)
 
-        def configure(self, **kw):
-            self.opts.update(kw)
 
-        def cget(self, name):
-            return self.opts.get(name)
+def test_a_click_on_a_chip_searches_for_its_tag():
+    rail, calls = paper_rail([Section("ARTISTS", "artists", True,
+                                      [Chip("kenket", 3, "artist:kenket", "#fff")], 1)])
+    chip = [b for b in rail.boxes if b.kind == "chip"][0]
+    rail._on_press(centre(chip))
+    rail._on_release(centre(chip))
+    assert calls == [("chip", "artist:kenket")]
 
-        def grid(self, **_kw):
-            pass
 
-    class Tab:
-        _tag_button = LibraryTab._tag_button
+def test_pressing_a_chip_and_sliding_off_it_does_nothing():
+    rail, calls = paper_rail([section(["wolf", "fox"])])
+    wolf, fox = [b for b in rail.boxes if b.kind == "chip"]
+    rail._on_press(centre(wolf))
+    rail._on_release(centre(fox))
+    assert calls == []
 
-        def __init__(self):
-            self._tag_pool = []
-            self._tags_used = 0
-            self.detail_tags = object()
 
-        def add_token(self, token):
-            clicked.append(token)
+def test_a_click_on_a_heading_folds_its_group():
+    rail, calls = paper_rail([section(["wolf"], title="SPECIES")])
+    head = rail.boxes[0]
+    rail._on_press(centre(head))
+    rail._on_release(centre(head))
+    assert calls == [("toggle", "species")]
 
-        def _tag_menu(self, _event, token, label):
-            offered.append((token, label))
 
-    tab = Tab()
-    with paper_chips(Button):
-        tab._tag_button("artist:kenket", "kenket", "#fff", 0)
-        button = tab._tag_pool[0]
-        assert button.binds == 1
+def test_the_hidden_line_opens_the_manager():
+    rail, calls = paper_rail([section(["wolf"])], hidden=3)
+    line = rail.boxes[-1]
+    assert line.kind == "hidden"
+    rail._on_press(centre(line))
+    rail._on_release(centre(line))
+    assert calls == [("manage",)]
 
-        # A second clip reuses the pool from the top.
-        tab._tags_used = 0
-        tab._tag_button("artist:wolfy", "wolfy", "#fff", 0)
-        assert button.binds == 1, "rebound a button it had already bound"
-        button.opts["command"]()
-        button.handler(object())
-        assert clicked == ["artist:wolfy"]
-        assert offered == [("artist:wolfy", "wolfy")]
+
+def test_right_click_offers_the_tag_menu_for_tags_only():
+    """The menu is for tags - hiding and excluding a project makes no
+    sense."""
+    tags = Section("TAGS", "tags", True, [Chip("wolf", 2, "wolf", "#fff")], 1)
+    projects = Section("PROJECTS", "projects", True,
+                       [Chip("PMV", 4, 'used:"PMV"', "#fff", "#f0f", menu=False)], 1)
+    rail, calls = paper_rail([tags, projects])
+    wolf, pmv = [b for b in rail.boxes if b.kind == "chip"]
+    rail._on_right(centre(pmv))
+    assert calls == []
+    rail._on_right(centre(wolf))
+    assert calls == [("menu", "wolf", "wolf")]
+
+
+def test_hovering_tracks_one_box_at_a_time():
+    painted = []
+    rail, _ = paper_rail([section(["wolf", "fox"])])
+    rail._paint = lambda index, on: painted.append((index, on))
+    wolf, fox = [i for i, b in enumerate(rail.boxes) if b.kind == "chip"]
+    rail._on_motion(centre(rail.boxes[wolf]))
+    rail._on_motion(centre(rail.boxes[fox]))
+    rail._on_motion(Event(-50, -50))
+    assert painted == [(-1, False), (wolf, True), (wolf, False), (fox, True),
+                       (fox, False), (-1, True)]
+    assert rail._hover == -1
+
+
+# ── the inspector's tag list ──────────────────────────────────────────
+
+from paz_suite.tag_rail import fit_text, lay_out_list    # noqa: E402
+
+
+def rows(names, columns=1, open_=True, title="TAGS"):
+    return Section(title, title.lower(), open_,
+                   [Chip(n, None, n, "#fff") for n in names], len(names),
+                   columns=columns)
+
+
+def test_a_row_is_just_the_name():
+    assert Chip("wolf", None, "wolf", "#fff").label == "wolf"
+    assert Chip("wolf", 3, "wolf", "#fff").label == "wolf  3"
+
+
+def test_rows_fill_the_width_one_to_a_line():
+    boxes, _ = lay_out_list([rows(["a", "b", "c"])], 400)
+    r = [b for b in boxes if b.kind == "row"]
+    assert len(r) == 3
+    assert len({(b.x0, b.x1) for b in r}) == 1, "rows of one column differ in width"
+    assert r[0].x0 == theme.px(6) and r[0].x1 == 400 - theme.px(6)
+    assert [b.y0 for b in r] == sorted({b.y0 for b in r})
+
+
+def test_two_columns_split_the_width_and_keep_order():
+    boxes, _ = lay_out_list([rows([f"t{i}" for i in range(9)], columns=2)], 400)
+    r = [b for b in boxes if b.kind == "row"]
+    assert [b.chip.name for b in r] == [f"t{i}" for i in range(9)]
+    left, right = r[0], r[1]
+    assert left.y0 == right.y0 and left.x1 < right.x0
+    assert abs((left.x1 - left.x0) - (right.x1 - right.x0)) <= 1
+    assert len({b.y0 for b in r}) == 5
+
+
+def test_rows_never_overlap_and_headings_come_first():
+    boxes, height = lay_out_list([rows(["kenket"], title="ARTISTS"),
+                                  rows([f"t{i}" for i in range(20)], columns=2)], 500)
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1:]:
+            assert a.x1 <= b.x0 or b.x1 <= a.x0 or a.y1 <= b.y0 or b.y1 <= a.y0
+    assert boxes[0].kind == "head" and boxes[2].kind == "head"
+    assert height >= max(b.y1 for b in boxes)
+
+
+def test_a_closed_group_is_its_heading_alone():
+    boxes, _ = lay_out_list([rows(["a", "b"], open_=False)], 400)
+    assert [b.kind for b in boxes] == ["head"]
+
+
+def test_a_huge_group_is_capped():
+    boxes, _ = lay_out_list([rows([f"t{i}" for i in range(500)], columns=2)], 400)
+    assert sum(1 for b in boxes if b.kind == "row") == 160
+
+
+def test_a_long_name_is_cut_to_fit_and_a_short_one_is_not():
+    assert fit_text("wolf", 100, measure) == "wolf"
+    cut = fit_text("a_very_long_tag_name_indeed", 100, measure)
+    assert cut.endswith("…") and measure(cut) <= 100
+    assert fit_text("anything", 0, measure) == ""
+
+
+def test_a_row_click_searches_and_its_right_click_offers_the_menu():
+    rail, calls = paper_rail([])
+    rail.boxes, rail._height = lay_out_list([rows(["kenket"], title="ARTISTS")], 400)
+    rail._plates = [0] * len(rail.boxes)
+    row = rail.boxes[1]
+    rail._on_press(centre(row))
+    rail._on_release(centre(row))
+    rail._on_right(centre(row))
+    assert calls == [("chip", "kenket"), ("menu", "kenket", "kenket")]

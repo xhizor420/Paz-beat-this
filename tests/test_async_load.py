@@ -68,6 +68,18 @@ class FakeTab:
     def _refresh_missing_badge(self):
         pass
 
+    def after(self, _ms, fn):
+        """Timers are recorded, not run - see the settle test below."""
+        self.timers = getattr(self, "timers", [])
+        self.timers.append(fn)
+        return len(self.timers)
+
+    def after_cancel(self, _job):
+        pass
+
+    def _warm_weights(self):
+        pass
+
     # -- helpers -----------------------------------------------------------
     def run_worker(self):
         """Run the last worker body the async load started."""
@@ -232,3 +244,63 @@ def test_installing_a_library_cancels_a_prefetch_in_flight():
     before = tab._prefetch_token
     tab._load_library()
     assert tab._prefetch_token != before
+
+
+def test_a_finished_load_settles_the_heap_and_warms_like_this():
+    """The heap is frozen and the similarity weights built after every
+    load - see paz_suite/heap.py - on timers, never inside the load."""
+    from paz_suite import heap
+    tab = FakeTab()
+    tab.load_library_async()
+    fn, args = tab.posted[-1] if tab.posted else (None, None)
+    if fn is None:
+        # The worker has to run first; the fake runs it on the spot.
+        for spawn in tab.spawned:
+            spawn()
+        fn, args = tab.posted[-1]
+    fn(*args)
+    assert heap.settle in tab.timers
+    assert tab._warm_weights in tab.timers
+
+
+def test_warmed_weights_are_kept_only_for_the_library_they_came_from(monkeypatch):
+    from paz_suite import library_tab
+
+    class Now:
+        def __init__(self, target, daemon=True):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(library_tab.threading, "Thread", Now)
+
+    class Tab:
+        _warm_weights = LibraryTab._warm_weights
+
+        def __init__(self):
+            self.records = []
+            self._weights = None
+            self.later = []
+
+        def ui(self, fn, *args):
+            self.later.append((fn, args))
+
+    class Rec:
+        def __init__(self, tags):
+            self.tags = set(tags)
+
+    tab = Tab()
+    tab.records = [Rec(["wolf", "fox"]), Rec(["wolf"]), Rec(["deer"])]
+    tab._warm_weights()
+    fn, args = tab.later.pop()
+    fn(*args)
+    assert tab._weights and "fox" in tab._weights
+
+    # A reload lands while a warm-up is still out: its answer is dropped.
+    tab._weights = None
+    tab._warm_weights()
+    tab.records = [Rec(["other"])]
+    fn, args = tab.later.pop()
+    fn(*args)
+    assert tab._weights is None

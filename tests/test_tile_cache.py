@@ -36,6 +36,22 @@ class Cfg:
         self.thumb_fit = "contain"
 
 
+class Holder:
+    """The hidden canvas that keeps Tk's display copies made."""
+
+    def __init__(self):
+        self.items = {}
+        self._n = 0
+
+    def create_image(self, _x, _y, image=None, anchor=None):
+        self._n += 1
+        self.items[self._n] = image
+        return self._n
+
+    def delete(self, item):
+        self.items.pop(item, None)
+
+
 class FakeTab:
     TILE_CACHE = 6
     PHOTO_CACHE = 6
@@ -48,6 +64,10 @@ class FakeTab:
     _photo_put = LibraryTab._photo_put
     _load_thumbs = LibraryTab._load_thumbs
     _prefetch_pages = LibraryTab._prefetch_pages
+    _promote_tiles = LibraryTab._promote_tiles
+    _hold_warm = LibraryTab._hold_warm
+    _release_warm = LibraryTab._release_warm
+    PROMOTE_PER_TICK = LibraryTab.PROMOTE_PER_TICK
 
     CARD_W, IMG_H = 224, 126
 
@@ -64,6 +84,9 @@ class FakeTab:
         self.placed = []
         self.spawned = []
         self.deferred = []
+        self.promoted = []
+        self._warm = {}
+        self._warm_holder = Holder()
 
     def _tile_build(self, rec, width, height, fit):
         self.built.append((rec.path, width, height, fit))
@@ -74,6 +97,9 @@ class FakeTab:
         # the underlying function is what identifies the call.
         if getattr(fn, "__func__", None) is FakeTab._prefetch_pages:
             fn(*args)                  # the real thing, so threads are seen
+            return
+        if getattr(fn, "__func__", None) is FakeTab._promote_tiles:
+            self.promoted.append(args)
             return
         self.placed.append(args)
 
@@ -426,3 +452,118 @@ def test_a_click_on_a_position_past_the_page_is_ignored():
     assert tab._slot_rec(1) == "b"
     assert tab._slot_rec(2) is None
     assert tab._slot_rec(-1) is None
+
+
+# ── prepared tiles become Tk images before the flip, a few at a time ──
+
+class FakePhoto:
+    made = 0
+
+    def __init__(self, image):
+        FakePhoto.made += 1
+        self.image = image
+
+
+def patch_photos(monkeypatch):
+    import paz_suite.library_tab as lt
+    FakePhoto.made = 0
+    monkeypatch.setattr(lt.ImageTk, "PhotoImage", FakePhoto)
+
+
+def test_a_finished_prefetch_hands_its_tiles_on_to_be_made_drawable(monkeypatch):
+    tab = FakeTab(clips=12, page_size=4)
+    tab.page = 1
+    patch_threads(tab, monkeypatch)
+    tab._prefetch_pages()
+    tab.start_prefetch()
+    assert len(tab.promoted) == 1
+    token, keys = tab.promoted[0]
+    assert token == tab._prefetch_token
+    assert {k[0] for k in keys} == {f"{i}.mp4" for i in (0, 1, 2, 3, 8, 9, 10, 11)}
+
+
+def test_promotion_goes_a_few_per_frame_and_finishes(monkeypatch):
+    patch_photos(monkeypatch)
+    tab = FakeTab(clips=12, page_size=4)
+    tab.PHOTO_CACHE = tab.TILE_CACHE = 50
+    keys = [key(f"{i}.mp4", tab) for i in range(8)]
+    for k in keys:
+        tab._tile_put(k, f"tile{k[0]}")
+    tab._promote_tiles(tab._prefetch_token, list(keys))
+    assert FakePhoto.made == tab.PROMOTE_PER_TICK, "more than a slice in one frame"
+    while tab.deferred:
+        tab.deferred.pop(0)()
+    assert FakePhoto.made == len(keys)
+    assert all(k in tab._photos for k in keys)
+    assert not any(k in tab._tiles for k in keys), "the staged picture was kept too"
+
+
+def test_promotion_stops_when_the_page_moves_on(monkeypatch):
+    patch_photos(monkeypatch)
+    tab = FakeTab(clips=12, page_size=4)
+    keys = [key(f"{i}.mp4", tab) for i in range(8)]
+    for k in keys:
+        tab._tile_put(k, "tile")
+    tab._promote_tiles(tab._prefetch_token, list(keys))
+    tab._prefetch_token += 1              # a newer prefetch took over
+    while tab.deferred:
+        tab.deferred.pop(0)()
+    assert FakePhoto.made == tab.PROMOTE_PER_TICK
+
+
+def test_a_tile_already_drawable_is_not_made_twice(monkeypatch):
+    patch_photos(monkeypatch)
+    tab = FakeTab(clips=12, page_size=4)
+    k = key("1.mp4", tab)
+    tab._photos[k] = "already"
+    tab._tile_put(k, "tile")
+    tab._promote_tiles(tab._prefetch_token, [k])
+    assert FakePhoto.made == 0
+
+
+def test_promoted_photos_are_held_where_tk_makes_their_display_copies(monkeypatch):
+    patch_photos(monkeypatch)
+    tab = FakeTab(clips=12, page_size=4)
+    tab.PHOTO_CACHE = tab.TILE_CACHE = 50
+    keys = [key(f"{i}.mp4", tab) for i in range(4)]
+    for k in keys:
+        tab._tile_put(k, "tile")
+    tab._promote_tiles(tab._prefetch_token, list(keys))
+    while tab.deferred:
+        tab.deferred.pop(0)()
+    assert set(tab._warm) == set(keys)
+    held = set(id(p) for p in tab._warm_holder.items.values())
+    assert held == {id(tab._photos[k]) for k in keys}
+
+
+def test_the_next_pair_of_pages_lets_go_of_the_last(monkeypatch):
+    patch_photos(monkeypatch)
+    tab = FakeTab(clips=12, page_size=4)
+    tab.PHOTO_CACHE = tab.TILE_CACHE = 50
+    first = [key(f"{i}.mp4", tab) for i in range(4)]
+    second = [key(f"{i}.mp4", tab) for i in range(2, 6)]
+    for k in first + second:
+        tab._tile_put(k, "tile")
+    tab._promote_tiles(tab._prefetch_token, list(first))
+    while tab.deferred:
+        tab.deferred.pop(0)()
+    tab._prefetch_token += 1
+    tab._promote_tiles(tab._prefetch_token, list(second))
+    while tab.deferred:
+        tab.deferred.pop(0)()
+    assert set(tab._warm) == set(second)
+    assert len(tab._warm_holder.items) == len(second), "an old page is still held"
+
+
+def test_a_photo_dropped_from_the_cache_is_let_go_of_too(monkeypatch):
+    patch_photos(monkeypatch)
+    tab = FakeTab(clips=12, page_size=4)
+    tab.PHOTO_CACHE = 2
+    tab.TILE_CACHE = 50
+    keys = [key(f"{i}.mp4", tab) for i in range(2)]
+    for k in keys:
+        tab._tile_put(k, "tile")
+    tab._promote_tiles(tab._prefetch_token, list(keys))
+    tab._photo_put(key("9.mp4", tab), FakePhoto("x"))
+    assert keys[0] not in tab._warm
+    assert keys[1] in tab._warm
