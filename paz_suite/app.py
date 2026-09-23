@@ -622,7 +622,7 @@ class PazApp:
     def _on_tab_changed(self) -> None:
         name = self.tabview.get()
         self.cfg.last_tab = name
-        self.cfg.save()
+        self.cfg.save_soon()
         self._style_tabs()
         # Tabs get to do their first-look work when they are first looked
         # at, rather than all of it during startup.

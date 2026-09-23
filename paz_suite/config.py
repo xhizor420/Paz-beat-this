@@ -11,8 +11,11 @@ found, its settings are migrated once so upgrading costs nothing.
 
 from __future__ import annotations
 
+import atexit
+import itertools
 import json
 import os
+import threading
 from dataclasses import dataclass, field, asdict
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".video_tool")
@@ -29,6 +32,56 @@ E621_META_LOG = E621_META_PATH + ".log"
 # Legacy per-app files, from before the two tools were combined.
 _LEGACY_STUDIO_CONFIG = os.path.join(CONFIG_DIR, "config.json")
 _LEGACY_DEN_CONFIG = os.path.join(CONFIG_DIR, "den_config.json")
+
+# Config writes, in the order the settings were read - see save_soon.
+# Every snapshot takes a number when it is taken; a write only happens if
+# nothing numbered later has been written already, so a slow background
+# write can never put back an older config over a newer one.
+_save_order = itertools.count(1)
+_write_lock = threading.Lock()
+_written = 0
+_pending_lock = threading.Lock()
+_pending = None
+
+
+def _write_snapshot(snapshot: tuple) -> str | None:
+    """Write one snapshot unless a newer one is already on disk. Returns
+    an error message on failure, else None."""
+    global _written
+    order, folder, path, text = snapshot
+    with _write_lock:
+        if order <= _written:
+            return None
+        try:
+            os.makedirs(folder, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.replace(tmp, path)
+        except OSError as exc:
+            return str(exc)
+        _written = order
+        return None
+
+
+def _drain_pending() -> None:
+    global _pending
+    with _pending_lock:
+        snapshot, _pending = _pending, None
+    if snapshot is not None:
+        _write_snapshot(snapshot)
+
+
+def flush_saves() -> None:
+    """Write whatever save_soon() is still holding, now, on this thread -
+    and wait out a write already under way, so the program does not exit
+    halfway through it."""
+    _drain_pending()
+    with _write_lock:
+        pass
+
+
+atexit.register(flush_saves)
 
 
 @dataclass
@@ -415,15 +468,37 @@ class AppConfig:
         atomic, so the file on disk is either the old config or the new
         one.
         """
-        try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-            tmp = CONFIG_PATH + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(asdict(self), fh, indent=2)
-            os.replace(tmp, CONFIG_PATH)
-            return None
-        except OSError as exc:
-            return str(exc)
+        return _write_snapshot(self._snapshot())
+
+    def save_soon(self) -> None:
+        """save(), with the disk write taken off the calling thread.
+
+        For the things a click saves - a tab, theater, the sidebar, a
+        search, a handle let go of. The settings are read now, on this
+        thread, so what gets written is exactly what they were at the
+        click; only the file write waits. On Windows that write is where
+        the time goes: every new file is scanned before it can be
+        renamed into place, and it was being paid inside the click.
+
+        A later save() or save_soon() always wins over an earlier one
+        still waiting, and anything still waiting is written when the
+        program exits.
+        """
+        global _pending
+        snapshot = self._snapshot()
+        with _pending_lock:
+            start = _pending is None
+            _pending = snapshot
+        if start:
+            threading.Thread(target=_drain_pending, daemon=True,
+                             name="config-save").start()
+
+    def _snapshot(self) -> tuple:
+        """(order, folder, path, text): everything a write needs. The
+        paths are read here too, so a write that happens later still goes
+        where this config lived when it was saved."""
+        return (next(_save_order), CONFIG_DIR, CONFIG_PATH,
+                json.dumps(asdict(self), indent=2))
 
     @property
     def source_ext_set(self) -> set:

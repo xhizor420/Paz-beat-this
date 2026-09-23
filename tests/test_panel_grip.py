@@ -27,6 +27,8 @@ class Cfg:
     def save(self):
         self.saves += 1
 
+    save_soon = save
+
 
 class Panel:
     def __init__(self, width):

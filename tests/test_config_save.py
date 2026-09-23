@@ -59,13 +59,14 @@ def test_a_save_that_dies_mid_write_leaves_the_old_config_intact(somewhere):
 
     later = cfgmod.AppConfig()
     later.library_root = "E:\\Elsewhere"
-    dump = cfgmod.json.dump
-    cfgmod.json.dump = explode
+    # Dies with the new file written but not yet moved into place.
+    replace = cfgmod.os.replace
+    cfgmod.os.replace = explode
     try:
         with pytest.raises(Boom):
             later.save()
     finally:
-        cfgmod.json.dump = dump
+        cfgmod.os.replace = replace
 
     # The file on disk is still the one that was there, in one piece.
     back = cfgmod.AppConfig()
@@ -81,3 +82,57 @@ def test_a_truncated_config_is_the_thing_this_avoids(somewhere):
     back = cfgmod.AppConfig()
     back._read(str(somewhere / "paz_config.json"))
     assert back.library_root == cfgmod.AppConfig().library_root
+
+
+def read_back(folder) -> str:
+    back = cfgmod.AppConfig()
+    back._read(str(folder / "paz_config.json"))
+    return back.library_root
+
+
+def test_save_soon_writes_what_the_settings_were_when_it_was_called(somewhere):
+    cfg = cfgmod.AppConfig()
+    cfg.library_root = "D:\\Clips"
+    cfg.save_soon()
+    cfg.library_root = "changed after the click"
+    cfgmod.flush_saves()
+    assert read_back(somewhere) == "D:\\Clips"
+
+
+def test_an_older_snapshot_never_overwrites_a_newer_one(somewhere):
+    """A background write that loses the race to a later save() must not
+    put the older config back."""
+    cfg = cfgmod.AppConfig()
+    cfg.library_root = "old"
+    stale = cfg._snapshot()
+    cfg.library_root = "new"
+    assert cfg.save() is None
+    assert cfgmod._write_snapshot(stale) is None
+    assert read_back(somewhere) == "new"
+
+
+def test_a_save_waiting_in_the_background_loses_to_a_later_save(somewhere, monkeypatch):
+    started = []
+    monkeypatch.setattr(cfgmod.threading, "Thread",
+                        lambda **kw: type("T", (), {"start": lambda self: started.append(kw)})())
+    cfg = cfgmod.AppConfig()
+    cfg.library_root = "clicked"
+    cfg.save_soon()
+    cfg.library_root = "saved properly"
+    cfg.save()
+    started[0]["target"]()          # the background writer, late
+    assert read_back(somewhere) == "saved properly"
+
+
+def test_rapid_saves_share_one_writer(somewhere, monkeypatch):
+    started = []
+    monkeypatch.setattr(cfgmod.threading, "Thread",
+                        lambda **kw: type("T", (), {"start": lambda self: started.append(kw)})())
+    cfg = cfgmod.AppConfig()
+    for n in range(5):
+        cfg.library_root = f"click {n}"
+        cfg.save_soon()
+    assert len(started) == 1
+    started[0]["target"]()
+    assert read_back(somewhere) == "click 4"
+    assert [p.name for p in somewhere.iterdir()] == ["paz_config.json"]

@@ -163,6 +163,9 @@ class LibraryTab(ctk.CTkFrame):
         self._heads_done = 0
         self._slots_planned: dict = {}
         self._rail_gen = 0
+        # The last tag counts, kept until the results or their tags change
+        # - see _render_tagpanel.
+        self._rail_counts = None
         # How many card positions have had their bindings set - see
         # _bind_card_slots. Positions, not clips: they outlive a page.
         self._bound_slots = 0
@@ -522,7 +525,7 @@ class LibraryTab(ctk.CTkFrame):
     def toggle_sidebar(self, force=None):
         opening = (not self.cfg.sidebar_open) if force is None else force
         self.cfg.sidebar_open = opening
-        self.cfg.save()
+        self.cfg.save_soon()
         if opening:
             self.side.configure(width=self.SIDEBAR_W)
             self.tagpanel.grid()
@@ -535,9 +538,11 @@ class LibraryTab(ctk.CTkFrame):
             self.side_hint.grid_remove()
             self.side.configure(width=34)
             self.side_toggle.configure(text="▶")
-        if opening:
+        if opening and self._rail_dirty:
             # It has been skipping its rebuild while shut - see
-            # queue_tagpanel.
+            # queue_tagpanel. Only when something did change: shut and
+            # opened again over the same results, the rail it hid is
+            # still the right one.
             self.queue_tagpanel()
         self._render_soon(120)
 
@@ -1106,7 +1111,7 @@ class LibraryTab(ctk.CTkFrame):
         if not moved:
             return
         if self.cfg.panel_width_px:
-            self.cfg.save()
+            self.cfg.save_soon()
         # A handle that stops moving looks broken, so say why it stopped.
         # On a short window a 16:9 picture simply cannot be wider than
         # this and still leave room for the controls and a tag list -
@@ -1123,7 +1128,7 @@ class LibraryTab(ctk.CTkFrame):
     def _grip_reset(self, _event=None) -> None:
         """Back to the width the window works out for itself."""
         self.cfg.panel_width_px = 0
-        self.cfg.save()
+        self.cfg.save_soon()
         self._fit_panel()
         self.set_status("Inspector width back to automatic - drag the handle "
                         "to set your own.", T.DIM)
@@ -1800,7 +1805,7 @@ class LibraryTab(ctk.CTkFrame):
             history = [q for q in self.cfg.search_history if q != query]
             history.insert(0, query)
             self.cfg.search_history = history[:30]
-            self.cfg.save()
+            self.cfg.save_soon()
         self._history_pos = -1
         self.run_search()
         return "break"
@@ -2143,7 +2148,7 @@ class LibraryTab(ctk.CTkFrame):
             return
         self.cfg.last_search = query
         self.cfg.last_sort = sort
-        self.cfg.save()
+        self.cfg.save_soon()
 
     def run_search(self):
         self._search_after = None
@@ -2286,7 +2291,7 @@ class LibraryTab(ctk.CTkFrame):
     def hide_tag(self, name: str):
         if name not in self.cfg.hidden_tags:
             self.cfg.hidden_tags.append(name)
-            self.cfg.save()
+            self.cfg.save_soon()
             self._render_tagpanel()
             self.set_status(f"'{name}' hidden from the sidebar (not deleted "
                             "- manage at the bottom of the tag list)", T.OK)
@@ -2294,7 +2299,7 @@ class LibraryTab(ctk.CTkFrame):
     def unhide_tag(self, name: str):
         if name in self.cfg.hidden_tags:
             self.cfg.hidden_tags.remove(name)
-            self.cfg.save()
+            self.cfg.save_soon()
             self._render_tagpanel()
 
     def _manage_hidden(self):
@@ -2302,7 +2307,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def _toggle_sidebar_group(self, key: str):
         self.cfg.sidebar_group_open[key] = not self.cfg.sidebar_group_open.get(key, True)
-        self.cfg.save()
+        self.cfg.save_soon()
         self._render_tagpanel()
 
     # ── tag panel ────────────────────────────────────────────────────────
@@ -2468,6 +2473,10 @@ class LibraryTab(ctk.CTkFrame):
         the results were. Results are what you are waiting for; the
         sidebar is a summary of them and can arrive a moment later.
         """
+        # Whatever asked for this changed the results or their tags, so
+        # the kept counts are stale - and so is any count still running.
+        self._rail_counts = None
+        self._rail_gen += 1
         if not self.visible() or not self.cfg.sidebar_open:
             self._rail_dirty = True
             return
@@ -2519,6 +2528,13 @@ class LibraryTab(ctk.CTkFrame):
         self._cancel_rail_chunks()
         self._rail_gen += 1
         gen = self._rail_gen
+        # Folding a group or hiding a tag changes what the rail shows, not
+        # what it counts. Counting ten thousand clips again for that was
+        # 45ms of a worker holding the interpreter lock while the rail
+        # redrew.
+        if self._rail_counts is not None:
+            self._tagpanel_counted(gen, self._rail_counts)
+            return
         # A snapshot, not self.filtered itself: _apply_sort sorts that
         # list in place, and CPython empties a list while sorting it - so
         # a worker iterating it mid-sort would quietly count nothing.
@@ -2533,6 +2549,7 @@ class LibraryTab(ctk.CTkFrame):
     def _tagpanel_counted(self, gen: int, counted: dict) -> None:
         if gen != self._rail_gen:
             return                  # a newer search is already counting
+        self._rail_counts = counted
         self._cancel_rail_chunks()
         self._heads_planned = 0
         self._rows_planned = 0
@@ -4013,7 +4030,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def toggle_theater(self):
         self.cfg.theater = not self.cfg.theater
-        self.cfg.save()
+        self.cfg.save_soon()
         if self.cfg.theater and self.cfg.sidebar_open:
             self.toggle_sidebar(force=False)
         self._show_tags_panel(not self.cfg.theater)
@@ -4092,11 +4109,11 @@ class LibraryTab(ctk.CTkFrame):
         moved, self._tag_moved = self._tag_moved, False
         self._tag_from = None
         if moved and self.cfg.tags_height_px:
-            self.cfg.save()
+            self.cfg.save_soon()
 
     def _tag_grip_reset(self, _event=None) -> None:
         self.cfg.tags_height_px = 0
-        self.cfg.save()
+        self.cfg.save_soon()
         self._fit_panel()
         self.set_status("Player and tag list back to the worked-out split - "
                         "drag the handle between them to set your own.", T.DIM)
@@ -4298,7 +4315,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def _toggle_group(self, key: str):
         self.cfg.detail_open[key] = not self.cfg.detail_open.get(key, True)
-        self.cfg.save()
+        self.cfg.save_soon()
         self._render_details()
 
     # ── the tag list, reused rather than rebuilt ─────────────────────────
@@ -4587,7 +4604,7 @@ class LibraryTab(ctk.CTkFrame):
         # them is the slowest thing in an otherwise instant action.
         if self.cfg.last_project != project:
             self.cfg.last_project = project
-            self.cfg.save()
+            self.cfg.save_soon()
         self._after_vault_change(recs, -newly_used)
         count = len(paths)
         self.set_status(f"Marked {count} clip{'s' if count != 1 else ''} as used "
@@ -4649,6 +4666,9 @@ class LibraryTab(ctk.CTkFrame):
         # "Never used" is the one counted chip a mark can change, and the
         # caller already knows by how many - see _bump_quick_count.
         self._bump_quick_count("unused", unused_delta)
+        # The rail's PROJECTS counts are out of date now. Not redrawn for
+        # one mark, but not reused either the next time the rail is.
+        self._rail_counts = None
 
     # ── sync (incremental index build) ──────────────────────────────────────
 
