@@ -157,6 +157,10 @@ class LibraryTab(ctk.CTkFrame):
         self._visible = False
         self._page_dirty = False
         self._rail_dirty = False
+        # What Fix missing would do - see _refresh_missing_badge. Empty until
+        # the first report lands, so the menu can open before then.
+        self._fix_breakdown = ""
+        self._badge_gen = 0
         # Prepared gallery tiles - see TILE_CACHE. Written by the page
         # loader and the prefetch, read by both, so it takes a lock.
         self._tiles: collections.OrderedDict = collections.OrderedDict()
@@ -1575,8 +1579,28 @@ class LibraryTab(ctk.CTkFrame):
         only reflects the tags part, so the two numbers can legitimately
         disagree. Showing the actual breakdown on the button removes the
         guessing.
+
+        Worked out on a worker. The report walks every record, and for
+        each clip without a thumbnail it asks the library drive whether
+        the file still exists - on a fresh library that is thousands of
+        questions to an external disk, and it ran on this thread after
+        every load and every tag fetch.
         """
-        report = self.missing_report()
+        records = self.records
+        self._badge_gen = gen = getattr(self, "_badge_gen", 0) + 1
+
+        def work():
+            try:
+                report = self.missing_report(records)
+            except Exception:
+                return
+            self.ui(self._show_missing_badge, gen, report)
+
+        threading.Thread(target=work, daemon=True, name="missing-report").start()
+
+    def _show_missing_badge(self, gen: int, report: dict) -> None:
+        if gen != getattr(self, "_badge_gen", 0):
+            return                      # a newer report is on its way
         n_tags = len(report["tags"])
         n_probe = len(report["probe"])
         n_thumb = len(report["thumbs"])
@@ -4652,7 +4676,7 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── tag fetching (shared cache with Convert) ────────────────────────────
 
-    def missing_report(self) -> dict:
+    def missing_report(self, records=None) -> dict:
         """
         What Fix missing can actually still do something about.
 
@@ -4674,7 +4698,7 @@ class LibraryTab(ctk.CTkFrame):
         cached = self.emeta.snapshot()
         no_tags, no_probe, no_thumb, no_id = [], [], [], 0
         seen_pid = set()
-        for rec in self.records:
+        for rec in (self.records if records is None else records):
             if not rec.pid:
                 no_id += 1
             elif rec.pid not in cached and rec.pid not in seen_pid:
