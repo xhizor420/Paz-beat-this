@@ -335,9 +335,8 @@ class FoldersWindow(ctk.CTkToplevel):
             return
         wanted = set(self.cfg.library_subfolders)
         for index, name in enumerate(names):
-            count = self._count(os.path.join(root, name))
             box = ctk.CTkCheckBox(
-                self.list, text=f"{name}     ({count} files)",
+                self.list, text=f"{name}     (counting…)",
                 font=font(11), text_color=T.TEXT, fg_color=T.ACCENT2,
                 hover_color=T.ACCENT2_HOV, border_color=T.LINE,
                 checkbox_width=18, checkbox_height=18)
@@ -348,6 +347,28 @@ class FoldersWindow(ctk.CTkToplevel):
         self.note.configure(
             text=f"{len(names)} subfolders found. Only ticked ones are "
                  "scanned - the rest cost no time at all.")
+        # The file counts come after the list, from a worker: each is a
+        # listing of a whole category on the library drive, and the
+        # window used to stay blank until every one of them was done.
+        self._reload_gen = gen = getattr(self, "_reload_gen", 0) + 1
+
+        def work():
+            for name in names:
+                if gen != self._reload_gen:
+                    return
+                count = self._count(os.path.join(root, name))
+                uithread.post(self._show_count, gen, name, count)
+
+        threading.Thread(target=work, daemon=True, name="folder-counts").start()
+
+    def _show_count(self, gen: int, name: str, count: int) -> None:
+        box = self.boxes.get(name)
+        if gen != getattr(self, "_reload_gen", 0) or box is None:
+            return
+        try:
+            box.configure(text=f"{name}     ({count} files)")
+        except tk.TclError:
+            pass                        # the window was closed meanwhile
 
     def _count(self, directory: str) -> int:
         ext = self.cfg.library_ext_set

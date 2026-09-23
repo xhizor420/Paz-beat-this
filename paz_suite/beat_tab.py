@@ -746,8 +746,18 @@ class BeatTab(ctk.CTkFrame):
                        ("All files", "*.*")])
         if not path:
             return
-        info = probe(path)
-        rate = (info.fps if info else 0) or 0
+        # ffprobe is a separate program reading a video file - often on
+        # the library drive, which may have to spin up first. Not a thing
+        # to wait for with the window frozen.
+        self.set_status(f"Reading the frame rate of {os.path.basename(path)}…", T.DIM)
+
+        def work():
+            info = probe(path)
+            self.ui(self._fps_probed, path, (info.fps if info else 0) or 0)
+
+        threading.Thread(target=work, daemon=True, name="fps-probe").start()
+
+    def _fps_probed(self, path: str, rate: float) -> None:
         if not rate:
             self.set_status("Couldn't read a frame rate from that file.", T.WARN)
             return

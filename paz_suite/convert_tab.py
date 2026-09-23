@@ -856,9 +856,25 @@ class ConvertTab(ctk.CTkFrame):
         return found
 
     def _refresh_gap_badge(self):
-        try:
-            total = sum(len(v) for v in self._gap_scan().values())
-        except Exception:
+        """Count the clips with no 4K copy yet, and show it on the button.
+
+        Counted on a worker: it lists every converted folder and every 4K
+        folder, which on the library drive is not something to do on the
+        thread that draws the window - and this runs a moment after
+        startup and after every run."""
+        self._gap_gen = gen = getattr(self, "_gap_gen", 0) + 1
+
+        def work():
+            try:
+                total = sum(len(v) for v in self._gap_scan().values())
+            except Exception:
+                return
+            self.ui(self._show_gap_badge, gen, total)
+
+        threading.Thread(target=work, daemon=True, name="gap-badge").start()
+
+    def _show_gap_badge(self, gen: int, total: int) -> None:
+        if gen != getattr(self, "_gap_gen", 0):
             return
         if total:
             # Sized to its own text: the count pushes this past the fixed
