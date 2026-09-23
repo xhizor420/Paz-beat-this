@@ -467,6 +467,25 @@ class PazApp:
 
     def _select_tab(self, name: str) -> None:
         self.tabview.set(name)
+        # And take the others away now, not in 100ms. CTkTabview.set()
+        # grids the new tab into the same cell as the old one and only
+        # forgets the old one on a 100ms timer - so for those 100ms the
+        # tab on screen is whichever of the two is higher in the stacking
+        # order, which is creation order, not the one that was asked for.
+        # Measured: Library -> Convert, Vault -> Library and Beat This ->
+        # Convert all left the OLD tab showing at +0ms and +50ms and only
+        # changed at +150ms. A tenth of a second of the app looking like
+        # it ignored the click, on every switch to an earlier tab.
+        #
+        # CustomTkinter's own tab bar does not have this - its click path
+        # forgets the old tab straight away. This app draws its own strip
+        # and so always came in through set(), which is the slow path.
+        for other in TAB_NAMES:
+            if other != name:
+                try:
+                    self.tabview.tab(other).grid_forget()
+                except (ValueError, tk.TclError):
+                    pass
         self._on_tab_changed()
 
     def _style_tabs(self) -> None:
@@ -537,8 +556,52 @@ class PazApp:
                     self._tab_object(name)
                 finally:
                     watchdog.building(False)
-                self.root.after(120, self._build_rest)
+                # Its first layout next, on its own callback - see
+                # _lay_out_early.
+                self.root.after(120, lambda n=name: self._lay_out_early(n))
                 return
+
+    def _lay_out_early(self, name: str) -> None:
+        """Do a hidden tab's first layout now, underneath the tab on
+        screen, and then carry on building the rest.
+
+        The first switch to a tab cost 100-150ms and a second switch
+        under 15. The difference is every CustomTkinter widget in it
+        redrawing because it has just been handed its real size for the
+        first time - after that the sizes do not change, and CTk skips
+        the redraw. So it is done here instead, while the user is looking
+        at something else: the tab is gridded into the same cell as the
+        one showing, lowered beneath it so it cannot be seen, laid out,
+        and taken away again. Measured on the first switch afterwards:
+        Convert 131-148ms to 16, Vault 103-108 to 8, Beat This 123-136
+        to 10-13.
+
+        The grid options are copied off the tab that is showing rather
+        than written out here, so this lays the tab out exactly where
+        CustomTkinter would put it, whatever version decides that.
+        """
+        tv = self.tabview
+        showing = tv.get()
+        if name != showing:
+            watchdog.building(True)
+            try:
+                frame = tv.tab(name)
+                info = tv.tab(showing).grid_info()
+                keep = ("row", "column", "sticky", "padx", "pady",
+                        "ipadx", "ipady", "rowspan", "columnspan")
+                frame.grid(**{k: info[k] for k in keep if k in info})
+                tk.Misc.lower(frame)
+                frame.update_idletasks()
+                # Only if it is still not the one that is meant to be
+                # showing - nothing here yields, but that is cheap to be
+                # sure of.
+                if tv.get() != name:
+                    frame.grid_forget()
+            except (ValueError, KeyError, tk.TclError):
+                pass
+            finally:
+                watchdog.building(False)
+        self.root.after(120, self._build_rest)
 
     @property
     def convert(self):
