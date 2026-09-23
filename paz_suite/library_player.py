@@ -386,7 +386,7 @@ class InlinePlayer:
 
     def _set_av_offset(self, ms: int) -> None:
         self.tab.cfg.player_av_offset_ms = int(ms)
-        self.tab.cfg.save()
+        self.tab.cfg.save_soon()
         self._apply_av_offset()
         self._refresh_backend_btn()
         # Restart the sound at the new offset so the change is audible now
@@ -592,7 +592,7 @@ class InlinePlayer:
         if self.rec is None or not self.rec.premium_path:
             return
         self.tab.cfg.player_prefer_premium = not self.tab.cfg.player_prefer_premium
-        self.tab.cfg.save()
+        self.tab.cfg.save_soon()
         was_playing = self.engine.playing
         position = self.engine.position
         self._last_seek_pos = None
@@ -799,7 +799,7 @@ class InlinePlayer:
     def toggle_mute(self) -> None:
         muted = self.engine.toggle_mute()
         self.tab.cfg.player_muted = muted
-        self.tab.cfg.save()
+        self.tab.cfg.save_soon()
         self.mute_btn.configure(text="🔇" if muted else "🔊",
                                 text_color=T.FAINT if muted else T.TEXT)
         self.volume_slider.set(0 if muted else self.engine.volume)
@@ -820,7 +820,7 @@ class InlinePlayer:
         self.engine.set_volume(volume)
         self.tab.cfg.player_volume = self.engine.volume
         self.tab.cfg.player_muted = self.engine.muted
-        self.tab.cfg.save()
+        self.tab.cfg.save_soon()
 
     def _set_speed(self, value: float) -> None:
         setter = getattr(self.engine, "set_speed", None)

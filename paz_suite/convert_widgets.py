@@ -674,7 +674,7 @@ class ScrubPreview(ctk.CTkFrame):
                                 text_color=T.FAINT if muted else T.TEXT)
         self.volume_slider.set(0 if muted else self.player_engine.volume)
         self.cfg.player_muted = muted
-        self.cfg.save()
+        self.cfg.save_soon()
 
     def _on_volume_drag(self, value) -> None:
         volume = max(0, min(int(round(float(value))), 100))
@@ -692,7 +692,7 @@ class ScrubPreview(ctk.CTkFrame):
         self.player_engine.set_volume(volume)
         self.cfg.player_volume = self.player_engine.volume
         self.cfg.player_muted = self.player_engine.muted
-        self.cfg.save()
+        self.cfg.save_soon()
 
     def _on_play_state(self, playing: bool) -> None:
         self.play_btn.configure(

@@ -227,6 +227,45 @@ def faster_corners() -> None:
         DrawEngine.preferred_drawing_method = "polygon_shapes"
     except Exception:
         pass          # a CustomTkinter that does not work this way
+    quiet_scrollbars()
+
+
+def _no_flush() -> None:
+    return None
+
+
+def quiet_scrollbars() -> None:
+    """Stop every CTk scrollbar redraw from laying out the whole window.
+
+    CTkScrollbar._draw ends with update_idletasks(), and that is not the
+    scrollbar's own idle work - it is the application's. The gallery and
+    every scrolling list call the scrollbar's set() each time their view
+    moves, so a scroll, a resize or theater re-ran every pending layout
+    in the window from inside the callback, nested inside whatever
+    layout pass had moved the view in the first place: 18-32ms of a
+    theater toggle was that alone. Tk redraws the bar at the next idle
+    moment anyway, which is before anything reaches the screen.
+
+    Done per canvas, on its first draw, so nothing outside the
+    scrollbars loses the method.
+    """
+    try:
+        import customtkinter as ctk
+        cls = ctk.CTkScrollbar
+    except Exception:
+        return
+    if getattr(cls._draw, "_paz_quiet", False):
+        return
+    original = cls._draw
+
+    def _draw(self, no_color_updates=False):
+        canvas = getattr(self, "_canvas", None)
+        if canvas is not None and "update_idletasks" not in vars(canvas):
+            canvas.update_idletasks = _no_flush
+        return original(self, no_color_updates)
+
+    _draw._paz_quiet = True
+    cls._draw = _draw
 
 
 def window_size(widget, width: float, height: float) -> str:

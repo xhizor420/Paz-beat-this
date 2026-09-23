@@ -42,6 +42,8 @@ class Cfg:
     def save(self):
         self.saves += 1
 
+    save_soon = save
+
 
 class FakeTab:
     _mark_used = LibraryTab._mark_used

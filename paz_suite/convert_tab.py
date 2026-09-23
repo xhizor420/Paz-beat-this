@@ -382,7 +382,7 @@ class ConvertTab(ctk.CTkFrame):
         if self.is_typing(event):
             return
         self.cfg.hover_peek = not self.cfg.hover_peek
-        self.cfg.save()
+        self.cfg.save_soon()
         self._peek_hide()
         self.log("Hover peek " + ("on" if self.cfg.hover_peek else "off"), "info")
         return "break"
@@ -414,7 +414,7 @@ class ConvertTab(ctk.CTkFrame):
 
     def _save_toggles(self):
         self.cfg.auto_preview = bool(self.auto_preview.get())
-        self.cfg.save()
+        self.cfg.save_soon()
 
     def _apply_brand(self):
         self.brand_sub.configure(text=f"{self.F('tagline')} · Convert")
@@ -641,7 +641,7 @@ class ConvertTab(ctk.CTkFrame):
     def _toggle_watch(self):
         enabled = bool(self.watch_switch.get())
         self.cfg.watch = enabled
-        self.cfg.save()
+        self.cfg.save_soon()
         if enabled:
             self._watch_sizes.clear()
             self.watch_flag.set()

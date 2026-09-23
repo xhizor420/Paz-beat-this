@@ -30,6 +30,11 @@ APP_VERSION = "0.8 beta"
 E621_API = "https://e621.net/posts/{pid}.json"
 E621_POST = "https://e621.net/posts/{pid}"
 E621_UA = f"{APP_NAME}/{APP_VERSION} (personal library tagger)"
+# Many posts in one call - see E621Meta.fetch_many. A hundred IDs keeps
+# the URL well under any limit and is a hundred times fewer requests
+# than asking one post at a time, at the same one request per second.
+E621_SEARCH = "https://e621.net/posts.json"
+BATCH_SIZE = 100
 
 # The only answers that mean "this post is not coming back": it does not
 # exist, or it has been deleted. Those are worth remembering, so the post
@@ -73,6 +78,32 @@ def _parse_iso(text: str) -> float | None:
         return None
 
 
+def _record_from_post(pid: str, post: dict) -> dict:
+    """One post as the API returns it, as this cache keeps it. The same
+    shape whether the post came from a lookup or from a search."""
+    tags = post.get("tags") or {}
+
+    def cat(name):
+        return list(tags.get(name) or [])
+
+    flat = []
+    for group in ("artist", "character", "species", "copyright",
+                  "general", "meta", "lore"):
+        flat.extend(tags.get(group) or [])
+    return {
+        "artist": [a for a in cat("artist") if a not in _ARTIST_NOISE],
+        "character": cat("character"),
+        "species": cat("species"),
+        "copyright": cat("copyright"),
+        "lore": cat("lore"),
+        "rating": (post.get("rating") or "")[:1],
+        "score": (post.get("score") or {}).get("total", 0),
+        "tags": " ".join(flat).lower(),
+        "url": E621_POST.format(pid=pid),
+        "created_at": _parse_iso(post.get("created_at")),
+    }
+
+
 def _refresh_interval_seconds(post_age_seconds: float) -> float:
     age_days = post_age_seconds / 86400
     for max_days, interval_days in _REFRESH_SCHEDULE:
@@ -108,6 +139,10 @@ class E621Meta:
         self._path = E621_META_PATH
         self._log = E621_META_LOG
         self._dir = CONFIG_DIR
+        # Many posts per call until e621 shows it will not do that - see
+        # fetch_many. For this run of the program; the next one tries
+        # again, since a refusal may have been a bad moment.
+        self.batching = True
         # Read on a thread, not here. On this library the cache is 7.5MB
         # of JSON and parsing it is 283ms - and this object is built
         # before the window exists, so that was 283ms of nothing on
@@ -289,34 +324,69 @@ class E621Meta:
         except (urllib.error.URLError, OSError, ValueError) as exc:
             return {"error": str(exc)}          # transient: do not cache
         else:
-            post = payload.get("post") or {}
-            tags = post.get("tags") or {}
+            record = _record_from_post(pid, payload.get("post") or {})
+        self._keep(pid, record)
+        return record
 
-            def cat(name):
-                return list(tags.get(name) or [])
-
-            flat = []
-            for group in ("artist", "character", "species", "copyright",
-                          "general", "meta", "lore"):
-                flat.extend(tags.get(group) or [])
-            record = {
-                "artist": [a for a in cat("artist") if a not in _ARTIST_NOISE],
-                "character": cat("character"),
-                "species": cat("species"),
-                "copyright": cat("copyright"),
-                "lore": cat("lore"),
-                "rating": (post.get("rating") or "")[:1],
-                "score": (post.get("score") or {}).get("total", 0),
-                "tags": " ".join(flat).lower(),
-                "url": E621_POST.format(pid=pid),
-                "created_at": _parse_iso(post.get("created_at")),
-            }
+    def _keep(self, pid: str, record: dict) -> None:
         record["fetched_at"] = time.time()
         with self._lock:
             self._data[pid] = record
             self._pending.add(pid)
             self._dirty = True
-        return record
+
+    def fetch_many(self, pids: list, user: str = "", key: str = "") -> dict:
+        """Up to BATCH_SIZE posts in one API call.
+
+        Returns {"records": {pid: record}} for the posts e621 sent back,
+        or {"error": ..., "unsupported": bool} when the call failed. A
+        post that is not in the answer is NOT marked missing: a search
+        can leave a post out for reasons that say nothing about the post
+        (hidden from anonymous searches, say), and `missing` is permanent.
+        The caller asks about those one at a time, and only that answer
+        can condemn a post.
+
+        Defensive about the answer, because it is a search rather than a
+        lookup: only posts that were asked for are kept, and a post that
+        was not asked for means the search did not do what it was meant
+        to - "unsupported", so the caller stops batching rather than
+        trusting it again.
+        """
+        wanted = [str(p) for p in pids if str(p).isdigit()][:BATCH_SIZE]
+        if not wanted:
+            return {"records": {}}
+        params = {"tags": "id:" + ",".join(wanted) + " status:any",
+                  "limit": str(len(wanted))}
+        if user and key:
+            params["login"] = user
+            params["api_key"] = key
+        url = E621_SEARCH + "?" + urllib.parse.urlencode(params)
+        request = urllib.request.Request(url, headers={"User-Agent": E621_UA})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as resp:
+                payload = json.load(resp)
+        except urllib.error.HTTPError as exc:
+            # A 4xx other than the rate limit is e621 refusing the search
+            # itself; asking again will not change its mind.
+            refused = 400 <= exc.code < 500 and exc.code != 429
+            return {"error": f"HTTP {exc.code}", "unsupported": refused}
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            return {"error": str(exc), "unsupported": False}
+        posts = payload.get("posts") if isinstance(payload, dict) else None
+        if not isinstance(posts, list):
+            return {"error": "unexpected answer", "unsupported": True}
+        asked = set(wanted)
+        found: dict = {}
+        for post in posts:
+            pid = str((post or {}).get("id", ""))
+            if pid not in asked:
+                return {"error": f"search answered with post {pid or '?'}, "
+                                 "which was not asked for",
+                        "unsupported": True}
+            found[pid] = _record_from_post(pid, post)
+        for pid, record in found.items():
+            self._keep(pid, record)
+        return {"records": found}
 
     # ── soft refresh ────────────────────────────────────────────────────
 

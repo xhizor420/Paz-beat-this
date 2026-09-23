@@ -12,6 +12,7 @@ import time
 import tkinter as tk
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import chain
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -26,7 +27,7 @@ from .files import (
 )
 from .config import THUMB_DIR
 from .media import tile_image, thumb_key, make_thumb, probe
-from .e621 import E621_POST, GIVE_UP_AFTER
+from .e621 import BATCH_SIZE, E621_POST, GIVE_UP_AFTER
 from .similar import rank as rank_similar, tag_weights
 from .library_db import (
     db_connect, Rec, parse_query, rec_matches, SORTS, SIMILAR_SORT,
@@ -162,6 +163,9 @@ class LibraryTab(ctk.CTkFrame):
         self._heads_done = 0
         self._slots_planned: dict = {}
         self._rail_gen = 0
+        # The last tag counts, kept until the results or their tags change
+        # - see _render_tagpanel.
+        self._rail_counts = None
         # How many card positions have had their bindings set - see
         # _bind_card_slots. Positions, not clips: they outlive a page.
         self._bound_slots = 0
@@ -521,7 +525,7 @@ class LibraryTab(ctk.CTkFrame):
     def toggle_sidebar(self, force=None):
         opening = (not self.cfg.sidebar_open) if force is None else force
         self.cfg.sidebar_open = opening
-        self.cfg.save()
+        self.cfg.save_soon()
         if opening:
             self.side.configure(width=self.SIDEBAR_W)
             self.tagpanel.grid()
@@ -534,11 +538,13 @@ class LibraryTab(ctk.CTkFrame):
             self.side_hint.grid_remove()
             self.side.configure(width=34)
             self.side_toggle.configure(text="▶")
-        if opening:
+        if opening and self._rail_dirty:
             # It has been skipping its rebuild while shut - see
-            # queue_tagpanel.
+            # queue_tagpanel. Only when something did change: shut and
+            # opened again over the same results, the rail it hid is
+            # still the right one.
             self.queue_tagpanel()
-        self.after(120, self.render_page)
+        self._render_soon(120)
 
     def _build_grid_area(self):
         center = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
@@ -1105,7 +1111,7 @@ class LibraryTab(ctk.CTkFrame):
         if not moved:
             return
         if self.cfg.panel_width_px:
-            self.cfg.save()
+            self.cfg.save_soon()
         # A handle that stops moving looks broken, so say why it stopped.
         # On a short window a 16:9 picture simply cannot be wider than
         # this and still leave room for the controls and a tag list -
@@ -1122,7 +1128,7 @@ class LibraryTab(ctk.CTkFrame):
     def _grip_reset(self, _event=None) -> None:
         """Back to the width the window works out for itself."""
         self.cfg.panel_width_px = 0
-        self.cfg.save()
+        self.cfg.save_soon()
         self._fit_panel()
         self.set_status("Inspector width back to automatic - drag the handle "
                         "to set your own.", T.DIM)
@@ -1799,7 +1805,7 @@ class LibraryTab(ctk.CTkFrame):
             history = [q for q in self.cfg.search_history if q != query]
             history.insert(0, query)
             self.cfg.search_history = history[:30]
-            self.cfg.save()
+            self.cfg.save_soon()
         self._history_pos = -1
         self.run_search()
         return "break"
@@ -2142,7 +2148,7 @@ class LibraryTab(ctk.CTkFrame):
             return
         self.cfg.last_search = query
         self.cfg.last_sort = sort
-        self.cfg.save()
+        self.cfg.save_soon()
 
     def run_search(self):
         self._search_after = None
@@ -2285,7 +2291,7 @@ class LibraryTab(ctk.CTkFrame):
     def hide_tag(self, name: str):
         if name not in self.cfg.hidden_tags:
             self.cfg.hidden_tags.append(name)
-            self.cfg.save()
+            self.cfg.save_soon()
             self._render_tagpanel()
             self.set_status(f"'{name}' hidden from the sidebar (not deleted "
                             "- manage at the bottom of the tag list)", T.OK)
@@ -2293,7 +2299,7 @@ class LibraryTab(ctk.CTkFrame):
     def unhide_tag(self, name: str):
         if name in self.cfg.hidden_tags:
             self.cfg.hidden_tags.remove(name)
-            self.cfg.save()
+            self.cfg.save_soon()
             self._render_tagpanel()
 
     def _manage_hidden(self):
@@ -2301,7 +2307,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def _toggle_sidebar_group(self, key: str):
         self.cfg.sidebar_group_open[key] = not self.cfg.sidebar_group_open.get(key, True)
-        self.cfg.save()
+        self.cfg.save_soon()
         self._render_tagpanel()
 
     # ── tag panel ────────────────────────────────────────────────────────
@@ -2467,6 +2473,10 @@ class LibraryTab(ctk.CTkFrame):
         the results were. Results are what you are waiting for; the
         sidebar is a summary of them and can arrive a moment later.
         """
+        # Whatever asked for this changed the results or their tags, so
+        # the kept counts are stale - and so is any count still running.
+        self._rail_counts = None
+        self._rail_gen += 1
         if not self.visible() or not self.cfg.sidebar_open:
             self._rail_dirty = True
             return
@@ -2488,18 +2498,26 @@ class LibraryTab(ctk.CTkFrame):
         the rail costs. It touches no widget, so it does not belong on
         the thread that draws them.
         """
-        counters = {name: collections.Counter() for name in
-                    ("artists", "characters", "species", "series",
-                     "lore", "other", "projects")}
-        for rec in records:
-            counters["artists"].update(rec.artists)
-            counters["characters"].update(rec.characters)
-            counters["species"].update(rec.species)
-            counters["series"].update(rec.copyrights)
-            counters["lore"].update(rec.lore)
-            counters["other"].update(t for t in rec.tags if t not in rec.named)
-            counters["projects"].update(rec.used_projects)
-        return counters
+        # One Counter per group over a chain of every clip's list, not
+        # seven update() calls per clip. Counter's counting loop is C;
+        # update() is a Python method with its own checks, and seventy-
+        # five thousand calls of it was most of the cost. And the plain
+        # tags are a set difference rather than a generator testing each
+        # tag in turn. 79ms to 45 on ten thousand clips - which matters
+        # beyond the number, because this runs on a worker while the UI
+        # thread is redrawing, and pure Python holds the interpreter lock
+        # the whole time it runs.
+        count = collections.Counter
+        spread = chain.from_iterable
+        return {
+            "artists": count(spread(r.artists for r in records)),
+            "characters": count(spread(r.characters for r in records)),
+            "species": count(spread(r.species for r in records)),
+            "series": count(spread(r.copyrights for r in records)),
+            "lore": count(spread(r.lore for r in records)),
+            "other": count(spread(r.tags - r.named for r in records)),
+            "projects": count(spread(r.used_projects for r in records)),
+        }
 
     def _render_tagpanel(self):
         """Count the result set off this thread, then draw the rail."""
@@ -2510,6 +2528,13 @@ class LibraryTab(ctk.CTkFrame):
         self._cancel_rail_chunks()
         self._rail_gen += 1
         gen = self._rail_gen
+        # Folding a group or hiding a tag changes what the rail shows, not
+        # what it counts. Counting ten thousand clips again for that was
+        # 45ms of a worker holding the interpreter lock while the rail
+        # redrew.
+        if self._rail_counts is not None:
+            self._tagpanel_counted(gen, self._rail_counts)
+            return
         # A snapshot, not self.filtered itself: _apply_sort sorts that
         # list in place, and CPython empties a list while sorting it - so
         # a worker iterating it mid-sort would quietly count nothing.
@@ -2524,6 +2549,7 @@ class LibraryTab(ctk.CTkFrame):
     def _tagpanel_counted(self, gen: int, counted: dict) -> None:
         if gen != self._rail_gen:
             return                  # a newer search is already counting
+        self._rail_counts = counted
         self._cancel_rail_chunks()
         self._heads_planned = 0
         self._rows_planned = 0
@@ -2661,27 +2687,31 @@ class LibraryTab(ctk.CTkFrame):
         self._set_hover(None)
         self._peek_hide()
 
-    def _on_grid_resize(self, event):
-        columns = max(2, (event.width - self.GAP) // (self.card_width + self.GAP))
-        if columns == getattr(self, "_columns", 0):
-            return
-        if getattr(self, "_grip_from", None) is not None:
-            # A drag on the handle is in progress. Re-laying out the whole
-            # page in the middle of one is churn under the cursor; it gets
-            # one re-layout when the hand lets go.
-            if self._resize_after is not None:
-                try:
-                    self.after_cancel(self._resize_after)
-                except ValueError:
-                    pass
-            self._resize_after = self.after(250, self.render_page)
-            return
+    def _render_soon(self, ms: int) -> None:
+        """Render the page in `ms`, replacing any render already waiting.
+
+        Every deferred render goes through here. Theater, the sidebar and
+        a window resize each asked for one of their own, on their own
+        timers - and theater changes the gallery's width, which is a
+        resize, which asked for another. Measured: one press of theater
+        drew the page three times, 144 cards for 48. A render already
+        waiting is always superseded, never stacked.
+        """
         if self._resize_after is not None:
             try:
                 self.after_cancel(self._resize_after)
             except ValueError:
                 pass
-        self._resize_after = self.after(180, self.render_page)
+        self._resize_after = self.after(ms, self.render_page)
+
+    def _on_grid_resize(self, event):
+        columns = max(2, (event.width - self.GAP) // (self.card_width + self.GAP))
+        if columns == getattr(self, "_columns", 0):
+            return
+        # A drag on the handle gets one re-layout when the hand lets go,
+        # not one per step of the drag.
+        dragging = getattr(self, "_grip_from", None) is not None
+        self._render_soon(250 if dragging else 180)
 
     def _grid(self):
         rec = self.selected
@@ -2820,6 +2850,14 @@ class LibraryTab(ctk.CTkFrame):
             self._page_dirty = True
             return
         self._page_dirty = False
+        # Cancelled, not just forgotten. Setting this to None left the
+        # timer running, so a render that had been superseded by this one
+        # still went ahead afterwards and drew the page again.
+        if self._resize_after is not None:
+            try:
+                self.after_cancel(self._resize_after)
+            except ValueError:
+                pass
         self._resize_after = None
         self._page_token += 1
         token = self._page_token
@@ -3992,7 +4030,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def toggle_theater(self):
         self.cfg.theater = not self.cfg.theater
-        self.cfg.save()
+        self.cfg.save_soon()
         if self.cfg.theater and self.cfg.sidebar_open:
             self.toggle_sidebar(force=False)
         self._show_tags_panel(not self.cfg.theater)
@@ -4001,7 +4039,7 @@ class LibraryTab(ctk.CTkFrame):
             fg_color=T.ACCENT_DEEP if self.cfg.theater else T.BTN,
             text_color=T.ACCENT if self.cfg.theater else T.DIM)
         self._fit_panel()
-        self.after(150, self.render_page)
+        self._render_soon(150)
 
     # ── the handle between the player and the tag list ───────────────────
     #
@@ -4071,11 +4109,11 @@ class LibraryTab(ctk.CTkFrame):
         moved, self._tag_moved = self._tag_moved, False
         self._tag_from = None
         if moved and self.cfg.tags_height_px:
-            self.cfg.save()
+            self.cfg.save_soon()
 
     def _tag_grip_reset(self, _event=None) -> None:
         self.cfg.tags_height_px = 0
-        self.cfg.save()
+        self.cfg.save_soon()
         self._fit_panel()
         self.set_status("Player and tag list back to the worked-out split - "
                         "drag the handle between them to set your own.", T.DIM)
@@ -4277,7 +4315,7 @@ class LibraryTab(ctk.CTkFrame):
 
     def _toggle_group(self, key: str):
         self.cfg.detail_open[key] = not self.cfg.detail_open.get(key, True)
-        self.cfg.save()
+        self.cfg.save_soon()
         self._render_details()
 
     # ── the tag list, reused rather than rebuilt ─────────────────────────
@@ -4566,7 +4604,7 @@ class LibraryTab(ctk.CTkFrame):
         # them is the slowest thing in an otherwise instant action.
         if self.cfg.last_project != project:
             self.cfg.last_project = project
-            self.cfg.save()
+            self.cfg.save_soon()
         self._after_vault_change(recs, -newly_used)
         count = len(paths)
         self.set_status(f"Marked {count} clip{'s' if count != 1 else ''} as used "
@@ -4628,6 +4666,9 @@ class LibraryTab(ctk.CTkFrame):
         # "Never used" is the one counted chip a mark can change, and the
         # caller already knows by how many - see _bump_quick_count.
         self._bump_quick_count("unused", unused_delta)
+        # The rail's PROJECTS counts are out of date now. Not redrawn for
+        # one mark, but not reused either the next time the rail is.
+        self._rail_counts = None
 
     # ── sync (incremental index build) ──────────────────────────────────────
 
@@ -5157,58 +5198,117 @@ class LibraryTab(ctk.CTkFrame):
         status = f"{self.F('fetching')} · {note or f'{len(todo)} posts'}"
         if refreshing:
             status += f" ({refreshing} refreshed for freshness)"
-        status += f" (~{fmt_len(len(todo) * (delay + 0.1))})"
+        requests = (-(-len(todo) // BATCH_SIZE)
+                    if getattr(self.emeta, "batching", False)
+                    else len(todo))
+        status += f" (~{fmt_len(requests * (delay + 0.5))})"
         # Ambient work speaks quietly: the status line is how the app
         # answers the user, not a place for a background job to shout.
         self.set_status(status, T.FAINT if ambient else T.ACCENT2)
         self.progress.set(0)
 
+        user, key = self.cfg.e621_user, self.cfg.e621_key
+        total = len(todo)
+        tone = T.FAINT if ambient else T.ACCENT2
+
         def work():
-            hits = missing = failed = 0
+            counts = {"hits": 0, "missing": 0, "failed": 0, "in_a_row": 0,
+                      "requests": 0}
             last_error = ""
-            done = 0
-            in_a_row = 0
+            asked: list = []            # every post that got an answer
+
+            def report():
+                self.ui(self.progress.set, len(asked) / total)
+                self.ui(self.set_status,
+                        f"{self.F('fetching')} {len(asked)}/{total}", tone)
+
+            def pause() -> None:
+                # wait(), not sleep(): a cancel lands at once rather than
+                # after the pause e621's rate limit asks for.
+                if counts["requests"]:
+                    stop.wait(delay)
+                counts["requests"] += 1
+
+            def failed_again(error: str) -> bool:
+                """One post can fail on its own. This many in an unbroken
+                run is the connection, the rate limit or e621 itself, and
+                asking thousands more times helps nobody. Nothing is
+                cached from a failure, so stopping costs only the posts
+                not reached - they are still first in the queue next
+                time. True means stop."""
+                nonlocal last_error
+                last_error = error
+                counts["in_a_row"] += 1
+                return counts["in_a_row"] >= GIVE_UP_AFTER
+
+            def one(pid) -> bool:
+                """Ask about one post. False means stop the run."""
+                pause()
+                if stop.is_set():
+                    return False
+                record = self.emeta.fetch(pid, user, key)
+                if record.get("error") and not record.get("missing"):
+                    counts["failed"] += 1
+                    if failed_again(record["error"]):
+                        return False
+                else:
+                    counts["missing" if record.get("missing") else "hits"] += 1
+                    counts["in_a_row"] = 0
+                asked.append(pid)
+                if len(asked) % 5 == 0:
+                    report()
+                if len(asked) % 10 == 0:
+                    self.emeta.checkpoint()
+                return True
+
+            at = 0
             try:
-                for index, pid in enumerate(todo):
+                while at < total and not stop.is_set():
+                    if not getattr(self.emeta, "batching", False):
+                        if not one(todo[at]):
+                            break
+                        at += 1
+                        continue
+                    # A hundred at a time - see E621Meta.fetch_many.
+                    chunk = todo[at:at + BATCH_SIZE]
+                    pause()
                     if stop.is_set():
                         break
-                    record = self.emeta.fetch(pid, self.cfg.e621_user, self.cfg.e621_key)
-                    done = index + 1
-                    if record.get("missing"):
-                        missing += 1
-                        in_a_row = 0
-                    elif record.get("error"):
-                        failed += 1
-                        last_error = record["error"]
-                        # One post can fail on its own. This many in an
-                        # unbroken run is the connection, the rate limit
-                        # or e621 itself, and asking ten thousand more
-                        # times at a second apiece helps nobody. Nothing
-                        # is cached from a failure, so stopping costs
-                        # only the posts not reached - they are still
-                        # first in the queue next time.
-                        in_a_row += 1
-                        if in_a_row >= GIVE_UP_AFTER:
+                    answer = self.emeta.fetch_many(chunk, user, key)
+                    if answer.get("unsupported"):
+                        # e621 would not do this search, or did something
+                        # else with it. One post at a time is slower but
+                        # known to work; the loop carries on that way.
+                        self.emeta.batching = False
+                        last_error = answer.get("error", "")
+                        continue
+                    if answer.get("error"):
+                        # The same hundred again after the pause, unless
+                        # this has become a pattern.
+                        if failed_again(answer["error"]):
+                            counts["failed"] += len(chunk)
                             break
-                    else:
-                        hits += 1
-                        in_a_row = 0
-                    self.ui(self.progress.set, done / len(todo))
-                    if index % 5 == 0:
-                        self.ui(self.set_status,
-                                f"{self.F('fetching')} {done}/{len(todo)}",
-                                T.FAINT if ambient else T.ACCENT2)
-                    if index % 10 == 9:
-                        self.emeta.checkpoint()
-                    # wait(), not sleep(): a cancel lands at once rather
-                    # than after the pause e621's rate limit asks for.
-                    if index + 1 < len(todo):
-                        stop.wait(delay)
+                        continue
+                    records = answer["records"]
+                    counts["hits"] += len(records)
+                    counts["in_a_row"] = 0
+                    asked.extend(pid for pid in chunk if pid in records)
+                    self.emeta.checkpoint()
+                    report()
+                    # What the search left out is asked about on its own:
+                    # deleted, hidden or not there at all, only a lookup
+                    # can say which, and only a lookup may mark it missing.
+                    for pid in chunk:
+                        if pid not in records and not one(pid):
+                            at = total
+                            break
+                    at += len(chunk)
             finally:
                 self.emeta.save()
                 self._fetch_release(stop, ambient)
-                self.ui(self._fetch_done, hits, missing, failed, last_error,
-                        refreshing, list(todo[:done]), stop.is_set(), ambient)
+                self.ui(self._fetch_done, counts["hits"], counts["missing"],
+                        counts["failed"], last_error, refreshing, list(asked),
+                        stop.is_set(), ambient)
 
         threading.Thread(target=work, daemon=True).start()
 
