@@ -19,6 +19,7 @@ as everywhere else thumbnails are shown.
 
 from __future__ import annotations
 
+import collections
 import io
 import os
 import re
@@ -94,6 +95,11 @@ class VaultTab(ctk.CTkFrame):
         self._strip_refs: list = []
         self._strip_boxes: list = []
         self._strip_token = 0
+        # Composed strip thumbnails, by path - see _load_strip_thumbs.
+        self._strip_cache: collections.OrderedDict = collections.OrderedDict()
+        self._strip_lock = threading.Lock()
+        # The project list's rows, by project name - see _restyle_project_row.
+        self._project_widgets: dict = {}
 
         self.grid_columnconfigure(0, weight=1, uniform="cols")
         self.grid_columnconfigure(1, weight=1, uniform="cols")
@@ -509,8 +515,15 @@ class VaultTab(ctk.CTkFrame):
             rec = by_pid.get(stem) or by_pid.get(term)
             if rec is None and not stem.isdigit():
                 needle = stem.lower()
-                for candidate in records:
-                    if needle in candidate.name.lower() and candidate.path not in matched_paths:
+                hits = [c for c in records
+                        if needle in (getattr(c, "sort_name", "") or c.name.lower())]
+                if not hits:
+                    # Said so, like a post ID that is not there. It used to
+                    # vanish: "3 found" for four lines pasted, and no word
+                    # about the fourth.
+                    self._unmatched.append(term)
+                for candidate in hits:
+                    if candidate.path not in matched_paths:
                         matched.append(candidate)
                         matched_paths.add(candidate.path)
                 continue
@@ -607,6 +620,7 @@ class VaultTab(ctk.CTkFrame):
     def _refresh_projects(self) -> None:
         for child in self.projects_list.winfo_children():
             child.destroy()
+        self._project_widgets = {}
         conn = db_connect()
         try:
             projects = vault_projects_list(conn)
@@ -651,6 +665,7 @@ class VaultTab(ctk.CTkFrame):
                 command=lambda n=name: self._select_project(n))
             label.grid(row=0, column=1, sticky="ew", padx=(0, 6))
             label.bind("<Button-3>", lambda e, n=name: self._project_menu(e, n))
+            self._project_widgets[name] = (line, swatch, label)
 
     COVER_W, COVER_H = 48, 27          # 16:9, sized to the row
 
@@ -777,9 +792,31 @@ class VaultTab(ctk.CTkFrame):
     # ── project detail: thumbnail roll + focused clip + clip list ──────
 
     def _select_project(self, name: str) -> None:
-        self._selected_project = name
-        self._refresh_projects()
+        was, self._selected_project = self._selected_project, name
+        # Only two rows change - the one that was selected and the one that
+        # is now. Destroying and rebuilding every project's row (a frame,
+        # a button and a swatch each) to repaint two of them grew with
+        # every project made.
+        if name in self._project_widgets:
+            self._restyle_project_row(was)
+            self._restyle_project_row(name)
+        else:
+            self._refresh_projects()
         self._load_project_clips()
+
+    def _restyle_project_row(self, name) -> None:
+        row = self._project_widgets.get(name)
+        if row is None:
+            return
+        line, swatch, label = row
+        selected = name == self._selected_project
+        try:
+            line.configure(fg_color=T.ELEVATED if selected else "transparent")
+            label.configure(text_color=T.TEXT if selected else T.DIM)
+            if isinstance(swatch, tk.Label):
+                swatch.configure(bg=T.ELEVATED if selected else T.BG)
+        except tk.TclError:
+            pass
 
     def _load_project_clips(self) -> None:
         library = getattr(self.app, "library", None)
@@ -897,30 +934,48 @@ class VaultTab(ctk.CTkFrame):
         clips = list(self._project_clips)
         threading.Thread(target=self._load_strip_thumbs, args=(clips, token), daemon=True).start()
 
+    # Composed strip thumbnails kept, by path and size. Clicking between
+    # projects - or back to the one you were in - redrew every thumbnail
+    # from its file each time.
+    STRIP_CACHE = 400
+
     def _load_strip_thumbs(self, clips: list, token: int) -> None:
+        """Read, decode, scale and round each thumbnail here, on the
+        worker. It used to hand the raw file to the UI thread and do all
+        of that there - a millisecond and a half per clip, so a project
+        of thirty clips was a 50ms stall on every click of it."""
+        size = (self.STRIP_W, self.STRIP_H)
         for index, rec in enumerate(clips):
             if token != self._strip_token:
                 return
-            data = None
-            try:
-                with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
-                    data = fh.read()
-            except OSError:
-                pass
-            uithread.post(self._place_strip_thumb, index, data, token)
+            key = (rec.path, size)
+            with self._strip_lock:
+                image = self._strip_cache.get(key)
+            if image is None:
+                try:
+                    with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
+                        image = Image.open(io.BytesIO(fh.read()))
+                        image.load()
+                    image = fit_frame(image, size[0], size[1], "cover")
+                    image = round_corners(image, 6, T.SURFACE)
+                except Exception:
+                    image = None
+                if image is not None:
+                    with self._strip_lock:
+                        self._strip_cache[key] = image
+                        while len(self._strip_cache) > self.STRIP_CACHE:
+                            self._strip_cache.popitem(last=False)
+            uithread.post(self._place_strip_thumb, index, image, token)
 
-    def _place_strip_thumb(self, index: int, data, token: int) -> None:
+    def _place_strip_thumb(self, index: int, image, token: int) -> None:
         if token != self._strip_token or index >= len(self._strip_boxes):
             return
         c = self.strip_canvas
         c.delete(f"ph{index}")
-        if not data:
+        if image is None:
             return
         x0, _x1, _i = self._strip_boxes[index]
         try:
-            image = Image.open(io.BytesIO(data))
-            image = fit_frame(image, self.STRIP_W, self.STRIP_H, "cover")
-            image = round_corners(image, 6, T.SURFACE)
             photo = ImageTk.PhotoImage(image)
         except Exception:
             return

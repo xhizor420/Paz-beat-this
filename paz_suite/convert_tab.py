@@ -35,6 +35,71 @@ from .widgets import (Card, Bar, StatTile, JobPanel, LogView, LibraryBar,
 from . import uithread
 
 
+def scan_sources(folders: list, extensions: set, overwrite: bool,
+                 source_root: str, output_root: str, emeta=None) -> tuple:
+    """What in these categories still needs converting. Any thread.
+
+    Returns (rows, skipped, missing_dirs, error), rows being
+    (folder, name, source, target, cells) in the order the table shows
+    them. A source file counts as converted when its target exists and is
+    not empty, unless `overwrite` asks for everything again.
+
+    Each category is two directory listings - its source folder and its
+    output folder - rather than a listing plus three filesystem calls per
+    file. Names are compared the way the filesystem compares them
+    (normcase), so on Windows "Clip.MP4" is still the output of "Clip.webm".
+    """
+    rows: list = []
+    skipped = 0
+    missing: list = []
+    for folder in folders:
+        source_dir = os.path.join(source_root, folder)
+        target_dir = os.path.join(output_root, folder)
+        try:
+            entries = sorted(os.scandir(source_dir), key=lambda e: e.name)
+        except OSError:
+            missing.append(source_dir)
+            continue
+        done: dict = {}
+        try:
+            for entry in os.scandir(target_dir):
+                done[os.path.normcase(entry.name)] = entry
+        except OSError:
+            pass                        # nothing converted into it yet
+        for entry in entries:
+            name = entry.name
+            stem, ext = os.path.splitext(name)
+            if ext.lower() not in extensions:
+                continue
+            try:
+                if not entry.is_file():
+                    continue
+            except OSError:
+                continue
+            target_name = stem + ".mp4"
+            target = os.path.join(target_dir, target_name)
+            if not overwrite:
+                existing = done.get(os.path.normcase(target_name))
+                try:
+                    converted = existing is not None and existing.stat().st_size > 0
+                except OSError:
+                    converted = False
+                if converted:
+                    skipped += 1
+                    continue
+            cells: dict = {}
+            pid = post_id_from(name)
+            record = emeta.get(pid) if (emeta is not None and pid) else None
+            if record and not record.get("missing"):
+                cells = {
+                    "artist": ", ".join(record.get("artist") or []) or "--",
+                    "rating": (record.get("rating") or "").upper() or "--",
+                    "_tags": record.get("tags", ""),
+                }
+            rows.append((folder, name, entry.path, target, cells))
+    return rows, skipped, missing, ""
+
+
 class ConvertTab(ctk.CTkFrame):
 
     def __init__(self, parent, app):
@@ -49,6 +114,10 @@ class ConvertTab(ctk.CTkFrame):
         self.toaster = app.toaster
         self.peek = app.peek
         self.tasks: dict = {}
+        # A scan in flight - see _scan. Numbered, so a newer scan's answer
+        # is the only one that lands.
+        self._scan_gen = 0
+        self.scanning = False
 
         self.processing = False
         self.busy_tool = False           # promotion / other library jobs
@@ -709,7 +778,9 @@ class ConvertTab(ctk.CTkFrame):
         message = self.F("watch_new", n=count, s="s" if count != 1 else "")
         self.log(message, "head")
         self.toaster.show(message, "accent")
-        self._scan()
+        self._scan(then=self._start_if_queued)
+
+    def _start_if_queued(self) -> None:
         if any(t.state == "queued" for t in self.tasks.values()):
             self._start()
 
@@ -1010,7 +1081,17 @@ class ConvertTab(ctk.CTkFrame):
         self._active_folders = picked
         return picked
 
-    def _scan(self):
+    def _scan(self, then=None):
+        """Find what is waiting to be converted. `then` runs once the
+        answer is in the table.
+
+        The looking happens on a worker. It is a directory listing per
+        category and, for every file in it, whether it has already been
+        converted - which used to be three separate trips to the disk
+        per file, on this thread, with the window frozen until the last
+        one came back. On a big library on a spinning drive that was
+        seconds, every time the tab opened or the category changed.
+        """
         if self.processing:
             return
         self._peek_hide()
@@ -1021,72 +1102,61 @@ class ConvertTab(ctk.CTkFrame):
         self.bytes_done = 0
         self.preview.clear(self.F("no_selection"))
         self.overall.reset()
+        self._scan_gen += 1
+        gen = self._scan_gen
+        self.scanning = True
+        self.table.empty_hint("Scanning…")
+        folders = self._folders()
+        job = (folders, self.cfg.source_ext_set, bool(self.reencode.get()),
+               self.cfg.source_root, self.cfg.output_root)
 
-        extensions = self.cfg.source_ext_set
-        overwrite = bool(self.reencode.get())
-        found = skipped = 0
-        missing_dirs = []
-
-        for folder in self._folders():
-            source_dir = os.path.join(self.cfg.source_root, folder)
-            target_dir = os.path.join(self.cfg.output_root, folder)
-            if not os.path.isdir(source_dir):
-                missing_dirs.append(source_dir)
-                continue
+        def work():
             try:
-                names = sorted(os.listdir(source_dir))
-            except OSError:
-                missing_dirs.append(source_dir)
-                continue
+                found = scan_sources(*job, emeta=self.emeta)
+            except Exception as exc:          # never leave the tab "scanning"
+                found = ([], 0, [], str(exc))
+            self.ui(self._scan_done, gen, folders, found, then)
 
-            for name in names:
-                stem, ext = os.path.splitext(name)
-                if ext.lower() not in extensions:
-                    continue
-                source = os.path.join(source_dir, name)
-                if not os.path.isfile(source):
-                    continue
-                target = os.path.join(target_dir, stem + ".mp4")
-                exists = os.path.exists(target) and os.path.getsize(target) > 0
-                if exists and not overwrite:
-                    skipped += 1
-                    continue
+        threading.Thread(target=work, daemon=True, name="convert-scan").start()
 
-                iid = f"t{len(self.tasks)}"
-                task = Task(iid=iid, source=source, target=target,
-                           folder=folder, name=name, pid=post_id_from(name))
-                self.tasks[iid] = task
-                cells = {}
-                record = self.emeta.get(task.pid) if task.pid else None
-                if record and not record.get("missing"):
-                    cells = {
-                        "artist": ", ".join(record.get("artist") or []) or "--",
-                        "rating": (record.get("rating") or "").upper() or "--",
-                        "_tags": record.get("tags", ""),
-                    }
-                self.table.add(iid, name, "queued", **cells)
-                found += 1
+    def _scan_done(self, gen: int, folders: list, found: tuple, then=None) -> None:
+        if gen != self._scan_gen:
+            return                      # a newer scan is on its way
+        self.scanning = False
+        rows, skipped, missing_dirs, error = found
+        batch = []
+        for folder, name, source, target, cells in rows:
+            iid = f"t{len(self.tasks)}"
+            self.tasks[iid] = Task(iid=iid, source=source, target=target,
+                                   folder=folder, name=name, pid=post_id_from(name))
+            batch.append((iid, name, cells))
+        self.table.add_many(batch)
+        found_n = len(batch)
 
         for path in missing_dirs:
             self.logview.write(f"Folder not found: {path}", "warn")
+        if error:
+            self.logview.write(f"Scan stopped: {error}", "fail")
 
         self.counts["skipped"] = skipped
-        self.tiles["queued"].set(str(found))
+        self.tiles["queued"].set(str(found_n))
         self.tiles["done"].set("0")
         self.tiles["failed"].set("0")
         self.tiles["sorted"].set("0")
         self.tiles["written"].set("--")
         self.tiles["eta"].set("--")
-        self.readout.configure(text=f"{found} queued  ·  {skipped} already converted")
+        self.readout.configure(text=f"{found_n} queued  ·  {skipped} already converted")
 
         self.refresh_census()
-        if found:
-            self.logview.write(f"Scanned {len(self._folders())} categories: "
-                               f"{found} to convert, {skipped} already done", "info")
+        if found_n:
+            self.logview.write(f"Scanned {len(folders)} categories: "
+                               f"{found_n} to convert, {skipped} already done", "info")
             self._probe_queue()
         else:
             self.table.empty_hint(self.F("empty"))
             self.logview.write(self.F("nothing_msg"), "info")
+        if then is not None:
+            then()
 
     def _probe_queue(self):
         """
@@ -1141,6 +1211,10 @@ class ConvertTab(ctk.CTkFrame):
 
     def _start(self):
         if self.processing:
+            return
+        if self.scanning:
+            self.logview.write("Still scanning the source folders - Start "
+                               "again in a moment.", "warn")
             return
         missing = check_dependencies()
         if missing:

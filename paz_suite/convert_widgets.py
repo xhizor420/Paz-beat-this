@@ -207,6 +207,21 @@ class QueueTable(ctk.CTkFrame):
         self._apply_visibility(iid)
         self._update_count()
 
+    def add_many(self, rows) -> None:
+        """add() for a whole scan at once: (iid, name, cells) each, all
+        queued. One count update at the end rather than one per row."""
+        for iid, name, cells in rows:
+            self._rows[iid] = {"name": name, "state": "queued",
+                               "_parity": len(self._order) % 2, **cells}
+            self._order.append(iid)
+            self._visible.add(iid)
+            self.tree.insert("", "end", iid=iid, text="",
+                              image=self._bars["queued"],
+                              values=self._values(name, "queued", self._rows[iid]),
+                              tags=self._tags(iid, "queued"))
+            self._apply_visibility(iid)
+        self._update_count()
+
     def set_row(self, iid: str, **cells) -> None:
         row = self._rows.get(iid)
         if row is None:
@@ -291,8 +306,26 @@ class QueueTable(ctk.CTkFrame):
         self.tree.move(iid, "", index)
 
     def refresh_filter(self) -> None:
+        """Show exactly the rows the search and state filter want, in
+        order, in one pass.
+
+        Rows that come back are moved to where they belong as the pass
+        reaches them - by then every visible row before them is in place,
+        so their position is simply how many have been kept so far.
+        Asking _reattach for each one walked the whole list per row: with
+        five thousand files, clearing the search box took 0.8 seconds."""
+        position = 0
         for iid in self._order:
-            self._apply_visibility(iid)
+            wanted = self._matches(iid)
+            shown = iid in self._visible
+            if wanted:
+                if not shown:
+                    self.tree.move(iid, "", position)
+                    self._visible.add(iid)
+                position += 1
+            elif shown:
+                self.tree.detach(iid)
+                self._visible.discard(iid)
         self._update_count()
 
     def empty_hint(self, text: str) -> None:
@@ -338,7 +371,10 @@ class QueueTable(ctk.CTkFrame):
             self.tree.heading(column, text=title + arrow)
 
     def _update_count(self) -> None:
-        shown = len(self.tree.get_children())
+        # Counted from the rows this table keeps track of, not asked of
+        # the tree: get_children() builds a list of every row, and this
+        # runs on every add and every change of state.
+        shown = len(self._visible)
         total = len(self._order)
         self.count.configure(
             text=f"{shown} of {total}" if shown != total else f"{total} files")
