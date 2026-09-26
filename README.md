@@ -26,6 +26,36 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### On Windows
+
+Double-click **`PAZ Suite.pyw`** to start it with no console window.
+Anything that would have gone to the console - including the details of
+an error - is written to `%USERPROFILE%\.video_tool\paz_suite.log`.
+Once it is running, right-click its taskbar button and **Pin to taskbar**:
+it has its own taskbar identity, so the pin starts PAZ Suite, not Python.
+
+On Windows the app also:
+
+- keeps the PC from going to sleep while a conversion, a library sync or
+  a tag fetch you started is running (the screen can still turn off);
+- asks for 1 ms timers, so its redraws and animations are not rounded up
+  to Windows' default 15.6 ms tick;
+- runs the thread that draws the window a notch above normal priority,
+  so clicks are answered first while ffmpeg or Topaz keep the CPU busy
+  (background ffmpeg work - thumbnails, previews - already runs below
+  normal).
+
+**Worth doing once:** add `%USERPROFILE%\.video_tool` to Microsoft
+Defender's exclusions (Windows Security → Virus & threat protection →
+Manage settings → Exclusions → Add an exclusion → Folder). That folder
+holds the app's own thumbnails, database and tag cache - thousands of
+small files it writes and reads constantly - and Defender scanning each
+one is the single biggest Windows-only slowdown the app cannot remove by
+itself. Only exclude that folder, not your video library.
+
+The tests run on Windows on every push (the **Windows tests** workflow
+under the repository's Actions tab).
+
 **For playback, install VLC.** The player uses the best backend it finds,
 in this order:
 

@@ -1,0 +1,5 @@
+# The rules this codebase is checked against, written down rather than
+# left to whichever ruff happens to be installed: newer releases change
+# the default rule set, and the Windows test run installs a fresh copy.
+[lint]
+select = ["E4", "E7", "E9", "F"]

@@ -37,6 +37,7 @@ from .library_player import InlinePlayer
 from .tag_rail import Chip as RailChip, Section as RailSection, TagList, TagRail
 from . import artwork, heap, uithread
 from .winsys import awake
+from .speedcheck import SpeedCheck
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
 from .widgets import popup_menu, menu_rule
@@ -463,11 +464,31 @@ class LibraryTab(ctk.CTkFrame):
         menu.add_command(label="Settings…", command=self._open_settings)
         menu.add_command(label="Keyboard shortcuts…",
                          command=lambda: HelpWindow(self.root))
+        menu.add_command(label="Speed check…", command=self._speed_check,
+                         state="disabled" if self.busy or not self.records else "normal")
         try:
             menu.tk_popup(self.more_btn.winfo_rootx(),
                           self.more_btn.winfo_rooty() + self.more_btn.winfo_height())
         finally:
             menu.grab_release()
+
+    def _speed_check(self) -> None:
+        """Time the everyday actions on this machine - see speedcheck."""
+        if getattr(self, "_checking", False) or self.busy or not self.records:
+            return
+        self._checking = True
+        self.set_status("Speed check running - about half a minute. Leave "
+                        "the window alone until it finishes.", T.ACCENT2)
+
+        def done(path: str, summary: str) -> None:
+            self._checking = False
+            where = f" Report: {path}" if path else ""
+            self.set_status(summary + where, T.OK)
+            self.toaster.show(summary, "ok")
+            if path:
+                open_file(path)
+
+        SpeedCheck(self.app, self, done).start()
 
     # Everything this app sends lands in one bin, so a Resolve project
     # doesn't end up with library clips scattered through its root.
