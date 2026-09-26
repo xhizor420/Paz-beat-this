@@ -161,7 +161,7 @@ def test_a_pause_is_recorded_without_waiting_for_a_freeze(tmp_path):
     dog = watchdog.Watchdog(root=None, log_path=str(log))
     dog._beat = time.monotonic() - 2.0          # two seconds of stillness
     dog._lag(2.0)
-    text = log.read_text()
+    text = log.read_text(encoding="utf-8")
     assert "LAGGY" in text
     assert "paused for 2.0s" in text
 
@@ -171,7 +171,7 @@ def test_pauses_are_counted_so_a_bad_session_is_obvious(tmp_path):
     dog = watchdog.Watchdog(root=None, log_path=str(log))
     for _ in range(3):
         dog._lag(1.8)
-    assert "pause #3 this session" in log.read_text()
+    assert "pause #3 this session" in log.read_text(encoding="utf-8")
 
 
 def test_a_pause_says_where_the_thread_was(tmp_path):
@@ -182,7 +182,7 @@ def test_a_pause_says_where_the_thread_was(tmp_path):
         dog._lag(1.6)
 
     somewhere_specific()
-    assert "somewhere_specific" in log.read_text()
+    assert "somewhere_specific" in log.read_text(encoding="utf-8")
 
 
 def test_a_freeze_is_still_a_freeze_not_just_a_pause():
@@ -214,7 +214,7 @@ def test_a_quiet_session_says_nothing(tmp_path):
     log = tmp_path / "freeze.log"
     dog = watchdog.Watchdog(root=None, log_path=str(log))
     dog.summarise()
-    assert not log.exists() or "STUTTERS" not in log.read_text()
+    assert not log.exists() or "STUTTERS" not in log.read_text(encoding="utf-8")
 
 
 def test_stutters_are_counted_and_summarised(tmp_path):
@@ -225,7 +225,7 @@ def test_stutters_are_counted_and_summarised(tmp_path):
         dog._counted_at = 0.0          # each one a separate stall
         dog._count_stutter(0.3)
     dog.summarise()
-    text = log.read_text()
+    text = log.read_text(encoding="utf-8")
     assert "3 pauses over 200ms" in text
     assert "worst 300ms" in text
 
@@ -237,7 +237,7 @@ def test_the_summary_names_where_the_thread_was(tmp_path):
     dog._count_stutter(0.25)
     dog.summarise()
     # The frame that belongs to the app, not tkinter's or pytest's.
-    assert "watchdog.py:" in log.read_text()
+    assert "watchdog.py:" in log.read_text(encoding="utf-8")
 
 
 def test_repeats_of_one_slow_thing_add_up_rather_than_pile_up(tmp_path):
@@ -248,7 +248,7 @@ def test_repeats_of_one_slow_thing_add_up_rather_than_pile_up(tmp_path):
         dog._counted_at = 0.0
         dog._count_stutter(0.3)
     dog.summarise()
-    text = log.read_text()
+    text = log.read_text(encoding="utf-8")
     assert text.count("STUTTERS") == 1
     assert "    5x" in text
 
@@ -273,7 +273,7 @@ def test_nothing_is_counted_while_the_window_is_still_being_built(tmp_path):
     dog._count_stutter(1.0)            # never armed
     assert dog._stutters == 0
     dog.summarise()
-    assert not log.exists() or "STUTTERS" not in log.read_text()
+    assert not log.exists() or "STUTTERS" not in log.read_text(encoding="utf-8")
 
 
 def test_two_beats_from_a_running_loop_arm_it(tmp_path):
@@ -302,7 +302,7 @@ def test_stopping_writes_the_summary(tmp_path):
     dog._armed = True
     dog._count_stutter(0.4)
     dog.stop()
-    assert "STUTTERS" in log.read_text()
+    assert "STUTTERS" in log.read_text(encoding="utf-8")
 
 
 def test_known_construction_is_not_counted_as_a_stutter(tmp_path):

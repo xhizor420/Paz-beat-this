@@ -26,6 +26,10 @@ class FakeSocket:
     def sendall(self, data):
         self.sent.append(data.decode())
 
+    # On Windows mpv's IPC is a named pipe opened as a file, so the writer
+    # calls write() rather than sendall().
+    write = sendall
+
     def close(self):
         pass
 

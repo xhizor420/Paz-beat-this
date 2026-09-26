@@ -99,7 +99,14 @@ def raise_ui_thread() -> bool:
     if windll is None:
         return False
     try:
+        import ctypes
         kernel32 = windll.kernel32
+        # Declared, not left to ctypes' default of int: the thread handle
+        # is pointer-sized, and passed as a 32-bit int it arrives mangled
+        # on 64-bit Windows and the call quietly fails.
+        kernel32.GetCurrentThread.restype = ctypes.c_void_p
+        kernel32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        kernel32.SetThreadPriority.restype = ctypes.c_int
         return bool(kernel32.SetThreadPriority(kernel32.GetCurrentThread(),
                                                THREAD_PRIORITY_ABOVE_NORMAL))
     except Exception:
@@ -142,6 +149,8 @@ def full_speed(proc=None) -> bool:
         if windll is None:
             return False
         try:
+            import ctypes
+            windll.kernel32.GetCurrentProcess.restype = ctypes.c_void_p
             return _full_speed_handle(windll.kernel32.GetCurrentProcess())
         except Exception:
             return False
