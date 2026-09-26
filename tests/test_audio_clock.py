@@ -156,12 +156,30 @@ def test_atempo_chains_past_its_own_limits():
 
 # ── against real ffmpeg ─────────────────────────────────────────────────
 
-@pytest.mark.skipif(not audio_out.available(),
-                    reason="sounddevice not installed")
+def audio_ready(seconds: float = 15.0) -> bool:
+    """available() answers False until its background probe has
+    finished, and a skipif is judged at import - before it ever could.
+    So wait for the probe's real answer."""
+    import time
+    audio_out.start_probe()
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        with audio_out._probe_lock:
+            if audio_out._probe is not None:
+                return bool(audio_out._probe[0])
+        time.sleep(0.05)
+    return False
+
+
 def test_a_clip_with_no_audio_gives_up_at_once(tmp_path):
     """Half the converted library is silent. Waiting out the start
     timeout on each one would freeze the first frame for two seconds
     every time a clip is played."""
+    import shutil
+    if not audio_ready():
+        pytest.skip("no audio output: " + audio_out.why_not())
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
     path = str(tmp_path / "silent.mp4")
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
