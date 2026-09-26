@@ -829,6 +829,7 @@ def main() -> None:
     winsys.set_app_id()
     winsys.sharpen_timers()
     winsys.raise_ui_thread()
+    winsys.full_speed()
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
     root = ctk.CTk()

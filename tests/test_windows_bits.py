@@ -151,3 +151,22 @@ def test_the_windows_calls_succeed_on_windows():
     assert winsys.sharpen_timers() is True
     winsys.restore_timers()
     assert winsys.raise_ui_thread() is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="checks the non-Windows no-op")
+def test_full_speed_does_nothing_elsewhere():
+    assert winsys.full_speed() is False
+    assert winsys.full_speed(object()) is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows only")
+def test_full_speed_on_windows():
+    import subprocess
+    assert winsys.full_speed() is True
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2)"],
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        assert winsys.full_speed(proc) is True
+    finally:
+        proc.kill()
+        proc.wait()

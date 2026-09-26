@@ -18,6 +18,12 @@ starting: a call that fails is simply not made.
 - The PC does not go to sleep in the middle of a conversion, a sync or a
   long tag fetch - a batch left running overnight used to stop the moment
   Windows decided nobody was there.
+- Encodes run at full speed. Windows 11 puts processes it thinks are in
+  the background into Efficiency mode (EcoQoS), and on a CPU with
+  efficiency cores that moves them there. An ffmpeg encode has no window
+  of its own, so it looks like background work exactly when you switch to
+  Resolve or Topaz and leave it running. The app opts its encodes, and
+  itself, out.
 """
 
 from __future__ import annotations
@@ -98,6 +104,48 @@ def raise_ui_thread() -> bool:
                                                THREAD_PRIORITY_ABOVE_NORMAL))
     except Exception:
         return False
+
+
+# SetProcessInformation(ProcessPowerThrottling, ...)
+_PROCESS_POWER_THROTTLING = 4
+_THROTTLING_VERSION = 1
+_THROTTLE_EXECUTION_SPEED = 0x1
+
+
+def _full_speed_handle(handle) -> bool:
+    windll = _windll()
+    if windll is None or not handle:
+        return False
+    try:
+        import ctypes
+
+        class State(ctypes.Structure):
+            _fields_ = [("Version", ctypes.c_ulong),
+                        ("ControlMask", ctypes.c_ulong),
+                        ("StateMask", ctypes.c_ulong)]
+
+        # ControlMask says "this process decides execution speed itself";
+        # StateMask 0 says "and it is never throttled".
+        state = State(_THROTTLING_VERSION, _THROTTLE_EXECUTION_SPEED, 0)
+        return bool(windll.kernel32.SetProcessInformation(
+            ctypes.c_void_p(int(handle)), _PROCESS_POWER_THROTTLING,
+            ctypes.byref(state), ctypes.sizeof(state)))
+    except Exception:
+        return False
+
+
+def full_speed(proc=None) -> bool:
+    """Keep a process out of Efficiency mode: `proc` is a Popen, or None
+    for this process. False wherever it does not apply."""
+    if proc is None:
+        windll = _windll()
+        if windll is None:
+            return False
+        try:
+            return _full_speed_handle(windll.kernel32.GetCurrentProcess())
+        except Exception:
+            return False
+    return _full_speed_handle(getattr(proc, "_handle", None))
 
 
 class KeepAwake:
