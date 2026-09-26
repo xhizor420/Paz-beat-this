@@ -27,7 +27,7 @@ from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
 from .watchdog import Watchdog
 from . import watchdog
-from . import artwork, audio_out, heap, uithread, vlc_player
+from . import artwork, audio_out, heap, uithread, vlc_player, winsys
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
 
@@ -823,6 +823,13 @@ class PazApp:
 def main() -> None:
     # No full garbage-collection passes while starting up - see heap.
     heap.hold()
+    # Windows: the taskbar's name for us, 1ms timers, and a UI thread
+    # that is answered before the workers - see winsys. All no-ops
+    # anywhere else.
+    winsys.set_app_id()
+    winsys.sharpen_timers()
+    winsys.raise_ui_thread()
+    winsys.full_speed()
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
     root = ctk.CTk()
@@ -850,6 +857,7 @@ def main() -> None:
     finally:
         uithread.stop()
         dog.stop()
+        winsys.restore_timers()
 
 
 if __name__ == "__main__":

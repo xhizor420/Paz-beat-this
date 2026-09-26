@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from .config import AppConfig
 from .files import NO_WINDOW
+from . import winsys
 from .format import fmt_time
 from .media import MediaInfo, available_encoders
 
@@ -237,6 +238,9 @@ def run_ffmpeg(cmd: list, duration: float, cfg: AppConfig,
         )
     except OSError as exc:
         return False, str(exc)
+    # A windowless encode looks like background work to Windows 11, which
+    # would move it to the efficiency cores - see winsys.full_speed.
+    winsys.full_speed(proc)
 
     events = queue.Queue()
     for stream, tag in ((proc.stdout, "out"), (proc.stderr, "err")):

@@ -24,6 +24,9 @@ from paz_suite.player_engine import ClipPlayer, _reap    # noqa: E402
 
 @pytest.fixture(scope="module")
 def clip(tmp_path_factory) -> str:
+    import shutil
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
     path = str(tmp_path_factory.mktemp("video") / "clip.mp4")
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",

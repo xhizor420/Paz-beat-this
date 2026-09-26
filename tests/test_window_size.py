@@ -107,7 +107,7 @@ def test_every_secondary_window_uses_it():
     bare = re.compile(r"""\.geometry\(\s*["']\d+x\d+["']""")
     offenders = []
     for path in sorted(root.glob("*.py")):
-        for number, line in enumerate(path.read_text().splitlines(), 1):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if bare.search(line):
                 offenders.append(f"{path.name}:{number}  {line.strip()}")
     assert offenders == [], (
@@ -176,7 +176,7 @@ def paz_source():
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent / "paz_suite"
     for path in sorted(root.glob("*.py")):
-        yield path, path.read_text().splitlines()
+        yield path, path.read_text(encoding="utf-8").splitlines()
 
 
 def offenders(pattern):
