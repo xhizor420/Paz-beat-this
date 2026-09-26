@@ -214,11 +214,24 @@ class FakeTab:
                      "error": last_error, "pids": pids}
 
 
+class Awake:
+    """Stands in for winsys.awake: records holds, starts no thread."""
+
+    def __init__(self):
+        self.reasons = []
+
+    def hold(self, reason):
+        self.reasons.append(reason)
+
+    def release(self, reason):
+        self.reasons.remove(reason)
+
+
 @pytest.fixture
 def instant(monkeypatch):
     """The worker runs on the spot and the pauses take no time."""
     class Now:
-        def __init__(self, target, daemon=True):
+        def __init__(self, target, daemon=True, **_kw):
             self.target = target
 
         def start(self):
@@ -241,6 +254,7 @@ def instant(monkeypatch):
 
     monkeypatch.setattr(library_tab.threading, "Thread", Now)
     monkeypatch.setattr(library_tab.threading, "Event", Event)
+    monkeypatch.setattr(library_tab, "awake", Awake())
 
 
 def pids(n, start=1):
@@ -324,3 +338,30 @@ def test_a_cancel_stops_between_requests(instant):
     tab._run_fetch(pids(300), 0)
     assert tab.done["hits"] == 100
     assert tab.done["pids"] == pids(100)
+
+
+def test_a_fetch_the_user_asked_for_keeps_the_pc_awake_until_it_ends(instant):
+    from paz_suite import library_tab
+    meta = FakeMeta(known=pids(3))
+    tab = FakeTab(meta)
+    seen = []
+    original = meta.fetch_many
+
+    def spy(p, *a):
+        seen.append(list(library_tab.awake.reasons))
+        return original(p, *a)
+    meta.fetch_many = spy
+    tab._run_fetch(pids(3), 0)
+    assert seen == [["tag fetch"]], "not held while fetching"
+    assert library_tab.awake.reasons == [], "still held after the fetch ended"
+
+
+def test_the_background_trickle_does_not(instant):
+    from paz_suite import library_tab
+    meta = FakeMeta(known=pids(3))
+    tab = FakeTab(meta)
+    seen = []
+    original = meta.fetch_many
+    meta.fetch_many = lambda p, *a: seen.append(list(library_tab.awake.reasons)) or original(p, *a)
+    tab._run_fetch(pids(3), 0, ambient=True)
+    assert seen == [[]]

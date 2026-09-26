@@ -22,7 +22,7 @@ from .theme import (T, font, lens_photo, mix, pt, px, restyle, text_fits,
                      text_width, unscaled, LIBRARY_LABELS)
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
-    is_ignored_dir, in_ignored_path, prune_dirs, post_id_from, open_file,
+    is_ignored_dir, media_files, post_id_from, open_file,
     open_in_explorer,
 )
 from .config import THUMB_DIR
@@ -36,6 +36,7 @@ from .library_db import (
 from .library_player import InlinePlayer
 from .tag_rail import Chip as RailChip, Section as RailSection, TagList, TagRail
 from . import artwork, heap, uithread
+from .winsys import awake
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
 from .widgets import popup_menu, menu_rule
@@ -4478,6 +4479,9 @@ class LibraryTab(ctk.CTkFrame):
         self.more_btn.configure(state="disabled")
         self.set_status(self.F("scanning"), T.ACCENT2)
         self.progress.set(0)
+        # A first build of a big library is hours of probing and
+        # thumbnailing; Windows must not sleep through it.
+        awake.hold("sync")
         threading.Thread(target=self._sync_work, args=(full,), daemon=True).start()
 
     def _sync_work(self, full: bool):
@@ -4491,44 +4495,13 @@ class LibraryTab(ctk.CTkFrame):
 
             ext = self.cfg.library_ext_set
             on_disk: dict = {}
-
-            def take(path: str, root: str = "") -> None:
-                if os.path.splitext(path)[1].lower() not in ext:
-                    return
-                # With the root, every folder between it and the file is
-                # judged. Without one, in_ignored_path can only look at
-                # the file's own parent - which misses a proxy two levels
-                # down, and those are indexed as library clips: every clip
-                # twice over, and a proxy counted as the 4K upscale of
-                # the master it stands in for.
-                if in_ignored_path(path, root):
-                    return
-                try:
-                    st = os.stat(path)
-                except OSError:
-                    return
-                on_disk[path] = (st.st_size, int(st.st_mtime))
-
+            # Proxy folders are never entered, and a file's size and date
+            # come with the listing rather than a second trip to the disk
+            # per file - see files.media_files.
             for directory in self.library_dirs():
-                if self.cfg.library_recursive:
-                    for base, dirs, names in os.walk(directory):
-                        # Pruned, not filtered afterwards. This is what
-                        # prune_dirs is for and nothing was calling it, so
-                        # the one recursive scan in the app walked every
-                        # proxy tree Resolve had built - stat-ing each file
-                        # in it, over a library of several terabytes, on
-                        # every sync - only to throw the results away.
-                        prune_dirs(dirs)
-                        for name in names:
-                            take(os.path.join(base, name), directory)
-                else:
-                    try:
-                        with os.scandir(directory) as entries:
-                            for entry in entries:
-                                if entry.is_file():
-                                    take(entry.path)
-                    except OSError:
-                        continue
+                for path, size, mtime in media_files(
+                        directory, ext, self.cfg.library_recursive):
+                    on_disk[path] = (size, mtime)
 
             known = {row[0]: (row[1], row[2]) for row in conn.execute(
                 "SELECT path,size,mtime FROM files")}
@@ -4604,6 +4577,7 @@ class LibraryTab(ctk.CTkFrame):
                 conn.commit()
         finally:
             conn.close()
+            awake.release("sync")
             # _sync_blocked has already restored the buttons and said why.
             if not blocked:
                 self.ui(self._sync_done, len(gone))
@@ -4983,6 +4957,10 @@ class LibraryTab(ctk.CTkFrame):
             self.busy = True
             self.more_btn.configure(state="disabled")
         delay = max(float(self.cfg.e621_fetch_delay), 0.5)
+        # One the user asked for keeps the PC awake until it is done; the
+        # background trickle does not.
+        if not ambient:
+            awake.hold("tag fetch")
         status = f"{self.F('fetching')} · {note or f'{len(todo)} posts'}"
         if refreshing:
             status += f" ({refreshing} refreshed for freshness)"
@@ -5092,6 +5070,8 @@ class LibraryTab(ctk.CTkFrame):
                             break
                     at += len(chunk)
             finally:
+                if not ambient:
+                    awake.release("tag fetch")
                 self.emeta.save()
                 self._fetch_release(stop, ambient)
                 self.ui(self._fetch_done, counts["hits"], counts["missing"],

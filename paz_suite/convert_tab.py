@@ -33,6 +33,7 @@ from .convert_widgets import (
 from .widgets import (Card, Bar, StatTile, JobPanel, LogView, LibraryBar,
                       menu_rule)
 from . import uithread
+from .winsys import awake
 
 
 def scan_sources(folders: list, extensions: set, overwrite: bool,
@@ -1247,6 +1248,9 @@ class ConvertTab(ctk.CTkFrame):
             return
 
         self.processing = True
+        # A batch left running overnight must not stop because Windows
+        # decided nobody was there. Released in _finish.
+        awake.hold("convert")
         self.cancel.clear()
         self.pause.clear()
         self.started_at = time.time()
@@ -1510,6 +1514,7 @@ class ConvertTab(ctk.CTkFrame):
 
     def _finish(self):
         self.processing = False
+        awake.release("convert")
         self._peek_hide()
         self.jobs.clear()
         self.start_btn.configure(state="normal", fg_color=T.BTN_GO, text_color="#FFFFFF")

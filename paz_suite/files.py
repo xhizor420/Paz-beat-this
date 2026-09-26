@@ -68,6 +68,65 @@ def in_ignored_path(path: str, root: str = "") -> bool:
                if part not in ("", ".", ".."))
 
 
+def media_files(top: str, extensions, recursive: bool = True):
+    """Every media file under `top`: (path, size, mtime) each.
+
+    What the library sync walks. It used to list each folder and then
+    ask the filesystem about every file again with os.stat - but on
+    Windows a directory listing already carries each file's size and
+    modification time, and os.scandir hands them over without asking
+    again. On a ten-thousand-clip library on a USB drive that is ten
+    thousand system calls not made, each of which Defender could look at.
+
+    The same files as os.walk with prune_dirs and in_ignored_path: proxy
+    folders are never entered, a symlinked folder is not followed, and
+    the paths are built exactly as os.walk builds them - they are the
+    library's keys.
+    """
+    stack = [top]
+    while stack:
+        directory = stack.pop()
+        try:
+            listing = os.scandir(directory)
+        except OSError:
+            continue
+        subdirs = []
+        with listing:
+            for entry in listing:
+                try:
+                    is_dir = entry.is_dir()
+                except OSError:
+                    is_dir = False
+                if is_dir:
+                    if recursive and not is_ignored_dir(entry.name):
+                        try:
+                            if not entry.is_symlink():
+                                subdirs.append(entry.path)
+                        except OSError:
+                            pass
+                    continue
+                if os.path.splitext(entry.name)[1].lower() not in extensions:
+                    continue
+                if recursive:
+                    if in_ignored_path(entry.path, top):
+                        continue
+                else:
+                    try:
+                        if not entry.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    if in_ignored_path(entry.path):
+                        continue
+                try:
+                    st = entry.stat()
+                except OSError:
+                    continue
+                yield entry.path, st.st_size, int(st.st_mtime)
+        # Depth-first in listing order, like os.walk.
+        stack.extend(reversed(subdirs))
+
+
 _PID_EXACT = re.compile(r"^(\d{3,10})$")
 _PID_LOOSE = re.compile(r"(\d{5,10})")
 
