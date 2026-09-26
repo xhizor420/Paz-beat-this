@@ -36,6 +36,16 @@ def clip(tmp_path_factory) -> str:
     return path
 
 
+# Every root this module makes, kept until the process ends. The player's
+# reader threads hold the engine, which holds its canvas, which holds the
+# root: if one of those threads outlives the fixture and drops the last
+# reference, the Tcl interpreter is deleted from that thread - and on
+# Windows Tcl answers that by aborting the process (0x80000003), which is
+# exactly how the Windows test run died. Kept here, it is only ever freed
+# on the main thread, at exit.
+_ROOTS: list = []
+
+
 @pytest.fixture(scope="module")
 def root():
     """One Tk root for the whole module.
@@ -51,6 +61,7 @@ def root():
     except tk.TclError:
         pytest.skip("no display")
     window.geometry("640x400")
+    _ROOTS.append(window)
     yield window
     try:
         window.destroy()
