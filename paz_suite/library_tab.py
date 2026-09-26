@@ -35,7 +35,7 @@ from .library_db import (
 )
 from .library_player import InlinePlayer
 from .tag_rail import Chip as RailChip, Section as RailSection, TagList, TagRail
-from . import artwork, heap, uithread
+from . import artwork, backups, heap, uithread
 from .winsys import awake
 from .speedcheck import SpeedCheck
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
@@ -261,6 +261,9 @@ class LibraryTab(ctk.CTkFrame):
     def _first_load_done(self) -> None:
         if self.records:
             self.set_status(self.F("idle"), T.FAINT)
+            # Today's copy of the database - the Vault marks in it are the
+            # one thing a rescan cannot bring back. See backups.
+            backups.daily_soon()
         else:
             self.set_status("No index yet", T.WARN)
         self.run_search()
@@ -4511,6 +4514,8 @@ class LibraryTab(ctk.CTkFrame):
         blocked = False
         try:
             if full:
+                # A copy first: this clears the whole index.
+                backups.backup("before-rebuild", force=True)
                 conn.execute("DELETE FROM files")
                 conn.commit()
 

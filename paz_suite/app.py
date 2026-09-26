@@ -820,6 +820,15 @@ class PazApp:
         self.root.destroy()
 
 
+# The root, held for the life of the process. Player, prefetch and fetch
+# threads all reach it through the widgets they hold; if one of them
+# ended up holding the last reference when main() returns, the Tcl
+# interpreter would be deleted from that thread, and on Windows Tcl
+# aborts the process for that - a crash on close. Held here, it is freed
+# on the main thread at exit.
+_ROOT_KEEP: list = []
+
+
 def main() -> None:
     # No full garbage-collection passes while starting up - see heap.
     heap.hold()
@@ -833,6 +842,7 @@ def main() -> None:
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
     root = ctk.CTk()
+    _ROOT_KEEP.append(root)
     # Needs the root to exist (it asks Tk what's installed) but must run
     # before any widget is built, since T.UI/T.MONO are read at construction.
     resolve_fonts()
