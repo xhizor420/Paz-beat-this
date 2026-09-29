@@ -106,7 +106,7 @@ class PazApp:
         # One tab now; the rest once the window is up. See _tab_object.
         self._tabs: dict = {}
         if self.cfg.last_tab in TAB_NAMES:
-            self.tabview.set(self.cfg.last_tab)
+            self._show_tab(self.cfg.last_tab)
         self._tab_object(self.tabview.get())
         # set() does not run the change callback, so the tab we open on
         # would never get its first-look call. Give it one, after the
@@ -465,8 +465,31 @@ class PazApp:
                 widget.configure(cursor="hand2")
             self._tab_widgets[name] = (holder, dot, label)
 
+    def _show_tab(self, name: str) -> None:
+        """Make `name` the tabview's current tab and grid it.
+
+        What CTkTabview.set() does, minus the timer it leaves behind:
+        set(name) also schedules, 100ms later, "hide every tab except
+        `name`". Switch twice inside those 100ms - a quick second click, a
+        shortcut straight after a click - and the first switch's timer
+        fires last and hides the tab you actually ended up on: a black
+        panel under the right tab button. The Windows test run hit it.
+        The other tabs are hidden here, at once, by _select_tab instead.
+
+        Falls back to set() on a CustomTkinter without these internals.
+        """
+        tv = self.tabview
+        try:
+            if name not in tv._tab_dict:
+                raise ValueError(name)
+            tv._current_name = name
+            tv._segmented_button.set(name)
+            tv._set_grid_current_tab()
+        except AttributeError:
+            tv.set(name)
+
     def _select_tab(self, name: str) -> None:
-        self.tabview.set(name)
+        self._show_tab(name)
         # And take the others away now, not in 100ms. CTkTabview.set()
         # grids the new tab into the same cell as the old one and only
         # forgets the old one on a 100ms timer - so for those 100ms the
