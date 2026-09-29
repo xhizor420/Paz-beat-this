@@ -44,6 +44,7 @@ def root():
 class Shell:
     """Just the parts of PazApp these two methods use."""
     _select_tab = appmod.PazApp._select_tab
+    _show_tab = appmod.PazApp._show_tab
     _lay_out_early = appmod.PazApp._lay_out_early
 
     def __init__(self, root):
@@ -105,5 +106,29 @@ def test_laying_out_early_leaves_the_showing_tab_on_top(root):
         assert not shell.tabview.tab("Vault").winfo_ismapped()
         assert order.index(str(shell.tabview.tab("Library"))) > \
             order.index(str(shell.tabview._canvas))
+    finally:
+        shell.tabview.destroy()
+
+
+def test_a_quick_second_switch_is_not_undone_by_the_first(root):
+    """CTkTabview.set() leaves a 100ms timer that hides every tab but the
+    one it was given. Switching again inside that window used to end with
+    the tab you switched to hidden."""
+    import time
+    shell = Shell(root)
+    try:
+        shell._select_tab("Convert")
+        root.update()
+        shell._select_tab("Library")
+        shell._select_tab("Vault")            # well inside 100ms
+        end = time.monotonic() + 0.4
+        while time.monotonic() < end:
+            root.update()
+            time.sleep(0.01)
+        assert shell.tabview.get() == "Vault"
+        assert shell.tabview.tab("Vault").winfo_ismapped(), "Vault was hidden"
+        assert above_the_background(shell, "Vault")
+        for other in ("Convert", "Library", "Beat This"):
+            assert not shell.tabview.tab(other).winfo_ismapped()
     finally:
         shell.tabview.destroy()

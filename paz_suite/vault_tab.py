@@ -752,7 +752,10 @@ class VaultTab(ctk.CTkFrame):
         library.search.delete(0, tk.END)
         library.search.insert(0, f'used:"{project}"')
         library.run_search()
-        self.app.tabview.set("Library")
+        # Through the app, not tabview.set(): that path neither hides the
+        # other tabs nor brings the Library to the top, and could leave it
+        # beneath the tabview's background - a black panel.
+        self.app._select_tab("Library")
 
     def _rename_project(self, name: str) -> None:
         dialog = ctk.CTkInputDialog(text=f"Rename '{name}' to:", title="Rename project")
