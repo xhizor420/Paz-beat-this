@@ -486,6 +486,13 @@ class PazApp:
                     self.tabview.tab(other).grid_forget()
                 except (ValueError, tk.TclError):
                     pass
+        # And on top. Whatever the stacking order was left as - by the
+        # early layout above, by CustomTkinter, by anything - the tab that
+        # was asked for is the one that is seen.
+        try:
+            tk.Misc.lift(self.tabview.tab(name))
+        except (ValueError, tk.TclError):
+            pass
         self._on_tab_changed()
 
     def _style_tabs(self) -> None:
@@ -590,7 +597,13 @@ class PazApp:
                 keep = ("row", "column", "sticky", "padx", "pady",
                         "ipadx", "ipady", "rowspan", "columnspan")
                 frame.grid(**{k: info[k] for k in keep if k in info})
-                tk.Misc.lower(frame)
+                # Beneath the tab that is showing - and only that. A bare
+                # lower() put it beneath every child of the tabview,
+                # including the canvas the tabview paints its own
+                # background on, and it stayed there: switching to it
+                # later showed that background instead of the tab. Every
+                # tab but the first came up as an empty black panel.
+                tk.Misc.lower(frame, tv.tab(showing))
                 frame.update_idletasks()
                 # Only if it is still not the one that is meant to be
                 # showing - nothing here yields, but that is cheap to be
