@@ -263,11 +263,11 @@ class FoldersWindow(ctk.CTkToplevel):
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="CATEGORIES TO INDEX", font=font(10, "bold"),
                      text_color=T.FAINT, anchor="w").grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(head, text="All", width=44, height=22, corner_radius=5,
+        ctk.CTkButton(head, text="All", width=44, height=22, corner_radius=6,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=lambda: self._set_all(True)
                       ).grid(row=0, column=1, padx=(0, 6))
-        ctk.CTkButton(head, text="None", width=52, height=22, corner_radius=5,
+        ctk.CTkButton(head, text="None", width=52, height=22, corner_radius=6,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=lambda: self._set_all(False)
                       ).grid(row=0, column=2)
@@ -512,7 +512,7 @@ class VerifyWindow(ctk.CTkToplevel):
 
     def _add_broken(self, path: str, error: str) -> None:
         row = len(self.body.winfo_children())
-        card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=8)
+        card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=7)
         card.grid(row=row, column=0, sticky="ew", padx=8, pady=4)
         card.grid_columnconfigure(0, weight=1)
 

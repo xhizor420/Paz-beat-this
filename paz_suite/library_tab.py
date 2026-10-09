@@ -316,7 +316,7 @@ class LibraryTab(ctk.CTkFrame):
 
         # The search field rests small and takes the row when you use it -
         # see _search_focus. Column 1 is the slack it grows into.
-        box = ctk.CTkFrame(bar, fg_color=T.INPUT, corner_radius=10,
+        box = ctk.CTkFrame(bar, fg_color=T.INPUT, corner_radius=12,
                            border_width=1, border_color=T.LINE,
                            height=self.SEARCH_H, width=self.SEARCH_REST)
         box.grid(row=0, column=0, sticky="w", padx=(18, 0), pady=5)
@@ -362,7 +362,7 @@ class LibraryTab(ctk.CTkFrame):
 
         self.sort_menu = ctk.CTkOptionMenu(
             right, values=list(SORTS), width=120, height=self.SEARCH_H,
-            font=font(12), corner_radius=9, fg_color=T.INPUT, button_color=T.LINE,
+            font=font(12), corner_radius=7, fg_color=T.INPUT, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
             dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
@@ -372,7 +372,7 @@ class LibraryTab(ctk.CTkFrame):
 
         self.more_btn = ctk.CTkButton(
             right, text="⋯", width=40, height=self.SEARCH_H,
-            corner_radius=9, font=font(15, "bold"), fg_color=T.BTN,
+            corner_radius=7, font=font(15, "bold"), fg_color=T.BTN,
             hover_color=T.BTN_HOV, text_color=T.ACCENT2, command=self._more_menu)
         self.more_btn.pack(side="left")
 
@@ -1189,7 +1189,7 @@ class LibraryTab(ctk.CTkFrame):
         # that wraps to two lines on one clip and one on the next would
         # otherwise move every button underneath by a row - and the
         # buttons are what the mouse is already on its way to.
-        self.detail_name = ctk.CTkLabel(card, text="Nothing selected", font=font(15, "bold"),
+        self.detail_name = ctk.CTkLabel(card, text="Nothing selected", font=font(15, "bold", display=True),
                                          text_color=T.TEXT, anchor="w",
                                          wraplength=470, justify="left", height=24)
         self.detail_name.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 0))

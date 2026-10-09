@@ -189,10 +189,10 @@ class ConvertTab(ctk.CTkFrame):
         left = ctk.CTkFrame(bar, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w", padx=20, pady=10)
 
-        self.brand_name = ctk.CTkLabel(left, text="PAZ", font=font(19, "bold"),
+        self.brand_name = ctk.CTkLabel(left, text="PAZ", font=font(19, "bold", display=True),
                                         text_color=T.ACCENT)
         self.brand_name.pack(side="left")
-        self.brand_kind = ctk.CTkLabel(left, text="Studio", font=font(19),
+        self.brand_kind = ctk.CTkLabel(left, text="Studio", font=font(19, display=True),
                                         text_color=T.TEXT)
         self.brand_kind.pack(side="left", padx=(5, 0))
         self.brand_sub = ctk.CTkLabel(left, text="", font=font(10, mono=True),
@@ -276,25 +276,25 @@ class ConvertTab(ctk.CTkFrame):
         buttons.grid(row=0, column=3, sticky="e", padx=(0, 14), pady=13)
 
         self.scan_btn = ctk.CTkButton(
-            buttons, text="Scan folders", width=110, height=38, corner_radius=8,
+            buttons, text="Scan folders", width=110, height=38, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, command=self._scan)
         self.scan_btn.pack(side="left", padx=(0, 8))
 
         self.pause_btn = ctk.CTkButton(
-            buttons, text="Pause", width=84, height=38, corner_radius=8,
+            buttons, text="Pause", width=84, height=38, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, state="disabled", command=self._toggle_pause)
         self.pause_btn.pack(side="left", padx=(0, 8))
 
         self.stop_btn = ctk.CTkButton(
-            buttons, text="Stop", width=84, height=38, corner_radius=8,
+            buttons, text="Stop", width=84, height=38, corner_radius=7,
             font=font(11, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, state="disabled", command=self._stop)
         self.stop_btn.pack(side="left", padx=(0, 8))
 
         self.start_btn = ctk.CTkButton(
-            buttons, text="Start", width=132, height=38, corner_radius=8,
+            buttons, text="Start", width=132, height=38, corner_radius=7,
             font=font(12, "bold"), fg_color=T.BTN_GO, hover_color=T.BTN_GO_H,
             text_color="#FFFFFF", command=self._start)
         self.start_btn.pack(side="left")

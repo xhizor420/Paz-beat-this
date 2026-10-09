@@ -130,9 +130,9 @@ class VaultTab(ctk.CTkFrame):
 
         left = ctk.CTkFrame(bar, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w", padx=20, pady=10)
-        ctk.CTkLabel(left, text="PAZ", font=font(19, "bold"),
+        ctk.CTkLabel(left, text="PAZ", font=font(19, "bold", display=True),
                      text_color=T.ACCENT3).pack(side="left")
-        ctk.CTkLabel(left, text="Vault", font=font(19), text_color=T.TEXT
+        ctk.CTkLabel(left, text="Vault", font=font(19, display=True), text_color=T.TEXT
                      ).pack(side="left", padx=(5, 0))
         ctk.CTkLabel(left, text=self.F("tagline"), font=font(10, mono=True),
                      text_color=T.FAINT).pack(side="left", padx=(12, 0), pady=(6, 0))
@@ -157,7 +157,7 @@ class VaultTab(ctk.CTkFrame):
                      text_color=T.FAINT, anchor="w").grid(row=0, column=0, sticky="w", pady=(0, 4))
 
         self.paste_box = ctk.CTkTextbox(
-            panel, height=110, corner_radius=10, fg_color=T.SURFACE,
+            panel, height=110, corner_radius=12, fg_color=T.SURFACE,
             border_width=1, border_color=T.ACCENT3_DEEP, text_color=T.TEXT,
             font=font(11, mono=True))
         self.paste_box.grid(row=1, column=0, sticky="ew")
@@ -250,7 +250,7 @@ class VaultTab(ctk.CTkFrame):
         self._projects_box.grid_propagate(False)
         self._projects_box.pack_propagate(False)
         self.projects_list = ctk.CTkScrollableFrame(
-            self._projects_box, fg_color=T.SURFACE, corner_radius=10, border_width=1,
+            self._projects_box, fg_color=T.SURFACE, corner_radius=12, border_width=1,
             border_color=T.ACCENT3_DEEP,
             scrollbar_button_color=T.LINE, scrollbar_button_hover_color=T.FAINT)
         self.projects_list.place(x=0, y=0, relwidth=1, relheight=1)
@@ -268,7 +268,7 @@ class VaultTab(ctk.CTkFrame):
             state="disabled", command=lambda: self._open_in_library(self._selected_project))
         self.open_in_library_btn.grid(row=0, column=1, sticky="e")
 
-        strip_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=10,
+        strip_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=12,
                                   border_width=1, border_color=T.ACCENT3_DEEP)
         strip_wrap.grid(row=3, column=0, sticky="ew")
         strip_wrap.grid_columnconfigure(0, weight=1)
@@ -301,7 +301,7 @@ class VaultTab(ctk.CTkFrame):
         bottom.grid_rowconfigure(0, weight=1)
         bottom.grid_columnconfigure(0, weight=1)
 
-        list_wrap = ctk.CTkFrame(bottom, fg_color=T.SURFACE, corner_radius=10,
+        list_wrap = ctk.CTkFrame(bottom, fg_color=T.SURFACE, corner_radius=12,
                                  border_width=1, border_color=T.ACCENT3_DEEP)
         list_wrap.grid(row=0, column=0, sticky="nsew")
         list_wrap.grid_columnconfigure(0, weight=1)
@@ -337,7 +337,7 @@ class VaultTab(ctk.CTkFrame):
     PLAYER_W = 424
 
     def _build_player(self, parent) -> None:
-        card = ctk.CTkFrame(parent, fg_color=T.SURFACE, corner_radius=10,
+        card = ctk.CTkFrame(parent, fg_color=T.SURFACE, corner_radius=12,
                             border_width=1, border_color=T.ACCENT3_DEEP)
         # "new", not "nsew": a 16:9 picture cannot use the height a tall
         # window gives this row, and a card stretched down to fill it is an

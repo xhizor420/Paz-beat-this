@@ -78,7 +78,7 @@ class ArtworkWindow(ctk.CTkToplevel):
         head.grid(row=0, column=0, sticky="ew", padx=px(16), pady=(px(14), px(6)))
         head.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(head, text=self.slot.title, font=font(15, "bold"),
+        ctk.CTkLabel(head, text=self.slot.title, font=font(15, "bold", display=True),
                      text_color=T.ACCENT2, anchor="w"
                      ).grid(row=0, column=0, sticky="w")
         # The size the slot needs, said before anything is picked.
@@ -150,15 +150,15 @@ class ArtworkWindow(ctk.CTkToplevel):
         foot = ctk.CTkFrame(self, fg_color="transparent")
         foot.grid(row=2, column=0, sticky="ew", padx=px(16), pady=(0, px(14)))
         ctk.CTkButton(foot, text="Choose picture…", height=px(30),
-                      corner_radius=8, font=font(11), fg_color=T.BTN,
+                      corner_radius=7, font=font(11), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.TEXT,
                       command=self._choose).pack(side="left")
         ctk.CTkButton(foot, text="Remove", height=px(30), width=px(80),
-                      corner_radius=8, font=font(11), fg_color=T.BTN,
+                      corner_radius=7, font=font(11), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.FAINT,
                       command=self._remove).pack(side="left", padx=(px(8), 0))
         ctk.CTkButton(foot, text="Use it", height=px(30), width=px(96),
-                      corner_radius=8, font=font(11, "bold"),
+                      corner_radius=7, font=font(11, "bold"),
                       fg_color=T.ACCENT2_DEEP, hover_color=T.BTN_HOV,
                       text_color=T.ACCENT2,
                       command=self._save).pack(side="right")

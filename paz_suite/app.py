@@ -486,7 +486,7 @@ class PazApp:
         self._tab_widgets: dict = {}
         for name in TAB_NAMES:
             deep, bright = self._TAB_ACCENTS[name]
-            holder = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=9,
+            holder = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=7,
                                   height=28)
             holder.pack(side="left", padx=(0, 4))
             dot = ctk.CTkFrame(holder, width=8, height=8, corner_radius=2,

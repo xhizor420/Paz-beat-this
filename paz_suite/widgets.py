@@ -491,12 +491,12 @@ class LogView(ctk.CTkFrame):
         self.header_label.grid(row=0, column=0, sticky="w")
 
         self.filter_btn = ctk.CTkButton(
-            head, text="Errors only", width=84, height=22, corner_radius=5,
+            head, text="Errors only", width=84, height=22, corner_radius=6,
             font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, command=self.toggle_filter)
         self.filter_btn.grid(row=0, column=1, padx=(0, 6))
 
-        ctk.CTkButton(head, text="Clear", width=52, height=22, corner_radius=5,
+        ctk.CTkButton(head, text="Clear", width=52, height=22, corner_radius=6,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=self.clear).grid(row=0, column=2)
 

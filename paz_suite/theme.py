@@ -131,6 +131,22 @@ class T:
     MONO    = "Cascadia Mono"
     DISPLAY = "Segoe UI"
 
+    # The type scale, in font() sizes. New text takes one of these:
+    #   9  caption   section labels, badges, hints
+    #   10 small     secondary controls, metadata
+    #   11 body      buttons, fields, lists - the default
+    #   12 emphasis  primary buttons, the clip's details
+    #   13 tab       the tab strip, the search field
+    #   15 heading   the selected clip's name, dialog titles  (display face)
+    #   19 title     each tab's own title                     (display face)
+    #   21 figure    the big numbers on stat tiles            (mono)
+    # Display (Bricolage Grotesque) is for headings and titles only, mono
+    # (JetBrains Mono) for numbers, times and file names, and everything
+    # else is the UI face (Space Grotesk).
+    #
+    # Corners: 6 for small controls (24px and under), 7 for controls, 11
+    # for pills (half their 22px height), 12 for cards and panels.
+
 
 # The design canvas is set in Space Grotesk / Bricolage Grotesque /
 # JetBrains Mono. Tk can only use families installed on the machine, and

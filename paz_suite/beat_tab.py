@@ -213,9 +213,9 @@ class BeatTab(ctk.CTkFrame):
 
         left = ctk.CTkFrame(bar, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w", padx=20, pady=10)
-        ctk.CTkLabel(left, text="PAZ", font=font(19, "bold"),
+        ctk.CTkLabel(left, text="PAZ", font=font(19, "bold", display=True),
                      text_color=T.ACCENT4).pack(side="left")
-        ctk.CTkLabel(left, text="Beat This", font=font(19), text_color=T.TEXT
+        ctk.CTkLabel(left, text="Beat This", font=font(19, display=True), text_color=T.TEXT
                      ).pack(side="left", padx=(5, 0))
         ctk.CTkLabel(left, text=self.F("tagline"), font=font(10, mono=True),
                      text_color=T.FAINT).pack(side="left", padx=(12, 0), pady=(6, 0))

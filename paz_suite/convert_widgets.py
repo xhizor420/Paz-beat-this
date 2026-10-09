@@ -1475,7 +1475,7 @@ class DuplicateWindow(ctk.CTkToplevel):
                  f"reclaimable", text_color=T.WARN)
 
         for row, group in enumerate(groups):
-            card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=8)
+            card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=7)
             card.grid(row=row, column=0, sticky="ew", padx=8, pady=5)
             card.grid_columnconfigure(0, weight=1)
 
@@ -1503,7 +1503,7 @@ class DuplicateWindow(ctk.CTkToplevel):
                          f"{os.path.basename(path)}")
                 label.grid(row=line, column=0, sticky="w", padx=12)
                 ctk.CTkButton(
-                    card, text="Open", height=20, width=48, corner_radius=5,
+                    card, text="Open", height=20, width=48, corner_radius=6,
                     font=font(9), fg_color=T.BTN, hover_color=T.BTN_HOV,
                     text_color=T.DIM,
                     command=lambda p=path: open_in_explorer(p)
