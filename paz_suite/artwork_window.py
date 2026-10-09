@@ -17,7 +17,7 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from . import artwork
-from .theme import T, font, px, pt, window_size
+from .theme import T, font, label_style, px, pt, window_size
 
 # The source preview, which the crop rectangle is dragged around on.
 VIEW_W, VIEW_H = 520, 300
@@ -136,8 +136,7 @@ class ArtworkWindow(ctk.CTkToplevel):
         if self.slot.treatments:
             self._soften_row(body, 3)
 
-        ctk.CTkLabel(body, text="HOW IT WILL LOOK", font=font(9, "bold"),
-                     text_color=T.FAINT, anchor="w"
+        ctk.CTkLabel(body, text="HOW IT WILL LOOK", **label_style(), anchor="w"
                      ).grid(row=4, column=0, sticky="w", padx=px(12))
         self.result = tk.Canvas(body, bg=T.INPUT, highlightthickness=0, bd=0,
                                 height=px(132))

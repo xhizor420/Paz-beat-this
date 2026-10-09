@@ -15,7 +15,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import ImageTk
 
-from .theme import (T, BANNER_H, banner_image, faster_corners, font,
+from .theme import (T, BANNER_H, banner_image, faster_corners,
                     mark_photo, mix, px, pt, resolve_fonts)
 from .config import AppConfig, CONFIG_DIR
 from .e621 import E621Meta, APP_NAME, APP_VERSION
@@ -30,9 +30,30 @@ from .library_windows import HelpWindow
 from .shortcuts import open_shortcuts
 from .watchdog import Watchdog
 from . import watchdog
-from . import artwork, audio_out, heap, libmpv_player, uithread, vlc_player, winsys
+from . import artwork, audio_out, heap, icons, libmpv_player, uithread, vlc_player, winsys
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
+
+
+class HeaderSlot:
+    """Stands where a label in a tab's own title bar used to be. The
+    title bars are gone - their contents live in the one header now -
+    but the code that kept them current still calls configure()."""
+
+    def __init__(self, repaint):
+        self._repaint = repaint
+        self.text = ""
+        self.text_color = T.DIM
+        self.fg_color = None
+
+    def configure(self, text=None, text_color=None, fg_color=None, **_ignored):
+        if text is not None:
+            self.text = text
+        if text_color is not None:
+            self.text_color = text_color
+        if fg_color is not None:
+            self.fg_color = fg_color
+        self._repaint()
 
 
 class PazApp:
@@ -60,7 +81,6 @@ class PazApp:
         self.toaster = Toaster(root)
         self.peek = PeekWindow(root)
         self._icon = None
-        self._header_icon = None
 
         # Sized to the display rather than to a fixed number. 1760x1020 is
         # a good window on a 1080p screen and a postage stamp on a 4K one -
@@ -90,7 +110,6 @@ class PazApp:
         root.configure(fg_color=T.BG)
 
         self._build_header()
-        self._build_tabstrip()
 
         self.tabview = ctk.CTkTabview(
             root, fg_color=T.BG, corner_radius=0,
@@ -245,8 +264,8 @@ class PazApp:
         self._banner_width = 0
         self._banner_key = None
         self._banner_cache: dict = {}
-        self._header_icon = mark_photo(px(22), T.ACCENT)
         self._header_text = ""
+        self._tab_status: dict = {}
         self._header_colour = T.OK
         self.header.bind("<Configure>", self._banner_resized)
         self.header.bind("<Button-3>", self._banner_menu)
@@ -342,46 +361,142 @@ class PazApp:
         opaque rectangle and the banner would look like a mistake.
         """
         try:
-            self.header.delete("all")
+            c = self.header
+            c.delete("all")
             if self._banner_photo is not None:
-                self.header.create_image(0, 0, image=self._banner_photo,
-                                         anchor="nw")
+                c.create_image(0, 0, image=self._banner_photo, anchor="nw")
             mid = self._band() // 2
-            self.header.create_image(px(20), mid, image=self._header_icon,
-                                     anchor="w")
-            name = self.header.create_text(px(52), mid + px(1), text="PAZ",
-                                           anchor="w", fill=T.ACCENT,
-                                           font=(T.DISPLAY, pt(19), "bold"))
+            active = self._active_tab_name()
+            deep, bright = self._TAB_ACCENTS.get(active, (T.ACCENT_DEEP, T.ACCENT))
+            c.create_image(px(18), mid, image=self._mark_for(bright), anchor="w")
+            name = c.create_text(px(48), mid + px(1), text="PAZ", anchor="w",
+                                 fill=bright, font=(T.DISPLAY, pt(17), "bold"))
             # Measured, not guessed: the display family is whatever
             # resolve_fonts() found installed, so "PAZ" is a different
             # width on every machine and a fixed offset collides with it.
-            self.header.create_text(self.header.bbox(name)[2] + px(9),
-                                    mid + px(4), text="S U I T E", anchor="w",
-                                    fill=T.DIM, font=(T.MONO, pt(9)))
+            x = c.bbox(name)[2] + px(28)
+            for tab in TAB_NAMES:
+                x = self._paint_tab(tab, x, mid, tab == active) + px(4)
+            self._tabs_end = x
+            self._paint_header_buttons(mid)
             self._paint_header_status()
         except tk.TclError:
             pass
 
+    TAB_H = 30
+
+    def _paint_tab(self, name: str, x: int, mid: int, selected: bool) -> int:
+        """One tab as canvas items, so the header picture shows round it.
+        Returns where the next one starts."""
+        c = self.header
+        deep, bright = self._TAB_ACCENTS[name]
+        tag = f"tab:{name}"
+        label = c.create_text(x + px(30), mid, text=name, anchor="w",
+                              fill=bright if selected else T.DIM,
+                              font=(T.UI, pt(12), "bold"), tags=(tag, f"{tag}:text"))
+        right = c.bbox(label)[2] + px(14)
+        half = px(self.TAB_H) // 2
+        pill = self._round_rect(x, mid - half, right, mid + half, px(7),
+                                fill=deep if selected else "", outline="",
+                                tags=(tag, f"{tag}:pill"))
+        c.tag_lower(pill, label)
+        dot = mix(bright, T.BG, 0 if selected else 0.55)
+        c.create_rectangle(x + px(13), mid - px(4), x + px(21), mid + px(4),
+                           fill=dot, outline="", tags=(tag,))
+        if not selected:
+            c.tag_bind(tag, "<Enter>",
+                       lambda e, t=tag: c.itemconfigure(f"{t}:text", fill=T.TEXT))
+            c.tag_bind(tag, "<Leave>",
+                       lambda e, t=tag: c.itemconfigure(f"{t}:text", fill=T.DIM))
+        # A transparent hit area over the whole pill, so the gaps between
+        # the dot and the word still answer a click.
+        c.create_rectangle(x, mid - half, right, mid + half, fill="", outline="",
+                           tags=(tag,))
+        c.tag_bind(tag, "<Button-1>", lambda e, n=name: self._select_tab(n))
+        return right
+
+    def _round_rect(self, x0, y0, x1, y1, r, **kw):
+        points = (x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+                  x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0)
+        return self.header.create_polygon(points, smooth=True, **kw)
+
+    def _mark_for(self, colour: str):
+        marks = self.__dict__.setdefault("_marks", {})
+        if colour not in marks:
+            marks[colour] = mark_photo(px(22), colour)
+        return marks[colour]
+
+    def _paint_header_buttons(self, mid: int) -> None:
+        """Shortcuts/help and Settings, at the right-hand end."""
+        c = self.header
+        width = max(self._banner_width or self.root.winfo_width() or 1760, 320)
+        x = width - px(16)
+        self._status_right = x
+        for key, icon_name, action in (("help", "help", self._shortcuts),
+                                       ("settings", "settings", self._open_tab_settings)):
+            tag = f"hbtn:{key}"
+            size = px(32)
+            left = x - size
+            bg = self._round_rect(left, mid - size // 2, x, mid + size // 2, px(7),
+                                  fill="", outline="", tags=(tag, f"{tag}:bg"))
+            c.create_image((left + x) // 2, mid, tags=(tag,),
+                           image=icons.photo(icon_name, px(17), T.DIM))
+            c.tag_bind(tag, "<Enter>", lambda e, b=bg: c.itemconfigure(b, fill=T.BTN_HOV))
+            c.tag_bind(tag, "<Leave>", lambda e, b=bg: c.itemconfigure(b, fill=""))
+            c.tag_bind(tag, "<Button-1>", lambda e, a=action: a())
+            x = left - px(6)
+        self._status_right = x - px(10)
+
+    def _open_tab_settings(self) -> None:
+        tab = self._tab_object(self._active_tab_name(), build=False)
+        opener = getattr(tab, "_open_settings", None)
+        (opener or self.open_settings)()
+
     def _paint_header_status(self) -> None:
-        """Just the live line and its dot. Tagged so a status change can
-        replace them without touching the picture underneath."""
+        """The live lines and their dots, right-aligned before the buttons:
+        the open tab's own (Convert's queue readout and run state), then
+        the suite's. Tagged so a status change can replace them without
+        touching the picture underneath."""
         try:
-            self.header.delete("hstatus")
-            if not self._header_text:
-                return
-            width = max(self._banner_width or self.root.winfo_width() or 1760,
-                        320)
+            c = self.header
+            c.delete("hstatus")
             mid = self._band() // 2
-            item = self.header.create_text(
-                width - px(20), mid, text=self._header_text, anchor="e",
-                fill=T.DIM, font=(T.MONO, pt(10)), tags=("hstatus",))
-            left = self.header.bbox(item)[0]
-            self.header.create_oval(left - px(15), mid - px(4),
-                                    left - px(8), mid + px(3),
-                                    fill=self._header_colour, outline="",
-                                    tags=("hstatus",))
+            x = getattr(self, "_status_right", None)
+            if x is None:
+                return
+            floor = getattr(self, "_tabs_end", 0) + px(16)
+            slots = self._tab_status.get(self._active_tab_name(), {})
+            parts = []
+            if self._header_text:
+                parts.append((self._header_text, T.DIM, self._header_colour))
+            pill = slots.get("pill")
+            if pill and pill.text:
+                parts.append((pill.text, pill.text_color, pill.fg_color))
+            readout = slots.get("readout")
+            if readout and readout.text:
+                parts.append((readout.text, readout.text_color, None))
+            for text, colour, dot in parts:
+                item = c.create_text(x, mid, text=text, anchor="e", fill=colour,
+                                     font=(T.MONO, pt(10)), tags=("hstatus",))
+                left = c.bbox(item)[0]
+                if left < floor:
+                    c.delete(item)          # no room beside the tabs
+                    break
+                if dot:
+                    c.create_oval(left - px(15), mid - px(4), left - px(8), mid + px(3),
+                                  fill=dot, outline="", tags=("hstatus",))
+                    left -= px(15)
+                x = left - px(22)
         except tk.TclError:
             pass
+
+    def status_slot(self, tab: str, key: str) -> "HeaderSlot":
+        """A stand-in for a label in a tab's old title bar. Configuring it
+        (text, text_color, fg_color - from any code that used to configure
+        the label) redraws that part of the shared header."""
+        slot = HeaderSlot(self._paint_header_status)
+        self._tab_status.setdefault(tab, {})[key] = slot
+        return slot
 
     def set_header_status(self, text: str, colour: str = T.OK) -> None:
         """One live line in the identity bar - what the suite is doing
@@ -477,33 +592,6 @@ class PazApp:
                     "Vault":     (T.ACCENT3_DEEP, T.ACCENT3),
                     "Beat This": (T.ACCENT4_DEEP, T.ACCENT4)}
 
-    def _build_tabstrip(self) -> None:
-        strip = ctk.CTkFrame(self.root, fg_color=T.BG, corner_radius=0, height=36)
-        strip.pack(fill="x", side="top")
-        strip.pack_propagate(False)
-
-        inner = ctk.CTkFrame(strip, fg_color="transparent")
-        inner.pack(side="left", padx=(14, 0), pady=(2, 0))
-
-        self._tab_widgets: dict = {}
-        for name in TAB_NAMES:
-            deep, bright = self._TAB_ACCENTS[name]
-            holder = ctk.CTkFrame(inner, fg_color="transparent", corner_radius=7,
-                                  height=28)
-            holder.pack(side="left", padx=(0, 4))
-            dot = ctk.CTkFrame(holder, width=8, height=8, corner_radius=2,
-                               fg_color=mix(bright, T.BG, 0.55))
-            dot.pack(side="left", padx=(12, 7), pady=10)
-            label = ctk.CTkLabel(holder, text=name, font=font(13, "bold"),
-                                 text_color=T.DIM)
-            label.pack(side="left", padx=(0, 14))
-            # Every piece of the tab is clickable, not just the text - a
-            # 32px target that only responds on the glyphs feels broken.
-            for widget in (holder, dot, label):
-                widget.bind("<Button-1>", lambda e, n=name: self._select_tab(n))
-                widget.configure(cursor="hand2")
-            self._tab_widgets[name] = (holder, dot, label)
-
     def _show_tab(self, name: str) -> None:
         """Make `name` the tabview's current tab and grid it.
 
@@ -558,13 +646,8 @@ class PazApp:
         self._on_tab_changed()
 
     def _style_tabs(self) -> None:
-        active = self.tabview.get()
-        for name, (holder, dot, label) in self._tab_widgets.items():
-            deep, bright = self._TAB_ACCENTS[name]
-            selected = name == active
-            holder.configure(fg_color=deep if selected else "transparent")
-            dot.configure(fg_color=bright if selected else mix(bright, T.BG, 0.55))
-            label.configure(text_color=bright if selected else T.DIM)
+        # The tabs are drawn in the header now.
+        self._paint_header()
 
     def _first_look(self) -> None:
         tab = self._tab_object(self.tabview.get())

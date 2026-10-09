@@ -590,6 +590,34 @@ def forget_heading_fonts() -> None:
     _HEADING_FONTS.clear()
 
 
+def label_style() -> dict:
+    """The one section-label look - TAGS, PROJECTS, LOG - as CTkLabel options.
+    Pair it with upper-case text."""
+    return {"font": font(10, "bold"), "text_color": T.FAINT}
+
+
+def button_style(kind: str, accent: str = "") -> dict:
+    """The three kinds of button, as CTkButton options.
+
+    primary    the one main action of a panel: filled with the tab's colour
+               (Start, Analyze, Look up). One per panel - colour on a button
+               says "this one", and it stops saying it when every button
+               wears a different one.
+    secondary  everything else that is a button: quiet and neutral.
+    text       minor actions: no fill until hovered.
+    """
+    if kind == "primary":
+        accent = accent or T.ACCENT
+        return {"fg_color": accent, "hover_color": mix(accent, "#FFFFFF", 0.22),
+                "text_color": T.BG, "text_color_disabled": T.FAINT,
+                "font": font(12, "bold")}
+    if kind == "text":
+        return {"fg_color": "transparent", "hover_color": T.BTN_HOV,
+                "text_color": T.DIM, "font": font(11)}
+    return {"fg_color": T.BTN, "hover_color": T.BTN_HOV, "text_color": T.TEXT,
+            "text_color_disabled": T.FAINT, "font": font(11)}
+
+
 def restyle(widget, **options) -> None:
     """Apply only the options the widget does not already have.
 

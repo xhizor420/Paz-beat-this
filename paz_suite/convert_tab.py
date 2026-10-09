@@ -18,7 +18,7 @@ from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
-from .theme import T, font, text_width, CONVERT_LABELS
+from .theme import T, button_style, font, label_style, text_width, CONVERT_LABELS
 from .format import fmt_time, fmt_clock, fmt_size
 from .files import is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer
 from .media import check_dependencies, available_encoders, probe
@@ -182,44 +182,12 @@ class ConvertTab(ctk.CTkFrame):
         self._build_right()
 
     def _build_topbar(self):
-        bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0, height=58)
-        bar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        bar.grid_propagate(False)
-        bar.grid_columnconfigure(1, weight=1)
-
-        left = ctk.CTkFrame(bar, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="w", padx=20, pady=10)
-
-        self.brand_name = ctk.CTkLabel(left, text="PAZ", font=font(19, "bold", display=True),
-                                        text_color=T.ACCENT)
-        self.brand_name.pack(side="left")
-        self.brand_kind = ctk.CTkLabel(left, text="Studio", font=font(19, display=True),
-                                        text_color=T.TEXT)
-        self.brand_kind.pack(side="left", padx=(5, 0))
-        self.brand_sub = ctk.CTkLabel(left, text="", font=font(10, mono=True),
-                                       text_color=T.FAINT)
-        self.brand_sub.pack(side="left", padx=(12, 0), pady=(6, 0))
-
-        self.pill = ctk.CTkFrame(left, fg_color=T.INPUT, corner_radius=11,
-                                  border_width=1, border_color=T.ACCENT_DEEP, height=22)
-        self.pill.pack(side="left", padx=(18, 0))
-        self.pill_dot = ctk.CTkFrame(self.pill, width=7, height=7, corner_radius=4,
-                                      fg_color=T.FAINT)
-        self.pill_dot.pack(side="left", padx=(9, 6), pady=7)
-        self.pill_text = ctk.CTkLabel(self.pill, text="Idle", font=font(10),
-                                       text_color=T.DIM)
-        self.pill_text.pack(side="left", padx=(0, 11))
-
-        right = ctk.CTkFrame(bar, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="e", padx=20)
-
-        self.readout = ctk.CTkLabel(right, text="", font=font(11, mono=True),
-                                     text_color=T.DIM)
-        self.readout.pack(side="left", padx=(0, 18))
-
-        ctk.CTkButton(right, text="Settings", width=88, height=30, corner_radius=7,
-                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                      text_color=T.DIM, command=self._open_settings).pack(side="left")
+        # The run state and the queue readout live in the app's header,
+        # beside the tabs; Settings is the gear at its end.
+        self.pill = self.app.status_slot("Convert", "pill")
+        self.pill.configure(text="Idle", text_color=T.DIM, fg_color=T.FAINT)
+        self.pill_dot = self.pill_text = self.pill
+        self.readout = self.app.status_slot("Convert", "readout")
 
     def _build_left(self):
         panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
@@ -233,8 +201,7 @@ class ConvertTab(ctk.CTkFrame):
 
         picker = ctk.CTkFrame(controls, fg_color="transparent")
         picker.grid(row=0, column=0, sticky="w", padx=(14, 0), pady=13)
-        ctk.CTkLabel(picker, text="CATEGORY", font=font(9, "bold"),
-                     text_color=T.FAINT).pack(anchor="w", pady=(0, 5))
+        ctk.CTkLabel(picker, text="CATEGORY", **label_style()).pack(anchor="w", pady=(0, 5))
         self.folder_menu = ctk.CTkOptionMenu(
             picker, values=["All categories"] + self.cfg.subfolders, width=170,
             height=32, font=font(11), corner_radius=7, fg_color=T.INPUT,
@@ -296,8 +263,7 @@ class ConvertTab(ctk.CTkFrame):
 
         self.start_btn = ctk.CTkButton(
             buttons, text="Start", width=132, height=38, corner_radius=7,
-            font=font(12, "bold"), fg_color=T.BTN_GO, hover_color=T.BTN_GO_H,
-            text_color="#FFFFFF", command=self._start)
+            command=self._start, **button_style("primary", T.ACCENT))
         self.start_btn.pack(side="left")
 
         tiles = ctk.CTkFrame(panel, fg_color="transparent")
@@ -387,8 +353,7 @@ class ConvertTab(ctk.CTkFrame):
         maintenance.pack(side="left")
         self.e621_btn = ctk.CTkButton(
             maintenance, text="Fetch e621 tags", height=30, corner_radius=7,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT, width=130, command=self._fetch_e621)
+            width=130, command=self._fetch_e621, **button_style("secondary"))
         self.e621_btn.pack(side="left", padx=(0, 7))
         # The occasional ones, behind one button. Eight buttons did not fit
         # one row at 125%, and the row wrapping onto two read as clutter
@@ -401,8 +366,7 @@ class ConvertTab(ctk.CTkFrame):
 
         self.promote_btn = ctk.CTkButton(
             tools, text="Promote upscales", height=30, corner_radius=7,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT2, width=150, command=self._promote)
+            width=150, command=self._promote, **button_style("secondary"))
         self.promote_btn.pack(side="right", padx=(7, 0))
         # Measured so the button can grow when a count is appended.
         self._btn_font = tkfont.Font(family=T.UI, size=11)
@@ -424,8 +388,7 @@ class ConvertTab(ctk.CTkFrame):
         head.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 6))
         head.grid_columnconfigure(0, weight=1)
         self.inspector_head = ctk.CTkLabel(head, text="INSPECTOR",
-                                            font=font(10, "bold"),
-                                            text_color=T.FAINT)
+                                            **label_style())
         self.inspector_head.grid(row=0, column=0, sticky="w")
         # The how-to line that used to sit here is on the controls as
         # tooltips now, and in full on the shortcuts sheet behind this.
@@ -513,7 +476,7 @@ class ConvertTab(ctk.CTkFrame):
         self.cfg.save_soon()
 
     def _apply_brand(self):
-        self.brand_sub.configure(text=f"{self.F('tagline')} · Convert")
+        """Nothing to relabel: the tab's name is in the app's header."""
 
     def _relabel(self):
         self.scan_btn.configure(text=self.F("scan"))
@@ -1542,7 +1505,7 @@ class ConvertTab(ctk.CTkFrame):
         awake.release("convert")
         self._peek_hide()
         self.jobs.clear()
-        self.start_btn.configure(state="normal", fg_color=T.BTN_GO, text_color="#FFFFFF")
+        self.start_btn.configure(state="normal", fg_color=T.ACCENT, text_color=T.BG)
         self.scan_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled", fg_color=T.BTN, text_color=T.DIM)
         self.pause_btn.configure(state="disabled", text=self.F("pause"),

@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .theme import T, font, px, unscaled, window_size
+from .theme import T, font, label_style, px, unscaled, window_size
 from .files import is_ignored_dir, open_in_explorer
 from .convert_engine import verify
 from . import uithread
@@ -234,8 +234,7 @@ class FoldersWindow(ctk.CTkToplevel):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
 
-        ctk.CTkLabel(self, text="LIBRARY ROOT", font=font(10, "bold"),
-                     text_color=T.FAINT, anchor="w"
+        ctk.CTkLabel(self, text="LIBRARY ROOT", **label_style(), anchor="w"
                      ).grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 4))
 
         rowf = ctk.CTkFrame(self, fg_color="transparent")
@@ -263,8 +262,7 @@ class FoldersWindow(ctk.CTkToplevel):
         head = ctk.CTkFrame(body, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew")
         head.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(head, text="CATEGORIES TO INDEX", font=font(10, "bold"),
-                     text_color=T.FAINT, anchor="w").grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(head, text="CATEGORIES TO INDEX", **label_style(), anchor="w").grid(row=0, column=0, sticky="w")
         ctk.CTkButton(head, text="All", width=44, height=22, corner_radius=6,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=lambda: self._set_all(True)

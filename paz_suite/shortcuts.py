@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-from .theme import T, font, px, window_size
+from .theme import T, font, label_style, px, window_size
 from .widgets import tip
 from . import icons
 
@@ -140,8 +140,7 @@ class ShortcutsWindow(ctk.CTkToplevel):
             child.destroy()
         row = 0
         for group, keys in SHORTCUTS[tab_name]:
-            ctk.CTkLabel(self.body, text=group.upper(), font=font(9, "bold"),
-                         text_color=T.FAINT, anchor="w"
+            ctk.CTkLabel(self.body, text=group.upper(), **label_style(), anchor="w"
                          ).grid(row=row, column=0, columnspan=2, sticky="w",
                                 padx=14, pady=(14 if row else 12, 4))
             row += 1

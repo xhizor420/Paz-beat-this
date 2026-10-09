@@ -30,7 +30,8 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, px, pt, unscaled, column_width, table_style, VAULT_LABELS
+from .theme import (T, button_style, font, label_style, px, pt, unscaled, column_width,
+                    table_style, VAULT_LABELS)
 from .format import fmt_clock, fmt_short, fmt_size
 from .config import THUMB_DIR
 from .media import fit_frame, round_corners, thumb_key
@@ -123,31 +124,8 @@ class VaultTab(ctk.CTkFrame):
         self._build_projects()
 
     def _build_topbar(self):
-        bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0, height=58)
-        bar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        bar.grid_propagate(False)
-        bar.grid_columnconfigure(1, weight=1)
-
-        left = ctk.CTkFrame(bar, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="w", padx=20, pady=10)
-        ctk.CTkLabel(left, text="PAZ", font=font(19, "bold", display=True),
-                     text_color=T.ACCENT3).pack(side="left")
-        ctk.CTkLabel(left, text="Vault", font=font(19, display=True), text_color=T.TEXT
-                     ).pack(side="left", padx=(5, 0))
-        ctk.CTkLabel(left, text=self.F("tagline"), font=font(10, mono=True),
-                     text_color=T.FAINT).pack(side="left", padx=(12, 0), pady=(6, 0))
-
-        right = ctk.CTkFrame(bar, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="e", padx=20)
-        ctk.CTkButton(right, text="Settings", width=80, height=30, corner_radius=7,
-                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                     text_color=T.DIM, command=self._open_settings
-                     ).pack(side="left", padx=(0, 8))
-        help_btn = ctk.CTkButton(right, text="", width=30, height=30, corner_radius=7,
-                                 fg_color=T.BTN, hover_color=T.BTN_HOV,
-                                 image=icons.icon("help", 16, T.DIM), command=self._open_help)
-        help_btn.pack(side="left")
-        tip(help_btn, "Help and keyboard shortcuts  ·  F1")
+        """Nothing of its own: name, Settings and help are in the app's
+        header."""
 
     def _build_lookup(self):
         panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
@@ -155,8 +133,7 @@ class VaultTab(ctk.CTkFrame):
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(3, weight=1)
 
-        ctk.CTkLabel(panel, text="PASTE POST IDS OR FILENAMES", font=font(9, "bold"),
-                     text_color=T.FAINT, anchor="w").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ctk.CTkLabel(panel, text="PASTE POST IDS OR FILENAMES", **label_style(), anchor="w").grid(row=0, column=0, sticky="w", pady=(0, 4))
 
         self.paste_box = ctk.CTkTextbox(
             panel, height=110, corner_radius=12, fg_color=T.SURFACE,
@@ -168,20 +145,16 @@ class VaultTab(ctk.CTkFrame):
         row.grid(row=2, column=0, sticky="ew", pady=(8, 10))
         tip(self.paste_box, "One per line, or separated by commas or spaces")
         lookup = ctk.CTkButton(row, text="Look up", width=100, height=32, corner_radius=7,
-                               font=font(11, "bold"), fg_color=T.ACCENT3_DEEP,
-                               hover_color=T.BTN_HOV, text_color=T.ACCENT3,
-                               command=self._run_lookup)
+                               command=self._run_lookup,
+                               **button_style("primary", T.ACCENT3))
         lookup.pack(side="left")
         tip(lookup, "Find the pasted clips in the library  ·  F5")
-        ctk.CTkButton(row, text="Clear", width=80, height=32, corner_radius=7,
-                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                      text_color=T.DIM, command=self._clear_lookup).pack(side="left", padx=(8, 0))
-        ctk.CTkButton(row, text="Select all", width=90, height=32, corner_radius=7,
-                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                      text_color=T.DIM, command=self._select_all).pack(side="left", padx=(8, 0))
-        ctk.CTkButton(row, text="Select none", width=100, height=32, corner_radius=7,
-                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                      text_color=T.DIM, command=self._select_none).pack(side="left", padx=(8, 0))
+        for text, command, width in (("Clear", self._clear_lookup, 64),
+                                     ("Select all", self._select_all, 84),
+                                     ("Select none", self._select_none, 96)):
+            ctk.CTkButton(row, text=text, width=width, height=32, corner_radius=7,
+                          command=command, **button_style("text")
+                          ).pack(side="left", padx=(8, 0))
 
         self.status_label = ctk.CTkLabel(panel, text="", font=font(10),
                                          text_color=T.DIM, anchor="w", justify="left",
@@ -225,8 +198,7 @@ class VaultTab(ctk.CTkFrame):
         self.project_box.pack(side="left")
         self.project_box.set("")
         ctk.CTkButton(mark_row, text="Mark selected as used", height=32, corner_radius=7,
-                      font=font(11, "bold"), fg_color=T.ACCENT3_DEEP, hover_color=T.BTN_HOV,
-                      text_color=T.ACCENT3, command=self._mark_selected
+                      command=self._mark_selected, **button_style("secondary")
                       ).pack(side="left", padx=(10, 0))
 
     def _build_style(self) -> None:
@@ -241,8 +213,7 @@ class VaultTab(ctk.CTkFrame):
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(5, weight=1)
 
-        projects_head = ctk.CTkLabel(panel, text="PROJECTS", font=font(9, "bold"),
-                                     text_color=T.FAINT, anchor="w")
+        projects_head = ctk.CTkLabel(panel, text="PROJECTS", **label_style(), anchor="w")
         projects_head.grid(row=0, column=0, sticky="w", pady=(0, 4))
         tip(projects_head, "Click a project to browse its clips  ·  right-click for more")
 
@@ -271,8 +242,8 @@ class VaultTab(ctk.CTkFrame):
         self.detail_header.grid(row=0, column=0, sticky="w")
         self.open_in_library_btn = ctk.CTkButton(
             head, text="Open in Library →", width=130, height=24, corner_radius=6,
-            font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.ACCENT2,
-            state="disabled", command=lambda: self._open_in_library(self._selected_project))
+            state="disabled", command=lambda: self._open_in_library(self._selected_project),
+            **button_style("text"))
         self.open_in_library_btn.grid(row=0, column=1, sticky="e")
 
         strip_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=12,

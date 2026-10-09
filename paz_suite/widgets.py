@@ -12,7 +12,7 @@ from datetime import datetime
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, mix, pt, px
+from .theme import T, font, label_style, mix, pt, px
 from .format import fmt_size
 
 
@@ -241,8 +241,7 @@ class Card(ctk.CTkFrame):
         self.body = self
         if title:
             self.grid_columnconfigure(0, weight=1)
-            head = ctk.CTkLabel(self, text=title.upper(), font=font(10, "bold"),
-                                 text_color=T.FAINT, anchor="w")
+            head = ctk.CTkLabel(self, text=title.upper(), **label_style(), anchor="w")
             head.grid(row=0, column=0, sticky="ew", padx=14, pady=(11, 0))
 
 
@@ -342,8 +341,7 @@ class StatTile(ctk.CTkFrame):
         self.value = ctk.CTkLabel(self, text="—", font=font(21, "bold", mono=True),
                                    text_color=color)
         self.value.pack(pady=(11, 0))
-        ctk.CTkLabel(self, text=label.upper(), font=font(9, "bold"),
-                     text_color=T.FAINT).pack(pady=(2, 11))
+        ctk.CTkLabel(self, text=label.upper(), **label_style()).pack(pady=(2, 11))
 
     def set(self, text: str) -> None:
         self.value.configure(text=text)
@@ -643,8 +641,7 @@ class LogView(ctk.CTkFrame):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=12, pady=(9, 4))
         head.grid_columnconfigure(0, weight=1)
-        self.header_label = ctk.CTkLabel(head, text="LOG", font=font(10, "bold"),
-                                          text_color=T.FAINT)
+        self.header_label = ctk.CTkLabel(head, text="LOG", **label_style())
         self.header_label.grid(row=0, column=0, sticky="w")
 
         self.filter_btn = ctk.CTkButton(

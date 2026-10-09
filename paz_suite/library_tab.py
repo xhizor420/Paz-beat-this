@@ -18,7 +18,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import ImageTk
 
-from .theme import (T, font, lens_photo, mix, pt, px, restyle, text_fits,
+from .theme import (T, button_style, font, label_style, lens_photo, mix, pt, px, restyle, text_fits,
                      text_width, unscaled, LIBRARY_LABELS)
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
@@ -522,8 +522,7 @@ class LibraryTab(ctk.CTkFrame):
             image=icons.icon("collapse", 14, T.DIM), command=self.toggle_sidebar)
         self.side_toggle.grid(row=0, column=0, sticky="w", padx=(2, 6))
         tip(self.side_toggle, "Show or hide tags  ·  Ctrl+L")
-        self.side_title = ctk.CTkLabel(head, text="TAGS IN RESULTS", font=font(10, "bold"),
-                                        text_color=T.FAINT, anchor="w")
+        self.side_title = ctk.CTkLabel(head, text="TAGS IN RESULTS", **label_style(), anchor="w")
         self.side_title.grid(row=0, column=1, sticky="w")
         tip(self.side_title, "Click a tag to add it to the search  ·  right-click for more")
 
@@ -1171,8 +1170,7 @@ class LibraryTab(ctk.CTkFrame):
         head_row = ctk.CTkFrame(panel, fg_color="transparent")
         head_row.grid(row=0, column=0, sticky="ew", padx=6, pady=(4, 4))
         head_row.grid_columnconfigure(0, weight=1)
-        self.detail_head = ctk.CTkLabel(head_row, text="SELECTED", font=font(10, "bold"),
-                                         text_color=T.FAINT, anchor="w")
+        self.detail_head = ctk.CTkLabel(head_row, text="SELECTED", **label_style(), anchor="w")
         self.detail_head.grid(row=0, column=0, sticky="w")
         self.theater_btn = ctk.CTkButton(
             head_row, text="⛶ Theater", width=90, height=24, corner_radius=6,
@@ -1213,30 +1211,35 @@ class LibraryTab(ctk.CTkFrame):
         # buttons under "Nothing selected" offered to act on nothing.
         self._detail_buttons = []
 
-        def dbtn(text, cmd, color=T.DIM, width=58):
+        # One primary - sending the clip to the edit is what this panel is
+        # for - and the rest neutral. They used to wear five colours.
+        def dbtn(text, cmd, width=58, kind="secondary", hint=""):
+            style = button_style(kind, T.ACCENT2)
+            style["font"] = font(11, "bold" if kind == "primary" else "normal")
             b = ctk.CTkButton(buttons, text=text, width=width, height=27,
-                              corner_radius=7, font=font(11), fg_color=T.BTN,
-                              hover_color=T.BTN_HOV, text_color=color, command=cmd,
-                              text_color_disabled=T.FAINT, state="disabled")
+                              corner_radius=7, command=cmd, state="disabled", **style)
             b.pack(side="left", padx=(0, 4))
+            if hint:
+                tip(b, hint)
             self._detail_buttons.append(b)
             return b
 
-        dbtn("Folder", self._reveal)
-        dbtn("→ Resolve", lambda: self.send_to_resolve(self.targets()),
-             T.ACCENT3, 76)
-        self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 46)
-        dbtn("Grid", self._grid, T.ACCENT, 46)
+        dbtn("→ Resolve", lambda: self.send_to_resolve(self.targets()), 80,
+             kind="primary", hint="Add to the Resolve media pool")
+        dbtn("Folder", self._reveal, hint="Show in Explorer")
+        self.e621_open_btn = dbtn("e621", self._open_post, 46, hint="Open the post")
+        dbtn("Grid", self._grid, 46, hint="Contact sheet  ·  G")
         # The search box cannot ask "more of this" - you would have to
         # know which of a clip's forty tags are the ones that matter.
-        dbtn("Like this", self.sort_by_similarity, T.ACCENT2, 68)
+        dbtn("Like this", self.sort_by_similarity, 68,
+             hint="Sort everything by how much it shares with this clip")
         dbtn("Copy name", lambda: self._copy(self.selected.name)
-             if self.selected else None, T.DIM, 76)
+             if self.selected else None, 76, hint="Ctrl+C")
 
         self._build_tag_grip(panel)
 
         self.detail_tags_head = ctk.CTkLabel(
-            panel, text="TAGS", font=font(10, "bold"), text_color=T.FAINT, anchor="w")
+            panel, text="TAGS", **label_style(), anchor="w")
         self.detail_tags_head.grid(row=3, column=0, sticky="ew", padx=6, pady=(4, 4))
         tip(self.detail_tags_head, "Click a tag to search for it  ·  right-click for more")
 

@@ -19,10 +19,11 @@ from tkinter import filedialog, ttk
 
 import customtkinter as ctk
 
-from .theme import T, font, pt, px, column_width, BEAT_LABELS, table_style, window_size
+from .theme import (T, button_style, font, label_style, pt, px, column_width, BEAT_LABELS,
+                    table_style, window_size)
 from .format import fmt_clock, fmt_len
 from . import beat_engine as be
-from . import icons, uithread
+from . import uithread
 from .widgets import Card, StatTile, JobPanel, LogView, draw_empty, tip
 from .media import probe
 
@@ -205,31 +206,8 @@ class BeatTab(ctk.CTkFrame):
         self._build_right()
 
     def _build_topbar(self) -> None:
-        bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0, height=58)
-        bar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        bar.grid_propagate(False)
-        bar.grid_columnconfigure(1, weight=1)
-
-        left = ctk.CTkFrame(bar, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="w", padx=20, pady=10)
-        ctk.CTkLabel(left, text="PAZ", font=font(19, "bold", display=True),
-                     text_color=T.ACCENT4).pack(side="left")
-        ctk.CTkLabel(left, text="Beat This", font=font(19, display=True), text_color=T.TEXT
-                     ).pack(side="left", padx=(5, 0))
-        ctk.CTkLabel(left, text=self.F("tagline"), font=font(10, mono=True),
-                     text_color=T.FAINT).pack(side="left", padx=(12, 0), pady=(6, 0))
-
-        right = ctk.CTkFrame(bar, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="e", padx=20)
-        ctk.CTkButton(right, text="Settings", width=80, height=30, corner_radius=7,
-                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                     text_color=T.DIM, command=self._open_settings
-                     ).pack(side="left", padx=(0, 8))
-        help_btn = ctk.CTkButton(right, text="", width=30, height=30, corner_radius=7,
-                                 fg_color=T.BTN, hover_color=T.BTN_HOV,
-                                 image=icons.icon("help", 16, T.DIM), command=self._open_help)
-        help_btn.pack(side="left")
-        tip(help_btn, "How Beat This works, and exporting to Resolve  ·  F1")
+        """Nothing of its own: name, Settings and help are in the app's
+        header."""
 
     # ── left: song + run controls ────────────────────────────────────────
 
@@ -272,8 +250,7 @@ class BeatTab(ctk.CTkFrame):
         run_row.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         self.analyze_btn = ctk.CTkButton(
             run_row, text="Analyze", width=120, height=34, corner_radius=7,
-            font=font(12, "bold"), fg_color=T.ACCENT4_DEEP, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT4, command=self._analyze)
+            command=self._analyze, **button_style("primary", T.ACCENT4))
         self.analyze_btn.pack(side="left")
         tip(self.analyze_btn, "Find the beats in the chosen song  ·  F5")
         self.status_label = ctk.CTkLabel(run_row, text="", font=font(10),
@@ -312,8 +289,7 @@ class BeatTab(ctk.CTkFrame):
         row.grid(row=2, column=0, sticky="ew", padx=14, pady=(8, 12))
         self.install_btn = ctk.CTkButton(
             row, text="Install dependencies", width=150, height=30, corner_radius=7,
-            font=font(11, "bold"), fg_color=T.ACCENT4_DEEP, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT4, command=self._install_deps)
+            command=self._install_deps, **button_style("secondary"))
         self.install_btn.pack(side="left")
         self.download_btn = ctk.CTkButton(
             row, text="Download model", width=130, height=30, corner_radius=7,
@@ -367,7 +343,8 @@ class BeatTab(ctk.CTkFrame):
                                    text_color=T.OK if (not missing and ffmpeg_ok) else T.WARN)
         self.install_btn.configure(
             state="disabled" if (self._busy or not missing) else "normal",
-            text="Install dependencies" if missing else "All installed")
+            text="Install dependencies" if missing else "All installed",
+            **button_style("primary" if missing else "secondary", T.ACCENT4))
         self.download_btn.configure(
             state="disabled" if (self._busy or missing or cached) else "normal",
             text="Downloaded" if cached else "Download model")
@@ -457,7 +434,7 @@ class BeatTab(ctk.CTkFrame):
         head = ctk.CTkFrame(panel, fg_color="transparent")
         head.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         head.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(head, text="BEATS", font=font(9, "bold"), text_color=T.FAINT,
+        ctk.CTkLabel(head, text="BEATS", **label_style(),
                      anchor="w").grid(row=0, column=0, sticky="w")
 
         ctk.CTkLabel(head, text="markers", font=font(10), text_color=T.FAINT,
@@ -583,8 +560,7 @@ class BeatTab(ctk.CTkFrame):
         self.save_tsv_btn.pack(side="left")
         self.save_edl_btn = ctk.CTkButton(
             btn_row, text="Save EDL for Resolve", width=160, height=32, corner_radius=7,
-            font=font(11, "bold"), fg_color=T.ACCENT4_DEEP, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT4, state="disabled", command=self._save_edl)
+            state="disabled", command=self._save_edl, **button_style("primary", T.ACCENT4))
         self.save_edl_btn.pack(side="left", padx=(8, 0))
         self.send_resolve_btn = ctk.CTkButton(
             btn_row, text="Send to Resolve now", width=160, height=32, corner_radius=7,
