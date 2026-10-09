@@ -76,7 +76,11 @@ class T:
     # ── text ─────────────────────────────────────────────────────────────
     TEXT  = "#F7EFFA"
     DIM   = "#C3B2DB"        # lifted from #AB9AC2 — panel copy reads better
-    FAINT = "#6E5C8C"
+    # Lifted from #6E5C8C, which was 3.0-3.5:1 against the grounds it sits
+    # on - below the 4.5:1 small text needs to be read rather than
+    # guessed at. 4.6-5.2:1 now, and still well short of DIM's ~10:1, so
+    # the three-step hierarchy holds.
+    FAINT = "#8A79AB"
 
     # ── controls ─────────────────────────────────────────────────────────
     BTN        = "#1C1230"
@@ -706,20 +710,25 @@ def _scrim(width: int, height: int) -> "Image.Image":
     return mask
 
 
-def _default_banner(width: int, height: int) -> "Image.Image":
-    """What the header looks like before anyone has set a picture: the four
-    tab identities swept across the width in order - pink Convert, violet
-    Library, mint Vault, amber Beat This - each pulled most of the way down
-    to the ground colour so it reads as a lit edge, not a rainbow.
+def _default_banner(width: int, height: int, accent: str | None = None) -> "Image.Image":
+    """What the header looks like when no picture is set.
 
-    Deliberately not a flat bar. The strip should look designed on first
-    launch rather than like an empty slot waiting to be filled, and using
-    the tab colours means the default says something instead of being
-    decoration.
+    Given the active tab's colour, a glow of that colour behind the PAZ
+    lockup, falling away to the ground across the strip: the header says
+    which room you are in, in the same colour as the tab you clicked. The
+    old default swept all four tab colours across the width at once, which
+    read as a rainbow competing with the one tab colour that mattered.
+
+    Without an accent it is still that four-colour sweep, for anything
+    that asks for the strip without a tab in mind.
     """
-    stops = [_rgb(mix(c, T.BG, 0.58))
-             for c in (T.ACCENT, T.ACCENT2, T.ACCENT3, T.ACCENT4)]
-    stops = [_rgb(T.BG)] + stops + [_rgb(T.BG)]
+    if accent:
+        stops = [_rgb(mix(accent, T.BG, 0.50)), _rgb(mix(accent, T.BG, 0.72)),
+                 _rgb(mix(accent, T.BG, 0.90)), _rgb(T.BG), _rgb(T.BG)]
+    else:
+        stops = [_rgb(mix(c, T.BG, 0.58))
+                 for c in (T.ACCENT, T.ACCENT2, T.ACCENT3, T.ACCENT4)]
+        stops = [_rgb(T.BG)] + stops + [_rgb(T.BG)]
     span = len(stops) - 1
     ramp = Image.new("RGB", (width, 1))
     pixels = ramp.load()
@@ -743,7 +752,8 @@ def _default_banner(width: int, height: int) -> "Image.Image":
 
 
 def banner_image(path: str, width: int, height: int = BANNER_H,
-                 zoom: float = 1.0, fx: float = 0.5, fy: float = 0.34) -> "Image.Image":
+                 zoom: float = 1.0, fx: float = 0.5, fy: float = 0.34,
+                 accent: str | None = None, accent_deep: str | None = None) -> "Image.Image":
     """Render the header strip: the user's own picture (or the default
     sweep) cropped to fill, scrimmed, and capped with an accent hairline.
 
@@ -762,7 +772,7 @@ def banner_image(path: str, width: int, height: int = BANNER_H,
             picture = None
 
     if picture is None:
-        base = _default_banner(width, height)
+        base = _default_banner(width, height, accent)
     else:
         # The crop is the slot's, not a fixed anchor a third of the way
         # down - see paz_suite/artwork.py. Recomputed at this width, so
@@ -781,7 +791,8 @@ def banner_image(path: str, width: int, height: int = BANNER_H,
     # lit-edge treatment the cards and the tab strip use.
     edge = ImageDraw.Draw(base)
     edge.line((0, height - 1, width, height - 1), fill=_rgb(T.LINE))
-    edge.line((0, height - 1, int(width * 0.34), height - 1), fill=_rgb(T.ACCENT_DEEP))
+    edge.line((0, height - 1, int(width * 0.34), height - 1),
+              fill=_rgb(accent_deep or T.ACCENT_DEEP))
     return base
 
 

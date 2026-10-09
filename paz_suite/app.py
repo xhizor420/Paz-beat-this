@@ -242,6 +242,7 @@ class PazApp:
         self._banner_job = None
         self._banner_width = 0
         self._banner_key = None
+        self._banner_cache: dict = {}
         self._header_icon = mark_photo(px(22), T.ACCENT)
         self._header_text = ""
         self._header_colour = T.OK
@@ -279,31 +280,55 @@ class PazApp:
         width = max(int(width), 320)
         self._banner_job = None
         self._banner_width = width
-        key = (artwork.slot_key(self.cfg, "banner"), width)
+        # The tab is part of the key: with no picture set, the strip glows
+        # in the colour of the tab that is open - see theme._default_banner.
+        key = (artwork.slot_key(self.cfg, "banner"), width, self._active_tab_name())
         if key != self._banner_key:
             self._banner_key = key
-            threading.Thread(target=self._build_banner, args=(key,),
-                             daemon=True).start()
+            cached = self._banner_cache.get(key)
+            if cached is not None:
+                # Made once per tab and width, so switching tabs swaps the
+                # glow at once rather than after a render.
+                self._banner_photo = cached
+            else:
+                threading.Thread(target=self._build_banner, args=(key,),
+                                 daemon=True).start()
         self._paint_header()
+
+    def _active_tab_name(self) -> str:
+        tabview = getattr(self, "tabview", None)
+        if tabview is not None:
+            try:
+                return tabview.get()
+            except Exception:
+                pass
+        return self.cfg.last_tab if self.cfg.last_tab in TAB_NAMES else TAB_NAMES[0]
 
     def _build_banner(self, key: tuple) -> None:
         """Decode, crop, scale and scrim the header picture. Worker."""
-        slot, width = key
+        slot, width, tab = key
+        deep, bright = self._TAB_ACCENTS.get(tab, (T.ACCENT_DEEP, T.ACCENT))
         try:
             picture = banner_image(slot[0], width, self._band(),
-                                   slot[2], slot[3], slot[4])
+                                   slot[2], slot[3], slot[4],
+                                   accent=bright, accent_deep=deep)
         except Exception:
             picture = None
         uithread.post(self._banner_ready, key, picture)
 
     def _banner_ready(self, key: tuple, picture) -> None:
-        if key != self._banner_key:
-            return                      # a wider window got there first
         try:
-            self._banner_photo = (ImageTk.PhotoImage(picture)
-                                  if picture is not None else None)
+            photo = ImageTk.PhotoImage(picture) if picture is not None else None
         except Exception:
             return
+        if photo is not None:
+            # A tab's strip at a width; a window resize starts a fresh set.
+            if len(self._banner_cache) > 8:
+                self._banner_cache.clear()
+            self._banner_cache[key] = photo
+        if key != self._banner_key:
+            return                      # another tab or width got there first
+        self._banner_photo = photo
         self._paint_header()
 
     def _paint_header(self) -> None:
@@ -693,6 +718,8 @@ class PazApp:
         self.cfg.last_tab = name
         self.cfg.save_soon()
         self._style_tabs()
+        # The header glows in the open tab's colour (when no picture is set).
+        self._draw_header(self._banner_width or self.root.winfo_width() or 1760)
         # Tabs get to do their first-look work when they are first looked
         # at, rather than all of it during startup.
         shown = getattr(self._tab_object(name), "on_shown", None)

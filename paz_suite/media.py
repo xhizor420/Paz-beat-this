@@ -72,7 +72,7 @@ class MediaInfo:
 
     @property
     def resolution(self) -> str:
-        return f"{self.width}x{self.height}" if self.width else "--"
+        return f"{self.width}x{self.height}" if self.width else "—"
 
     @property
     def vfr(self) -> bool:
@@ -80,7 +80,7 @@ class MediaInfo:
 
     @property
     def fps_text(self) -> str:
-        return f"{self.fps:.2f}".rstrip("0").rstrip(".") if self.fps else "--"
+        return f"{self.fps:.2f}".rstrip("0").rstrip(".") if self.fps else "—"
 
 
 _PROBE_CACHE_LIMIT = 60000    # a growing library shouldn't keep re-probing;

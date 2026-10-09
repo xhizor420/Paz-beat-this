@@ -182,7 +182,7 @@ class StatTile(ctk.CTkFrame):
     def __init__(self, parent, label: str, color: str = T.TEXT, **kw):
         super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
                           border_width=1, border_color=T.LINE, **kw)
-        self.value = ctk.CTkLabel(self, text="--", font=font(21, "bold", mono=True),
+        self.value = ctk.CTkLabel(self, text="—", font=font(21, "bold", mono=True),
                                    text_color=color)
         self.value.pack(pady=(11, 0))
         ctk.CTkLabel(self, text=label.upper(), font=font(9, "bold"),

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def fmt_time(sec: float) -> str:
     if sec is None or sec < 0:
-        return "--"
+        return "—"
     sec = int(sec)
     if sec < 60:
         return f"{sec}s"
@@ -43,7 +43,7 @@ def fmt_short(sec) -> str:
 def fmt_len(sec) -> str:
     """Durations the way a person says them: 30 sec, 1 min, 1 min 12 sec."""
     if sec is None or sec <= 0:
-        return "--"
+        return "—"
     sec = int(round(sec))
     if sec < 60:
         return f"{sec} sec"
@@ -56,7 +56,7 @@ def fmt_len(sec) -> str:
 
 def fmt_size(n) -> str:
     if not n:
-        return "--"
+        return "—"
     for unit, div in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
         if n >= div:
             return f"{n / div:.1f} {unit}"

@@ -484,7 +484,7 @@ class BeatTab(ctk.CTkFrame):
                 ("kind", "", 110, "w")):
             self.tree.column(key, width=column_width(title, width),
                              minwidth=px(40), anchor=anchor)
-            self.tree.heading(key, text=title)
+            self.tree.heading(key, text=title, anchor=anchor)
         self.tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         scroll = ctk.CTkScrollbar(tree_wrap, command=self.tree.yview, width=12,
                                   button_color=T.LINE, button_hover_color=T.FAINT)
@@ -762,15 +762,15 @@ class BeatTab(ctk.CTkFrame):
         self.beat_grid.clear()
         self.density_seg.set(be.DEFAULT_DENSITY)
         self.tree.delete(*self.tree.get_children())
-        self.tile_bpm.set("--")
-        self.tile_beats.set("--")
-        self.tile_downbeats.set("--")
-        self.tile_duration.set("--")
+        self.tile_bpm.set("—")
+        self.tile_beats.set("—")
+        self.tile_downbeats.set("—")
+        self.tile_duration.set("—")
         for btn in (self.save_tsv_btn, self.save_edl_btn, self.send_resolve_btn):
             btn.configure(state="disabled")
 
     def _fill_results(self, result) -> None:
-        self.tile_bpm.set(f"{result.bpm:.1f}" if result.bpm else "--")
+        self.tile_bpm.set(f"{result.bpm:.1f}" if result.bpm else "—")
         self.tile_beats.set(str(len(result.beats)))
         self.tile_downbeats.set(str(len(result.downbeats)))
         self.tile_duration.set(fmt_len(result.duration))

@@ -124,7 +124,10 @@ class QueueTable(ctk.CTkFrame):
             self.tree.column(key, width=column_width(title, width),
                               minwidth=px(48), anchor=anchor,
                               stretch=(key == "name"))
-            self.tree.heading(key, text=title, command=lambda k=key: self.sort_by(k))
+            # Aligned with the column under it - centred headings over
+            # left-aligned names read as two different tables.
+            self.tree.heading(key, text=title, anchor=anchor,
+                              command=lambda k=key: self.sort_by(k))
 
         scroll = ctk.CTkScrollbar(self, command=self.tree.yview, width=12,
                                    button_color=T.LINE, button_hover_color=T.FAINT)
@@ -223,13 +226,13 @@ class QueueTable(ctk.CTkFrame):
         return (
             name,
             STATE_LABELS.get(state, state),
-            cells.get("artist", "--"),
-            cells.get("rating", "--"),
-            cells.get("res", "--"),
-            cells.get("fps", "--"),
-            cells.get("dur", "--"),
-            cells.get("size", "--"),
-            cells.get("dest", "--"),
+            cells.get("artist", "—"),
+            cells.get("rating", "—"),
+            cells.get("res", "—"),
+            cells.get("fps", "—"),
+            cells.get("dur", "—"),
+            cells.get("size", "—"),
+            cells.get("dest", "—"),
         )
 
     def _tags(self, iid: str, state: str) -> tuple:

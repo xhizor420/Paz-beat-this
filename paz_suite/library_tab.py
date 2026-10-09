@@ -3744,7 +3744,7 @@ class LibraryTab(ctk.CTkFrame):
         # edit-pool quality, faint while it still needs an upscale - a
         # difference in weight rather than in hue. Sits below the top edge
         # so the selection tick owns that corner.
-        spec = f"{rec.height}p" if rec.height else "--"
+        spec = f"{rec.height}p" if rec.height else "—"
         if rec.fps:
             spec += f"·{rec.fps:.0f}"
         self._pill(tag, x + px(5), y + self.IMG_H - px(46), spec,
@@ -3763,7 +3763,7 @@ class LibraryTab(ctk.CTkFrame):
         # Bottom right: length, as a clock. "4 min 42 sec" was half the
         # card's width of badge on a thumbnail; "4:42" says the same in a
         # glance and leaves the room to the project name beside it.
-        length = fmt_short(rec.duration) if rec.duration else "--"
+        length = fmt_short(rec.duration) if rec.duration else "—"
         self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(23),
                    length, T.DIM, anchor="ne")
 
@@ -4315,7 +4315,7 @@ class LibraryTab(ctk.CTkFrame):
         stands. As one run it wrapped wherever the panel's edge fell -
         mid-fact, with a separator left hanging at the end of a line."""
         file_bits = [f"{rec.width}x{rec.height}", f"{rec.fps:.0f} fps",
-                     fmt_short(rec.duration) if rec.duration else "--",
+                     fmt_short(rec.duration) if rec.duration else "—",
                      fmt_size(rec.size)]
         if rec.score:
             file_bits.append(f"▲ {rec.score}")

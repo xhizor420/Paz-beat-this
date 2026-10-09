@@ -93,8 +93,8 @@ def scan_sources(folders: list, extensions: set, overwrite: bool,
             record = emeta.get(pid) if (emeta is not None and pid) else None
             if record and not record.get("missing"):
                 cells = {
-                    "artist": ", ".join(record.get("artist") or []) or "--",
-                    "rating": (record.get("rating") or "").upper() or "--",
+                    "artist": ", ".join(record.get("artist") or []) or "—",
+                    "rating": (record.get("rating") or "").upper() or "—",
                     "_tags": record.get("tags", ""),
                 }
             rows.append((folder, name, entry.path, target, cells))
@@ -710,12 +710,12 @@ class ConvertTab(ctk.CTkFrame):
         if not record:
             return
         if record.get("missing"):
-            self.table.set_row(task.iid, artist="?", rating="--")
+            self.table.set_row(task.iid, artist="?", rating="—")
             return
         self.table.set_row(
             task.iid,
-            artist=", ".join(record.get("artist") or []) or "--",
-            rating=(record.get("rating") or "").upper() or "--",
+            artist=", ".join(record.get("artist") or []) or "—",
+            rating=(record.get("rating") or "").upper() or "—",
             _tags=record.get("tags", ""))
 
     def _open_post(self, task: Task):
@@ -1184,8 +1184,8 @@ class ConvertTab(ctk.CTkFrame):
         self.tiles["done"].set("0")
         self.tiles["failed"].set("0")
         self.tiles["sorted"].set("0")
-        self.tiles["written"].set("--")
-        self.tiles["eta"].set("--")
+        self.tiles["written"].set("—")
+        self.tiles["eta"].set("—")
         self.readout.configure(text=f"{found_n} queued  ·  {skipped} already converted")
 
         self.refresh_census()
@@ -1416,7 +1416,7 @@ class ConvertTab(ctk.CTkFrame):
         else:
             task.state = "failed"
             task.error = error
-            self.ui(self.table.set_row, task.iid, state="failed", dest="--")
+            self.ui(self.table.set_row, task.iid, state="failed", dest="—")
             self.log(f"Failed  {task.name}", "fail")
             for line in (error or "").splitlines()[:4]:
                 self.log(f"        {line}", "fail")
@@ -1552,7 +1552,7 @@ class ConvertTab(ctk.CTkFrame):
         else:
             self._set_status(self.F("stopped") if stopped else self.F("finished"),
                              T.WARN if stopped else T.OK)
-        self.tiles["eta"].set("--")
+        self.tiles["eta"].set("—")
         self.overall.set(1.0 if not stopped else self.overall_fraction(),
                          T.OK if not stopped else T.WARN)
         summary = self.F("run_done", d=self.counts["done"], f=self.counts["failed"],
@@ -1571,7 +1571,7 @@ class ConvertTab(ctk.CTkFrame):
         self.tiles["done"].set(str(self.counts["done"]))
         self.tiles["failed"].set(str(self.counts["failed"]))
         self.tiles["sorted"].set(str(self.counts["sorted"]))
-        self.tiles["written"].set(fmt_size(self.bytes_done) if self.bytes_done else "--")
+        self.tiles["written"].set(fmt_size(self.bytes_done) if self.bytes_done else "—")
         self.overall.set(self.overall_fraction())
 
     def _tick(self):
@@ -1675,14 +1675,14 @@ class ConvertTab(ctk.CTkFrame):
             return
         _discard(task.target)
         task.state = "queued"
-        self.table.set_row(task.iid, state="queued", dest="--")
+        self.table.set_row(task.iid, state="queued", dest="—")
         self.logview.write(f"Deleted the converted copy of {task.name}", "warn")
 
     def _requeue(self, tasks: list):
         for task in tasks:
             task.state = "queued"
             task.error = None
-            self.table.set_row(task.iid, state="queued", dest="--")
+            self.table.set_row(task.iid, state="queued", dest="—")
         self._refresh_counts()
 
     def _more_menu(self) -> None:

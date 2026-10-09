@@ -198,7 +198,7 @@ class VaultTab(ctk.CTkFrame):
                 ("used", "Already used in", 190, "w")):
             self.tree.column(key, width=column_width(title, width),
                              minwidth=px(60), anchor=anchor)
-            self.tree.heading(key, text=title)
+            self.tree.heading(key, text=title, anchor=anchor)
         self.tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         scroll = ctk.CTkScrollbar(tree_wrap, command=self.tree.yview, width=12,
                                   button_color=T.LINE, button_hover_color=T.FAINT)
@@ -320,7 +320,7 @@ class VaultTab(ctk.CTkFrame):
             self.project_tree.column(key, width=column_width(title, width),
                                      minwidth=px(48), anchor=anchor,
                                      stretch=stretch)
-            self.project_tree.heading(key, text=title)
+            self.project_tree.heading(key, text=title, anchor=anchor)
         self.project_tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         list_scroll = ctk.CTkScrollbar(list_wrap, command=self.project_tree.yview, width=12,
                                        button_color=T.LINE, button_hover_color=T.FAINT)
@@ -531,10 +531,10 @@ class VaultTab(ctk.CTkFrame):
         for index, rec in enumerate(matched):
             iid = f"v{index}"
             self._results[iid] = rec
-            used = ", ".join(rec.used_projects) if rec.used_projects else "--"
+            used = ", ".join(rec.used_projects) if rec.used_projects else "—"
             self.tree.insert("", "end", iid=iid, values=(
-                rec.name, ", ".join(rec.artists[:2]) or "--",
-                f"{rec.width}x{rec.height}" if rec.width else "--",
+                rec.name, ", ".join(rec.artists[:2]) or "—",
+                f"{rec.width}x{rec.height}" if rec.width else "—",
                 fmt_short(rec.duration), used))
 
         bits = [f"{len(matched)} found"]
