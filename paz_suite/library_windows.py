@@ -138,11 +138,12 @@ class HelpWindow(ctk.CTkToplevel):
          "which fills the column. Theater mode (Ctrl+T) gives it "
          "about half the window and puts the tag list away. Playback uses "
          "the converted copy, which is far cheaper to decode; when a clip "
-         "also has a 4K/60+ copy in the edit pool, the 4K button next to "
-         "the loop button switches to it and remembers the choice."),
+         "also has a 4K/60+ copy in the edit pool, the settings icon at the "
+         "right of the player switches to it, reads 4K while it plays, and "
+         "remembers the choice."),
         ("Sound", "It uses the best player installed - VLC, then mpv, then "
-         "its own - and all three keep picture locked to sound. The sync "
-         "button says which one is running, and Copy playback report there "
+         "its own - and all three keep picture locked to sound. The player's "
+         "settings icon says which one is running, and Copy playback report there "
          "spells out what each would do if something looks wrong."),
         ("Copying", "Right-click any clip > Copy for name, path, post ID, "
          "e621 URL, artist or all tags. Ctrl+C copies the name, "

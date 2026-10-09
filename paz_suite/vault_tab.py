@@ -42,7 +42,7 @@ from .library_db import (
 )
 from .library_player import InlinePlayer
 from .library_windows import HelpWindow
-from .widgets import EMPTY_INK, popup_menu, menu_rule, tip
+from .widgets import EMPTY_INK, PrimaryButton, popup_menu, menu_rule, tip
 from . import artwork, icons, uithread
 
 _SPLIT_RE = re.compile(r"[,\n\r\t;]+|\s+")
@@ -144,9 +144,8 @@ class VaultTab(ctk.CTkFrame):
         row = ctk.CTkFrame(panel, fg_color="transparent")
         row.grid(row=2, column=0, sticky="ew", pady=(8, 10))
         tip(self.paste_box, "One per line, or separated by commas or spaces")
-        lookup = ctk.CTkButton(row, text="Look up", width=100, height=32, corner_radius=7,
-                               command=self._run_lookup,
-                               **button_style("primary", T.ACCENT3))
+        lookup = PrimaryButton(row, T.ACCENT3, text="Look up", width=100, height=32,
+                               corner_radius=7, command=self._run_lookup)
         lookup.pack(side="left")
         tip(lookup, "Find the pasted clips in the library  ·  F5")
         for text, command, width in (("Clear", self._clear_lookup, 64),
@@ -604,10 +603,11 @@ class VaultTab(ctk.CTkFrame):
         self._fit_projects_list(len(projects))
 
         if not projects:
-            ctk.CTkLabel(self.projects_list, text="No projects yet - mark some clips "
-                                                   "as used to start one.",
-                         font=font(11), text_color=T.FAINT, wraplength=260,
-                         justify="left").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            # One line: the box is sized to one project row, and a wrapped
+            # second line was cut through the middle.
+            ctk.CTkLabel(self.projects_list, text="No projects yet  ·  mark clips as used to start one",
+                         font=font(11), text_color=T.FAINT, anchor="w"
+                         ).grid(row=0, column=0, padx=10, pady=4, sticky="w")
             return
 
         for row, (name, color, count, _created) in enumerate(projects):

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pyflakes
+      - name: ffmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Lint
+        run: python -m pyflakes paz_suite tools
+      - name: Unit tests
+        run: python -m pytest tests -q
+
+  smoke:
+    # Starts the real app, visits every tab and screenshots it. Fails on
+    # any Tk callback error, a blank screen, or a hang - the class of bug
+    # that lint and unit tests both pass straight through.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install
+        run: python -m pip install -r requirements.txt
+      - name: ffmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Smoke run
+        run: python tools/smoke.py smoke-shots
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshots
+          path: smoke-shots/
+          if-no-files-found: warn

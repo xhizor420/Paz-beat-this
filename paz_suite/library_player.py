@@ -133,10 +133,11 @@ class InlinePlayer:
         tip(self.play_btn, "Play / pause  ·  Space")
         tip(self.back_btn, "Back 5 seconds  ·  ←")
         tip(self.fwd_btn, "Forward 5 seconds  ·  →")
+        # Three groups: transport, then how it plays (loop, speed), then
+        # sound on the right. The gap says where one group ends.
         self.loop_btn = cbtn("", self.toggle_loop, 34,
                               image=self._loop_icon(self.engine.loop))
-        self.quality_btn = cbtn("4K", self.toggle_quality, 38)
-        self.quality_btn.configure(state="disabled")
+        self.loop_btn.pack_configure(padx=(8, 4))
         self.speed_menu = ctk.CTkOptionMenu(
             controls, values=["0.5x", "1x", "1.5x", "2x"], width=58, height=26,
             font=font(10), corner_radius=6, fg_color=T.INPUT,
@@ -146,14 +147,17 @@ class InlinePlayer:
             command=lambda v: self._set_speed(float(v.rstrip("x"))))
         self.speed_menu.set("1x")
         self.speed_menu.pack(side="left", padx=(0, 4))
-        # Which player is running, and the menu behind it. This slot used
-        # to read "sync" and, on every healthy setup, open a menu saying
-        # there was nothing to set - a permanent control next to Play that
-        # did nothing. It says what is playing the clip instead, which is
-        # the thing you actually want to know when playback looks wrong,
-        # and the offset steps are still in there for the one arrangement
-        # that needs them.
-        self.sync_btn = cbtn("·", self._sync_menu, 42, T.FAINT)
+        # Things you set once rather than per clip - 4K copy or original,
+        # which player, the A/V offset, the playback report - behind one
+        # icon instead of two labelled buttons in the transport row. The
+        # icon turns amber when the player cannot hold sync on its own,
+        # and reads "4K" while the 4K copy is what is playing.
+        self.sync_btn = ctk.CTkButton(
+            controls, text="", width=28, height=26, corner_radius=6, font=font(10),
+            fg_color="transparent", hover_color=T.BTN_HOV, text_color=T.ACCENT,
+            image=icons.icon("settings", 14, T.FAINT), compound="left",
+            command=self._sync_menu)
+        self.sync_btn.pack(side="right", padx=(4, 0))
 
         self.volume_slider = ctk.CTkSlider(
             controls, from_=0, to=100, number_of_steps=100, width=44,
@@ -173,22 +177,17 @@ class InlinePlayer:
         tip(self.mute_btn, "Mute  ·  M")
         tip(self.loop_btn, lambda: "Looping  ·  click to stop" if self.engine.loop
             else "Loop the clip")
-        tip(self.quality_btn, "Play the 4K copy or the original")
-        tip(self.sync_btn, "The player in use  ·  A/V offset and playback report")
+        tip(self.sync_btn, lambda: f"Playback  ·  {self.BACKEND_NAMES[self.backend]}"
+            "\n4K copy or original, A/V offset, playback report")
         if not HAS_AUDIO:
             self.volume_slider.configure(state="disabled")
 
         # The row in the order it gives things up when the column is too
         # narrow for all of it: the volume slider first (the mute button
-        # stays, and the keyboard still works), then the speed menu, then
-        # the player-name button. Play and the seek buttons never go.
+        # stays, and the keyboard still works), then the speed menu. Play,
+        # the seek buttons and the settings icon never go.
         self._optional = [(self.volume_slider, {"side": "right", "padx": (2, 6)}),
                           (self.speed_menu, {"side": "left", "padx": (0, 4)})]
-        # When the row is tight the player-name button becomes a dot
-        # rather than disappearing: the menu behind it holds the A/V
-        # offset and the playback report, which are exactly what you go
-        # looking for when something is wrong.
-        self._tight = False
         self._controls = controls
         self._volume_job = None
         self._progress_job = None
@@ -313,30 +312,26 @@ class InlinePlayer:
 
     AV_STEPS = (-400, -300, -200, -150, -100, -50, 0, 50, 100, 150, 200, 300, 400)
 
-    SHORT_NAMES = {"libmpv": "mpv", "vlc": "VLC", "mpv": "mpv", "builtin": "built-in"}
-
     def _refresh_backend_btn(self) -> None:
-        """Name the live player, and say when it is the one that drifts.
-
-        An offset that has been dialled in still has to be visible, so it
-        wins the label when it is set - that is the one case where the
-        number matters more than the name."""
+        """Tint the settings icon amber when the live player is the one
+        that drifts, and label it with what is worth knowing at a glance:
+        an A/V offset that has been dialled in, or "4K" while the 4K copy
+        is the one playing."""
         offset = int(getattr(self.tab.cfg, "player_av_offset_ms", 0))
         drifts = not self.embedded and not getattr(self.engine, "synced", False)
+        rec = getattr(self, "rec", None)
         if offset and drifts:
             label, colour = f"{-offset:+d} ms", T.ACCENT2
+        elif rec is not None and rec.premium_path and self.tab.cfg.player_prefer_premium:
+            label, colour = "4K", T.ACCENT
         else:
-            label = self.SHORT_NAMES.get(self.backend, "player")
-            colour = T.WARN if drifts else T.FAINT
-        if getattr(self, "_tight", False) and not (offset and drifts):
-            label = "·"
-        # Sized to the label. Fixed-width, it was wide enough for "built-in"
-        # and so stole room from the clock in every other case.
+            label, colour = "", T.FAINT
         # unscaled(): measure() answers in real screen pixels and CTk
-        # scales a width it is given, so the button came out half as wide
-        # again as the text it was sized to.
-        self.sync_btn.configure(text=label, text_color=colour,
-                                width=unscaled(text_width(self._btn_font, label) + px(12)))
+        # scales a width it is given.
+        width = 28 + (unscaled(text_width(self._btn_font, label) + px(4)) if label else 0)
+        self.sync_btn.configure(
+            text=label, text_color=colour, width=width,
+            image=icons.icon("settings", 14, T.WARN if drifts else T.FAINT))
 
     def playback_report(self) -> str:
         """Which player is running and what the others would do. When
@@ -394,6 +389,13 @@ class InlinePlayer:
         from .widgets import popup_menu, menu_rule
         menu = popup_menu(self.tab.root, activebackground=T.ACCENT2_DEEP,
                           activeforeground=T.ACCENT2)
+        if self.rec is not None and self.rec.premium_path:
+            prefer = bool(self.tab.cfg.player_prefer_premium)
+            menu.add_command(label="Play the 4K copy" + (" ✓" if prefer else ""),
+                             command=lambda: prefer or self.toggle_quality())
+            menu.add_command(label="Play the original" + ("" if prefer else " ✓"),
+                             command=lambda: prefer and self.toggle_quality())
+            menu_rule(menu)
         menu.add_command(
             label=f"Playing through {self.BACKEND_NAMES[self.backend]}",
             state="disabled")
@@ -539,21 +541,10 @@ class InlinePlayer:
         # Everything that never gives way, plus the padding between.
         fixed = 0
         for child in self._controls.winfo_children():
-            if child is self.sync_btn or any(child is widget
-                                             for widget, _ in optional):
+            if any(child is widget for widget, _ in optional):
                 continue
             fixed += child.winfo_reqwidth() + 6
-        room = width - fixed
-        # The player-name button is the flexible one: full name if the row
-        # can take it, a dot if it cannot.
-        name_width = text_width(
-            self._btn_font,
-            self.SHORT_NAMES.get(self.backend, "player")) + px(12)
-        tight = room - sum(w.winfo_reqwidth() + 12 for w, _ in optional) < name_width
-        if tight != self._tight:
-            self._tight = tight
-            self._refresh_backend_btn()
-        room -= self.sync_btn.winfo_reqwidth() + 6
+        room = width - fixed - px(8)
         for widget, where in optional:
             need = widget.winfo_reqwidth() + 12
             if need <= room:
@@ -683,13 +674,7 @@ class InlinePlayer:
         self.tab.frames.prime_hover(path, duration)
 
     def _update_quality_btn(self) -> None:
-        if self.rec is None or not self.rec.premium_path:
-            self.quality_btn.configure(state="disabled", text="4K", text_color=T.DIM)
-            return
-        prefer = self.tab.cfg.player_prefer_premium
-        self.quality_btn.configure(
-            state="normal", text="4K" if prefer else "Original",
-            text_color=T.ACCENT if prefer else T.DIM)
+        self._refresh_backend_btn()
 
     IDLE_ICONS = {"Select a clip": "clip", "No thumbnail yet": "film"}
 

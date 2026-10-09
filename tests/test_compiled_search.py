@@ -122,7 +122,8 @@ def make_rec(rng, n):
 
 
 TERMS = ["wolf", "fox", "ol", "40000", "wolf_", "tag[1]", "why?", "a*b", "w*f",
-         "*fox*", "k?nket", "artist:kenket", "artist:k*", "artist:tag[1]",
+         "*fox*", "k?nket", "*", "wolf*", "*_*", "f?x*", "why?*", "wolf_o'*",
+         "male*", "tag[*", "a*b*", "artist:kenket", "artist:k*", "artist:tag[1]",
          "artist:why?", "character:*mccloud", "species:wolf", "series:star_fox",
          "copyright:poke*", "lore:male/male", "rating:e", "rating:explicit",
          "folder:wolves", "folder:pmv", "id:4000007", "used:any", "used:",

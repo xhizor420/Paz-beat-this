@@ -12,7 +12,7 @@ from datetime import datetime
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, label_style, mix, pt, px
+from .theme import T, button_style, font, label_style, mix, pt, px
 from .format import fmt_size
 
 
@@ -192,6 +192,34 @@ def tip(widget, text) -> None:
             widget.bind(sequence, handler, add="+")
         except (TypeError, ValueError, NotImplementedError):
             pass
+
+
+class PrimaryButton(ctk.CTkButton):
+    """A panel's one main action - see theme.button_style.
+
+    CTkButton has no disabled fill, so a disabled primary kept its bright
+    fill under faint text: the one button that looked most pressable was
+    the one that could not be pressed, and its label could not be read.
+    This drops to the neutral fill whenever it is disabled."""
+
+    def __init__(self, master, accent: str = "", **kwargs):
+        self._accent = accent or T.ACCENT
+        style = button_style("primary", self._accent)
+        style.update(kwargs)
+        super().__init__(master, **style)
+        self._paint_state()
+
+    def configure(self, require_redraw=False, **kwargs):
+        if "fg_color" in kwargs:
+            self._accent = kwargs.pop("fg_color")
+            kwargs["hover_color"] = mix(self._accent, "#FFFFFF", 0.22)
+        super().configure(require_redraw, **kwargs)
+        self._paint_state()
+
+    def _paint_state(self) -> None:
+        on = self.cget("state") != "disabled"
+        super().configure(fg_color=self._accent if on else T.BTN,
+                          text_color=T.BG, text_color_disabled=T.FAINT)
 
 
 # ── empty states ────────────────────────────────────────────────────────

@@ -303,6 +303,19 @@ def term_test(kind: str, value: str):
     # ID. Only * makes it a glob - a word with a ? or a bracket in it is
     # still looked for as written.
     if "*" in value:
+        if "[" not in value and "\n" not in value:
+            # One regex over tag_text, a tag per line, instead of a Python
+            # loop over forty tags - and only on clips that hold every
+            # literal piece of the pattern somewhere, which a plain `in`
+            # answers far faster than any regex.
+            body = "".join("[^\n]*" if ch == "*" else "[^\n]" if ch == "?"
+                           else re.escape(ch) for ch in value)
+            search = re.compile(f"^{body}$", re.M).search
+            pieces = [p for p in re.split(r"[*?]", value) if p]
+            # rec.tags first: an untagged clip's empty tag_text is still
+            # one empty line, and `*` would match it.
+            return lambda rec: (bool(rec.tags) and all(p in rec.tag_text for p in pieces)
+                                and search(rec.tag_text) is not None)
         match = re.compile(fnmatch.translate(value)).match
         return lambda rec: any(match(t) for t in rec.tags)
     if "\n" in value:

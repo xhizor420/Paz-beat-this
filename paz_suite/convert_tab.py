@@ -31,7 +31,7 @@ from .convert_widgets import (
     QueueTable, STATE_LABELS, ScrubPreview, ContactSheet, DuplicateWindow,
 )
 from .widgets import (Card, Bar, StatTile, JobPanel, LogView, LibraryBar,
-                      menu_rule, popup_menu, tip)
+                      PrimaryButton, menu_rule, popup_menu, tip)
 from .shortcuts import shortcuts_button
 from . import uithread
 from .winsys import awake
@@ -261,9 +261,9 @@ class ConvertTab(ctk.CTkFrame):
             text_color=T.DIM, state="disabled", command=self._stop)
         self.stop_btn.pack(side="left", padx=(0, 8))
 
-        self.start_btn = ctk.CTkButton(
-            buttons, text="Start", width=132, height=38, corner_radius=7,
-            command=self._start, **button_style("primary", T.ACCENT))
+        self.start_btn = PrimaryButton(
+            buttons, T.ACCENT, text="Start", width=132, height=38, corner_radius=7,
+            command=self._start)
         self.start_btn.pack(side="left")
 
         tiles = ctk.CTkFrame(panel, fg_color="transparent")
@@ -1247,7 +1247,7 @@ class ConvertTab(ctk.CTkFrame):
         self.bytes_done = 0
         self._peek_hide()
 
-        self.start_btn.configure(state="disabled", fg_color=T.BTN, text_color=T.FAINT)
+        self.start_btn.configure(state="disabled")
         self.scan_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal", fg_color=T.BTN_STOP,
                                 hover_color=T.BTN_STOP_H, text_color="#FFFFFF")
@@ -1505,7 +1505,7 @@ class ConvertTab(ctk.CTkFrame):
         awake.release("convert")
         self._peek_hide()
         self.jobs.clear()
-        self.start_btn.configure(state="normal", fg_color=T.ACCENT, text_color=T.BG)
+        self.start_btn.configure(state="normal")
         self.scan_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled", fg_color=T.BTN, text_color=T.DIM)
         self.pause_btn.configure(state="disabled", text=self.F("pause"),

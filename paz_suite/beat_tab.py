@@ -24,7 +24,7 @@ from .theme import (T, button_style, font, label_style, pt, px, column_width, BE
 from .format import fmt_clock, fmt_len
 from . import beat_engine as be
 from . import uithread
-from .widgets import Card, StatTile, JobPanel, LogView, draw_empty, tip
+from .widgets import Card, StatTile, JobPanel, LogView, PrimaryButton, draw_empty, tip
 from .media import probe
 
 
@@ -248,9 +248,9 @@ class BeatTab(ctk.CTkFrame):
 
         run_row = ctk.CTkFrame(panel, fg_color="transparent")
         run_row.grid(row=3, column=0, sticky="ew", pady=(0, 10))
-        self.analyze_btn = ctk.CTkButton(
-            run_row, text="Analyze", width=120, height=34, corner_radius=7,
-            command=self._analyze, **button_style("primary", T.ACCENT4))
+        self.analyze_btn = PrimaryButton(
+            run_row, T.ACCENT4, text="Analyze", width=120, height=34, corner_radius=7,
+            command=self._analyze)
         self.analyze_btn.pack(side="left")
         tip(self.analyze_btn, "Find the beats in the chosen song  ·  F5")
         self.status_label = ctk.CTkLabel(run_row, text="", font=font(10),
@@ -344,7 +344,8 @@ class BeatTab(ctk.CTkFrame):
         self.install_btn.configure(
             state="disabled" if (self._busy or not missing) else "normal",
             text="Install dependencies" if missing else "All installed",
-            **button_style("primary" if missing else "secondary", T.ACCENT4))
+            **button_style("primary" if missing and not self._busy else "secondary",
+                           T.ACCENT4))
         self.download_btn.configure(
             state="disabled" if (self._busy or missing or cached) else "normal",
             text="Downloaded" if cached else "Download model")
@@ -558,9 +559,9 @@ class BeatTab(ctk.CTkFrame):
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
             state="disabled", command=self._save_tsv)
         self.save_tsv_btn.pack(side="left")
-        self.save_edl_btn = ctk.CTkButton(
-            btn_row, text="Save EDL for Resolve", width=160, height=32, corner_radius=7,
-            state="disabled", command=self._save_edl, **button_style("primary", T.ACCENT4))
+        self.save_edl_btn = PrimaryButton(
+            btn_row, T.ACCENT4, text="Save EDL for Resolve", width=160, height=32,
+            corner_radius=7, state="disabled", command=self._save_edl)
         self.save_edl_btn.pack(side="left", padx=(8, 0))
         self.send_resolve_btn = ctk.CTkButton(
             btn_row, text="Send to Resolve now", width=160, height=32, corner_radius=7,

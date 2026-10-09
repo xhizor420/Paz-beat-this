@@ -40,7 +40,7 @@ from .winsys import awake
 from .speedcheck import SpeedCheck
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
-from .widgets import MiniProgress, popup_menu, menu_rule, tip
+from .widgets import MiniProgress, PrimaryButton, popup_menu, menu_rule, tip
 from .shortcuts import open_shortcuts
 
 
@@ -1214,10 +1214,13 @@ class LibraryTab(ctk.CTkFrame):
         # One primary - sending the clip to the edit is what this panel is
         # for - and the rest neutral. They used to wear five colours.
         def dbtn(text, cmd, width=58, kind="secondary", hint=""):
-            style = button_style(kind, T.ACCENT2)
-            style["font"] = font(11, "bold" if kind == "primary" else "normal")
-            b = ctk.CTkButton(buttons, text=text, width=width, height=27,
-                              corner_radius=7, command=cmd, state="disabled", **style)
+            options = dict(text=text, width=width, height=27, corner_radius=7,
+                           command=cmd, state="disabled", font=font(11, "bold"))
+            if kind == "primary":
+                b = PrimaryButton(buttons, T.ACCENT2, **options)
+            else:
+                options.update(button_style(kind), font=font(11))
+                b = ctk.CTkButton(buttons, **options)
             b.pack(side="left", padx=(0, 4))
             if hint:
                 tip(b, hint)
