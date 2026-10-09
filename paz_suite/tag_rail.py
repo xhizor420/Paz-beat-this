@@ -20,11 +20,18 @@ The inspector's tag list under the player had the same shape of problem
 - a CTkButton per tag, up to a hundred and sixty per group on a busy
 clip, placed a few at a time over several frames because placing them
 all at once froze the window - and gets the same answer: TagList, the
-same canvas with rows instead of wrapped chips.
+same canvas and the same wrapped chips. It used to give every tag a
+full-width row of its own; under a large player that showed a heading
+and one or two tags, where wrapped chips show a clip's whole tag set.
 
-The geometry is worked out by lay_out() and lay_out_list(), which need
-no window, so the wrap and the rows can be tested on their own - the
-wrap is the part that has gone wrong before (see tests/test_tag_rail.py).
+Both draw a chip the same way: a soft filled pill with no outline, the
+name in its e621 category colour and, on the rail, the count dimmed
+beside it - an outline round every chip and a count as loud as its name
+made a wall of tags read as noise.
+
+The geometry is worked out by lay_out(), which needs no window, so the
+wrap can be tested on its own - it is the part that has gone wrong
+before (see tests/test_tag_rail.py).
 """
 
 from __future__ import annotations
@@ -53,7 +60,7 @@ HEAD_R = 5
 HEAD_X = 6             # heading hover plate inset
 HEAD_TEXT_X = 6        # heading text inside its plate
 HEAD_ABOVE_FIRST = 4
-HEAD_ABOVE = 12
+HEAD_ABOVE = 9
 HEAD_BELOW = 3
 HIDDEN_H = 24
 HIDDEN_ABOVE = 10
@@ -87,7 +94,6 @@ class Section:
     open: bool
     chips: list = field(default_factory=list)
     count: int = 0
-    columns: int = 1        # the inspector lists a long general group two-up
 
     @property
     def heading(self) -> str:
@@ -97,7 +103,7 @@ class Section:
 @dataclass
 class Box:
     """One clickable thing on the rail, in canvas pixels."""
-    kind: str               # "chip", "row", "head" or "hidden"
+    kind: str               # "chip", "head" or "hidden"
     x0: int
     y0: int
     x1: int
@@ -171,60 +177,7 @@ def hit(boxes: list, x: float, y: float) -> int:
     return -1
 
 
-# The inspector's list, in design pixels, as the CTk version drew it.
-LIST_X = 6             # rows and headings sit this far in from each side
-LIST_HEAD_H = 29
-LIST_HEAD_R = 7
-LIST_HEAD_ABOVE_FIRST = 4
-LIST_HEAD_ABOVE = 8
-LIST_HEAD_BELOW = 2
-LIST_HEAD_TEXT_X = 8
-LIST_ROW_H = 28
-LIST_ROW_R = 6
-LIST_ROW_GAP = 4       # between rows, and between the two columns' rows
-LIST_ROW_TEXT_X = 7
-LIST_MAX = 160         # rows per group; past that it is not a list anyone reads
-LIST_HEAD_FONT = 11
-LIST_ROW_FONT = 13
-LIST_EMPTY_FONT = 11
-
-
-def lay_out_list(sections: list, canvas_width: int) -> tuple:
-    """The inspector's rows: (boxes, total height).
-
-    A heading per group and a full-width row per tag under it - or two
-    rows side by side, for a group that asks for two columns. Rows do
-    not depend on the text, so nothing here measures anything; a name
-    too long for its row is cut to fit when it is drawn.
-    """
-    width = max(int(canvas_width), px(120))
-    left, right = px(LIST_X), width - px(LIST_X)
-    boxes: list = []
-    y = 0
-    first = True
-    for section in sections:
-        y += px(LIST_HEAD_ABOVE_FIRST if first else LIST_HEAD_ABOVE)
-        first = False
-        boxes.append(Box("head", left, y, right, y + px(LIST_HEAD_H), section=section))
-        y += px(LIST_HEAD_H) + px(LIST_HEAD_BELOW)
-        if not section.open or not section.chips:
-            continue
-        shown = section.chips[:LIST_MAX]
-        columns = 2 if section.columns == 2 else 1
-        gap = px(LIST_ROW_GAP)
-        pitch = px(LIST_ROW_H) + gap
-        column_w = (right - left - gap * (columns - 1)) / columns
-        top = y + gap // 2
-        for index, chip in enumerate(shown):
-            line, column = divmod(index, columns)
-            x0 = int(round(left + column * (column_w + gap)))
-            x1 = int(round(left + column * (column_w + gap) + column_w))
-            y0 = top + line * pitch
-            boxes.append(Box("row", x0, y0, x1, y0 + px(LIST_ROW_H),
-                             chip=chip, section=section))
-        lines = -(-len(shown) // columns)
-        y = top + lines * pitch - gap // 2
-    return boxes, y + px(6)
+EMPTY_FONT = 11
 
 
 def fit_text(text: str, room: int, measure) -> str:
@@ -263,6 +216,7 @@ class TagCanvas(ctk.CTkFrame):
     """
 
     BORDER = T.ACCENT2_DEEP
+    INSET = 13
 
     def __init__(self, master, on_chip, on_menu, on_toggle, on_manage=None):
         super().__init__(master, fg_color=T.SURFACE, corner_radius=12,
@@ -271,9 +225,8 @@ class TagCanvas(ctk.CTkFrame):
         self.on_toggle, self.on_manage = on_toggle, on_manage
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
-        # As far in from the rounded border as CTkScrollableFrame put its
-        # contents, so everything sits exactly where it used to.
-        inset = px(12 + 1)
+        # In from the rounded border far enough to clear its corners.
+        inset = px(self.INSET)
         self.canvas = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0, bd=0,
                                 yscrollincrement=1, takefocus=0)
         self.canvas.grid(row=0, column=0, sticky="nsew", padx=(inset, 0), pady=inset)
@@ -414,7 +367,7 @@ class TagCanvas(ctk.CTkFrame):
         if pressed < 0 or index != pressed:
             return
         box = self.boxes[index]
-        if box.kind in ("chip", "row"):
+        if box.kind == "chip":
             self.on_chip(box.chip.token)
         elif box.kind == "head":
             self.on_toggle(box.section.key)
@@ -426,7 +379,7 @@ class TagCanvas(ctk.CTkFrame):
         if index < 0:
             return
         box = self.boxes[index]
-        if box.kind in ("chip", "row") and box.chip.menu:
+        if box.kind == "chip" and box.chip.menu:
             self.on_menu(event, box.chip.token, box.chip.name)
 
     WHEEL_STEP = CHIP_H + LINE_GAP
@@ -458,7 +411,7 @@ class TagCanvas(ctk.CTkFrame):
 class TagRail(TagCanvas):
     """The sidebar: every tag in the results, as wrapped chips."""
 
-    def __init__(self, master, on_chip, on_menu, on_toggle, on_manage):
+    def __init__(self, master, on_chip, on_menu, on_toggle, on_manage=None):
         super().__init__(master, on_chip, on_menu, on_toggle, on_manage)
         # Sized in pixels, like CTk's own fonts: -N is N pixels, where a
         # positive size would be points and come out a different size on
@@ -467,6 +420,7 @@ class TagRail(TagCanvas):
         self.chip_font = tkfont.Font(family=T.UI, size=-px(CHIP_FONT))
         self.head_font = tkfont.Font(family=T.UI, size=-px(HEAD_FONT), weight="bold")
         self.hidden_font = tkfont.Font(family=T.UI, size=-px(HIDDEN_FONT))
+        self._fitted: dict = {}
 
     def measure(self, text: str) -> int:
         return text_width(self.chip_font, text)
@@ -476,7 +430,7 @@ class TagRail(TagCanvas):
 
     def _plate_fill(self, box: Box, hovered: bool) -> str:
         if box.kind == "chip":
-            return T.BTN_HOV if hovered else T.SURFACE
+            return T.BTN_HOV if hovered else T.BTN
         return T.BTN_HOV if hovered else ""
 
     def _draw_box(self, box: Box) -> int:
@@ -486,21 +440,39 @@ class TagRail(TagCanvas):
             return self._draw_heading(box)
         return self._draw_hidden(box)
 
+    def _fit(self, text: str, room: int) -> str:
+        key = (text, room)
+        got = self._fitted.get(key)
+        if got is None:
+            got = fit_text(text, room, self.measure)
+            if len(self._fitted) > 4000:
+                self._fitted.clear()
+            self._fitted[key] = got
+        return got
+
     def _draw_chip(self, box: Box) -> int:
+        """A soft pill: no outline, the name in its category colour and
+        the count, if there is one, dimmed at the right-hand end."""
         c, chip = self.canvas, box.chip
         plate = c.create_polygon(
             rounded(box.x0, box.y0, box.x1, box.y1, px(CHIP_R)), smooth=True,
-            fill=T.SURFACE, outline=T.LINE, width=max(1, px(1)))
+            fill=self._plate_fill(box, False), outline="")
         mid = (box.y0 + box.y1) / 2
-        text_x = (box.x0 + box.x1) / 2
+        left = box.x0 + px(CHIP_PAD) / 2
+        right = box.x1 - px(CHIP_PAD) / 2
         if chip.swatch:
             dot = px(3)
-            cx = box.x0 + px(CHIP_PAD) / 2 + dot
-            c.create_oval(cx - dot, mid - dot, cx + dot, mid + dot,
+            c.create_oval(left, mid - dot, left + 2 * dot, mid + dot,
                           fill=chip.swatch, outline="")
-            text_x += px(SWATCH) / 2
-        c.create_text(text_x, mid, text=chip.label, fill=chip.colour,
-                      font=self.chip_font, anchor="center")
+            left += px(SWATCH)
+        if chip.count is not None:
+            count = str(chip.count)
+            c.create_text(right, mid, text=count, fill=T.FAINT,
+                          font=self.chip_font, anchor="e")
+            right -= self.measure(count) + self.measure("  ")
+        # Only a chip wider than the whole rail is ever cut.
+        c.create_text(left, mid, text=self._fit(chip.name, int(right - left)),
+                      fill=chip.colour, font=self.chip_font, anchor="w")
         return plate
 
     def _draw_heading(self, box: Box) -> int:
@@ -525,66 +497,27 @@ class TagRail(TagCanvas):
         return plate
 
 
-class TagList(TagCanvas):
-    """The inspector: one clip's tags, a row each, under group headings."""
+class TagList(TagRail):
+    """The inspector: one clip's tags, the same wrapped chips as the rail,
+    under the same slim group headings."""
 
     BORDER = T.LINE
-    WHEEL_STEP = LIST_ROW_H + LIST_ROW_GAP
+    # Tighter than the rail: this box shares the column with the player,
+    # and every pixel of padding is a line of tags it cannot show.
+    INSET = 8
     EMPTY = "No tags for this clip yet - press “Fix missing” up top."
 
     def __init__(self, master, on_chip, on_menu, on_toggle):
         super().__init__(master, on_chip, on_menu, on_toggle)
-        self.head_font = tkfont.Font(family=T.UI, size=-px(LIST_HEAD_FONT),
-                                     weight="bold")
-        self.row_font = tkfont.Font(family=T.UI, size=-px(LIST_ROW_FONT))
-        self.empty_font = tkfont.Font(family=T.UI, size=-px(LIST_EMPTY_FONT))
+        self.empty_font = tkfont.Font(family=T.UI, size=-px(EMPTY_FONT))
         # Whether to say there are no tags, as against showing nothing
         # because no clip is selected.
         self.empty = False
-        self._fitted: dict = {}
 
     def show(self, sections: list, hidden: int = 0, keep_scroll: bool = True,
              empty: bool = False) -> None:
         self.empty = empty and not sections
         super().show(sections, hidden, keep_scroll)
-
-    def _lay_out(self, width: int) -> tuple:
-        return lay_out_list(self.sections, width)
-
-    def _plate_fill(self, box: Box, hovered: bool) -> str:
-        if box.kind == "head":
-            return T.BTN_HOV if hovered else T.ELEVATED
-        return T.BTN_HOV if hovered else ""
-
-    def _fit(self, text: str, room: int) -> str:
-        key = (text, room)
-        got = self._fitted.get(key)
-        if got is None:
-            got = fit_text(text, room, lambda t: text_width(self.row_font, t))
-            if len(self._fitted) > 4000:
-                self._fitted.clear()
-            self._fitted[key] = got
-        return got
-
-    def _draw_box(self, box: Box) -> int:
-        c = self.canvas
-        mid = (box.y0 + box.y1) / 2
-        if box.kind == "head":
-            plate = c.create_polygon(
-                rounded(box.x0, box.y0, box.x1, box.y1, px(LIST_HEAD_R)),
-                smooth=True, fill=T.ELEVATED, outline="")
-            c.create_text(box.x0 + px(LIST_HEAD_TEXT_X), mid,
-                          text=box.section.heading,
-                          fill=T.FAINT, font=self.head_font, anchor="w")
-            return plate
-        plate = c.create_polygon(
-            rounded(box.x0, box.y0, box.x1, box.y1, px(LIST_ROW_R)),
-            smooth=True, fill="", outline="")
-        room = box.x1 - box.x0 - 2 * px(LIST_ROW_TEXT_X)
-        c.create_text(box.x0 + px(LIST_ROW_TEXT_X), mid,
-                      text=self._fit(box.chip.label, room), fill=box.chip.colour,
-                      font=self.row_font, anchor="w")
-        return plate
 
     def _draw_extra(self) -> None:
         if not self.empty:

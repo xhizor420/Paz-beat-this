@@ -343,57 +343,28 @@ def test_hovering_tracks_one_box_at_a_time():
 
 # ── the inspector's tag list ──────────────────────────────────────────
 
-from paz_suite.tag_rail import fit_text, lay_out_list    # noqa: E402
+from paz_suite.tag_rail import fit_text    # noqa: E402
 
 
-def rows(names, columns=1, open_=True, title="TAGS"):
+def group(names, open_=True, title="TAGS"):
     return Section(title, title.lower(), open_,
-                   [Chip(n, None, n, "#fff") for n in names], len(names),
-                   columns=columns)
+                   [Chip(n, None, n, "#fff") for n in names], len(names))
 
 
-def test_a_row_is_just_the_name():
+def test_a_clips_tag_is_just_the_name():
     assert Chip("wolf", None, "wolf", "#fff").label == "wolf"
     assert Chip("wolf", 3, "wolf", "#fff").label == "wolf  3"
 
 
-def test_rows_fill_the_width_one_to_a_line():
-    boxes, _ = lay_out_list([rows(["a", "b", "c"])], 400)
-    r = [b for b in boxes if b.kind == "row"]
-    assert len(r) == 3
-    assert len({(b.x0, b.x1) for b in r}) == 1, "rows of one column differ in width"
-    assert r[0].x0 == theme.px(6) and r[0].x1 == 400 - theme.px(6)
-    assert [b.y0 for b in r] == sorted({b.y0 for b in r})
-
-
-def test_two_columns_split_the_width_and_keep_order():
-    boxes, _ = lay_out_list([rows([f"t{i}" for i in range(9)], columns=2)], 400)
-    r = [b for b in boxes if b.kind == "row"]
-    assert [b.chip.name for b in r] == [f"t{i}" for i in range(9)]
-    left, right = r[0], r[1]
-    assert left.y0 == right.y0 and left.x1 < right.x0
-    assert abs((left.x1 - left.x0) - (right.x1 - right.x0)) <= 1
-    assert len({b.y0 for b in r}) == 5
-
-
-def test_rows_never_overlap_and_headings_come_first():
-    boxes, height = lay_out_list([rows(["kenket"], title="ARTISTS"),
-                                  rows([f"t{i}" for i in range(20)], columns=2)], 500)
-    for i, a in enumerate(boxes):
-        for b in boxes[i + 1:]:
-            assert a.x1 <= b.x0 or b.x1 <= a.x0 or a.y1 <= b.y0 or b.y1 <= a.y0
-    assert boxes[0].kind == "head" and boxes[2].kind == "head"
-    assert height >= max(b.y1 for b in boxes)
-
-
-def test_a_closed_group_is_its_heading_alone():
-    boxes, _ = lay_out_list([rows(["a", "b"], open_=False)], 400)
-    assert [b.kind for b in boxes] == ["head"]
-
-
-def test_a_huge_group_is_capped():
-    boxes, _ = lay_out_list([rows([f"t{i}" for i in range(500)], columns=2)], 400)
-    assert sum(1 for b in boxes if b.kind == "row") == 160
+def test_a_clips_tags_wrap_instead_of_a_row_each():
+    """A row per tag showed a heading and one or two tags under a large
+    player. Wrapped, forty short tags take a handful of lines."""
+    boxes, height = lay_out([group([f"t{i}" for i in range(40)])], 400, measure)
+    chips = [b for b in boxes if b.kind == "chip"]
+    assert len(chips) == 40
+    lines = len({b.y0 for b in chips})
+    assert lines < 10, f"{lines} lines for 40 short tags"
+    assert height < 40 * theme.px(24)
 
 
 def test_a_long_name_is_cut_to_fit_and_a_short_one_is_not():
@@ -403,12 +374,12 @@ def test_a_long_name_is_cut_to_fit_and_a_short_one_is_not():
     assert fit_text("anything", 0, measure) == ""
 
 
-def test_a_row_click_searches_and_its_right_click_offers_the_menu():
+def test_a_clips_tag_click_searches_and_its_right_click_offers_the_menu():
     rail, calls = paper_rail([])
-    rail.boxes, rail._height = lay_out_list([rows(["kenket"], title="ARTISTS")], 400)
+    rail.boxes, rail._height = lay_out([group(["kenket"], title="ARTISTS")], 400, measure)
     rail._plates = [0] * len(rail.boxes)
-    row = rail.boxes[1]
-    rail._on_press(centre(row))
-    rail._on_release(centre(row))
-    rail._on_right(centre(row))
+    chip = rail.boxes[1]
+    rail._on_press(centre(chip))
+    rail._on_release(centre(chip))
+    rail._on_right(centre(chip))
     assert calls == [("chip", "kenket"), ("menu", "kenket", "kenket")]

@@ -871,10 +871,14 @@ class LibraryTab(ctk.CTkFrame):
     # picture could not fill the column's width on a 16:9 clip, which is
     # the whole point of the column. The handle between them moves this
     # for anyone who would rather see tags than video.
-    TAGS_MIN_H = 108
+    #
+    # Raised once the list became wrapped chips rather than a row per tag:
+    # at 108/80 it showed a group heading and a line and a half of tags,
+    # and the extra ~50px costs the picture about 5% of its height.
+    TAGS_MIN_H = 150
     # What the tag list keeps when the width was dragged by hand - see
     # _picture_room. Less, because that drag said what it wanted.
-    TAGS_DRAGGED_H = 80
+    TAGS_DRAGGED_H = 130
     # Theater always widens the panel (and with it the player - see
     # _fit_panel) by at least this many pixels over whatever the normal
     # width computed to, so the toggle can never land on the same value
@@ -3946,7 +3950,8 @@ class LibraryTab(ctk.CTkFrame):
         waited_out = started is not None and time.monotonic() - started > self.WINDOW_SETTLE_S
         if want is None or waited_out or (abs(width - want[0]) <= 16 and abs(height - want[1]) <= 16):
             self._window_settled = True
-        return self._window_settled
+            return True
+        return False
 
     def _after_window_ready(self) -> None:
         """Come back for the first layout once the window is up."""
@@ -4285,10 +4290,7 @@ class LibraryTab(ctk.CTkFrame):
             sections.append(RailSection(
                 title.upper(), key, self.cfg.detail_open.get(key, True),
                 [RailChip(name, None, prefix + name, colour) for name in names],
-                len(names),
-                # A long list of plain tags goes two-up; names stay one to
-                # a row, because they are the ones worth reading in full.
-                columns=2 if (prefix == "" and len(names) > 6) else 1))
+                len(names)))
         same_clip = self._tags_for == rec.path
         self._tags_for = rec.path
         self.detail_tags.show(sections, keep_scroll=same_clip, empty=True)
