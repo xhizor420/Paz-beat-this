@@ -4309,18 +4309,27 @@ class LibraryTab(ctk.CTkFrame):
     def _render_meta_line(self, rec: Rec) -> None:
         """The one line under the file name. Its own method because a mark
         changes it and nothing else - rebuilding the tag list to add four
-        words to this line was most of what made marking slow."""
-        bits = [f"{rec.width}x{rec.height}", f"{rec.fps:.0f} fps",
-                fmt_len(rec.duration), fmt_size(rec.size), rec.folder]
+        words to this line was most of what made marking slow.
+
+        Two lines, split on purpose: what the file is, then where it
+        stands. As one run it wrapped wherever the panel's edge fell -
+        mid-fact, with a separator left hanging at the end of a line."""
+        file_bits = [f"{rec.width}x{rec.height}", f"{rec.fps:.0f} fps",
+                     fmt_short(rec.duration) if rec.duration else "--",
+                     fmt_size(rec.size)]
         if rec.score:
-            bits.insert(2, f"▲ {rec.score} score")
+            file_bits.append(f"▲ {rec.score}")
+        place_bits = [rec.folder] if rec.folder else []
         if rec.premium:
-            bits.append("4K available ✓")
+            place_bits.append("4K ✓")
         if rec.pid:
-            bits.append(f"#{rec.pid}")
+            place_bits.append(f"#{rec.pid}")
         if rec.used_projects:
-            bits.append("used: " + ", ".join(rec.used_projects))
-        self.detail_meta.configure(text="  ·  ".join(bits))
+            place_bits.append("used in " + ", ".join(rec.used_projects))
+        lines = ["  ·  ".join(file_bits)]
+        if place_bits:
+            lines.append("  ·  ".join(place_bits))
+        self.detail_meta.configure(text="\n".join(lines))
 
     def _toggle_group(self, key: str):
         self.cfg.detail_open[key] = not self.cfg.detail_open.get(key, True)
