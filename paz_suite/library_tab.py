@@ -40,7 +40,7 @@ from .winsys import awake
 from .speedcheck import SpeedCheck
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
-from .widgets import popup_menu, menu_rule
+from .widgets import MiniProgress, popup_menu, menu_rule
 
 
 
@@ -705,14 +705,15 @@ class LibraryTab(ctk.CTkFrame):
 
         prog = ctk.CTkFrame(center, fg_color="transparent")
         prog.grid(row=3, column=0, sticky="ew", pady=(6, 0))
-        prog.grid_columnconfigure(1, weight=1)
+        prog.grid_columnconfigure(2, weight=1)
         self.status_label = ctk.CTkLabel(prog, text="", font=font(10),
-                                          text_color=T.DIM, anchor="w")
+                                          text_color=T.FAINT, anchor="w")
         self.status_label.grid(row=0, column=0, sticky="w", padx=2)
-        self.progress = ctk.CTkProgressBar(prog, height=5, corner_radius=3,
-                                            fg_color=T.LINE_SOFT, progress_color=T.ACCENT2)
-        self.progress.grid(row=0, column=1, sticky="ew", padx=(10, 2))
-        self.progress.set(0)
+        # A small bar beside the status line, there only while something
+        # runs. It was a band across the whole gallery - for a background
+        # tag fetch - and it stayed full after the job had finished.
+        self.progress = MiniProgress(prog)
+        self.progress.place_in(row=0, column=1, sticky="w", padx=(10, 2))
 
     def _pointer_in_gallery(self) -> bool:
         try:
@@ -3759,18 +3760,28 @@ class LibraryTab(ctk.CTkFrame):
             canvas.create_text(cx, cy, text=rec.rating.upper(), fill=colour,
                                font=(T.MONO, pt(8), "bold"), tags=(tag,))
 
-        # Bottom right: length.
+        # Bottom right: length, as a clock. "4 min 42 sec" was half the
+        # card's width of badge on a thumbnail; "4:42" says the same in a
+        # glance and leaves the room to the project name beside it.
+        length = fmt_short(rec.duration) if rec.duration else "--"
         self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(23),
-                   fmt_len(rec.duration), T.DIM, anchor="ne")
+                   length, T.DIM, anchor="ne")
 
         # Bottom left: which project already spent this clip. The coloured
         # border says "used"; this says used *where*, which is the part you
         # actually need when deciding whether to reuse it.
         if rec.used_projects:
             label = rec.used_projects[0]
-            room = self.CARD_W - 62
-            while label and self._text_w("badge", label) > room:
-                label = label[:-1]
+            # Whatever the length badge leaves, measured: a fixed allowance
+            # let "ENEMY AND REVENGE 2" run under "2 min 42 sec" on a
+            # narrow card and read as one string.
+            pad = px(5)
+            length_w = self._text_w("badge", length) + 2 * pad
+            room = self.CARD_W - 2 * px(5) - length_w - px(6) - 2 * pad
+            if self._text_w("badge", label) > room:
+                while label and self._text_w("badge", label + "…") > room:
+                    label = label[:-1]
+                label = (label.rstrip() + "…") if label else ""
             # Named, not coloured. Four badges a card, each in its own
             # colour, was four things shouting over the frame they are
             # meant to be annotating - so they all speak in the same

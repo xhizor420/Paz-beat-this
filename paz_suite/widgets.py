@@ -120,6 +120,62 @@ class Bar(ctk.CTkFrame):
         self.set(0)
 
 
+class MiniProgress(Bar):
+    """A small progress bar that is only there while something runs.
+
+    For background work - tag fetches, syncs, scans - that deserves a
+    glance, not a band across the window. Hidden at 0, shown in between,
+    and gone a moment after it reaches the end, so a finished job does not
+    leave a full bar behind for the rest of the session.
+    """
+
+    LINGER_MS = 1500
+
+    def __init__(self, parent, width: int = 120, height: int = 3,
+                 color: str = T.ACCENT2, **kw):
+        super().__init__(parent, height=height, color=color, width=width, **kw)
+        # The frame's own height too, not just the track's: a CTkFrame left
+        # to its default is 200px tall, and with propagation off this one
+        # stretched the status row under the gallery to match.
+        self.configure(height=height)
+        self.grid_propagate(False)
+        self._track.configure(width=width)
+        self._shown = None
+        self._hide_job = None
+        self._geometry = None
+
+    def place_in(self, **grid_kw) -> None:
+        """Grid it, remembering where, and start hidden."""
+        self._geometry = grid_kw
+        self.grid(**grid_kw)
+        self.grid_remove()
+        self._shown = False
+
+    def _show(self, on: bool) -> None:
+        if on == self._shown:
+            return
+        self._shown = on
+        if on:
+            self.grid()
+        else:
+            self.grid_remove()
+
+    def set(self, fraction: float, color: str | None = None) -> None:
+        super().set(fraction, color)
+        if self._hide_job is not None:
+            try:
+                self.after_cancel(self._hide_job)
+            except ValueError:
+                pass
+            self._hide_job = None
+        if fraction <= 0:
+            self._show(False)
+            return
+        self._show(True)
+        if fraction >= 1:
+            self._hide_job = self.after(self.LINGER_MS, lambda: self._show(False))
+
+
 class StatTile(ctk.CTkFrame):
     """One number, one label. The number is mono so tiles stay aligned."""
 
