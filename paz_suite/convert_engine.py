@@ -103,10 +103,19 @@ def video_args(cfg: AppConfig, gpu: bool) -> list | None:
         name = GPU_ENCODERS.get(cfg.codec)
         if not name or (have and name not in have):
             return None
+        # -b:v 0 alone is not "no limit": NVENC then applies a ceiling of
+        # its own, and on a busy clip CQ 14 and CQ 18 came out the same
+        # size and the same VMAF. A maxrate well above any CQ 18 need
+        # lets the quality setting actually decide.
         args = ["-c:v", name, "-preset", "p7", "-rc", "vbr",
-                "-cq", str(cfg.gpu_quality), "-b:v", "0"]
+                "-cq", str(cfg.gpu_quality), "-b:v", "0",
+                "-maxrate", "200M", "-bufsize", "400M"]
         if cfg.codec in ("h264", "hevc"):
             args += ["-tune", "hq"]
+        if cfg.codec == "h264":
+            # NVENC picks Main on its own; High's 8x8 transform is the
+            # same picture in about 5% less space, and every editor reads it.
+            args += ["-profile:v", "high"]
         if cfg.codec == "hevc":
             args += ["-tag:v", "hvc1"]
         return args
@@ -190,13 +199,15 @@ def build_command(source: str, target: str, cfg: AppConfig,
     if recipe.gop:
         cmd += ["-g", str(recipe.gop)]
     if recipe.cfr:
-        cmd += ["-vsync", "cfr"]
+        cmd += ["-fps_mode", "cfr"]
     cmd += ["-pix_fmt", "yuv420p"]
 
     if mode == "none":
         cmd += ["-an"]
     else:
-        cmd += ["-c:a", "aac", "-b:a", cfg.audio_bitrate]
+        # 48 kHz is what a Resolve timeline runs at; a 44.1 kHz track is
+        # resampled on every playback otherwise.
+        cmd += ["-c:a", "aac", "-b:a", cfg.audio_bitrate, "-ar", "48000"]
         if silent:
             cmd += ["-shortest"]
 
