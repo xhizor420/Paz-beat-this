@@ -440,8 +440,11 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self._section(tab, "Playback", 25)
         self._choice(tab, 26, "player_backend", "Player",
-                     ["auto", "vlc", "mpv", "builtin"])
-        self._hint(tab, 27, "auto takes the best one installed: VLC first, then "
+                     ["auto", "libmpv", "vlc", "mpv", "builtin"])
+        self._hint(tab, 27, "auto takes the best one installed: libmpv first "
+                            "(mpv's own engine loaded into this program - a new "
+                            "clip on screen in about a tenth of a second, GPU "
+                            "decoding, no dropped frames at 4K60), then VLC, then "
                             "mpv, then the built-in player. VLC and mpv both "
                             "decode on the GPU and lock picture to sound. VLC "
                             "is loaded into this program rather than run beside "

@@ -14,13 +14,14 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, px, pt, column_width, window_size
+from .theme import T, font, px, pt, column_width, table_style, window_size
 from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
 from .widgets import PeekWindow, popup_menu
-from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback
-from . import uithread
+from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback, joins_playback
+from .libmpv_player import LibMpvPlayer
+from . import libmpv_player, uithread
 
 STATE_COLOURS = {
     "queued":    T.FAINT,
@@ -145,25 +146,7 @@ class QueueTable(ctk.CTkFrame):
         self.tree.bind("<Button-3>", self._on_right_click)
 
     def _build_style(self) -> None:
-        style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        # ttk is raw Tk: nothing here is scaled for us, so every one of
-        # these was the literal number on screen whatever the display
-        # scaling was - a 28px row of 10pt text in a window where the
-        # buttons beside it had grown by half.
-        style.configure("Q.Treeview", background=T.ROW, fieldbackground=T.ROW,
-                         foreground=T.TEXT, rowheight=px(28), borderwidth=0,
-                         font=(T.UI, pt(10)))
-        style.configure("Q.Treeview.Heading", background=T.ELEVATED,
-                         foreground=T.FAINT, relief="flat", borderwidth=0,
-                         font=(T.UI, pt(9), "bold"), padding=(px(8), px(7)))
-        style.map("Q.Treeview.Heading", background=[("active", T.BTN_HOV)])
-        style.map("Q.Treeview",
-                  background=[("selected", T.ROW_SEL)],
-                  foreground=[("selected", T.TEXT)])
+        table_style(self, "Q.Treeview", 28)
         self._tag_spec = {
             "queued": T.DIM, "probing": T.DIM, "running": T.TEXT,
             "done": T.TEXT, "failed": T.FAIL, "skipped": T.FAINT,
@@ -467,12 +450,36 @@ class ScrubPreview(ctk.CTkFrame):
         self.view.bind("<Configure>", self._on_view_resize)
         self.view.bind("<Button-1>", lambda e: self.toggle_play())
 
-        # Real playback (with audio) shares the same view canvas as the
-        # static scrub frames - only one is ever active at a time.
-        self.player_engine = ClipPlayer(
-            self.view, 480, 270,
-            on_tick=self._on_play_tick, on_state=self._on_play_state,
-            on_fail=self._on_play_fail)
+        # With libmpv, one engine does both jobs in the view: playing, and
+        # showing the exact frame a scrub, a step or a seek lands on - a
+        # seek in a file mpv already has open, tens of milliseconds, where
+        # the stills below are an ffmpeg launched per frame. Its surface
+        # sits in the same cell as the canvas; the canvas comes up over it
+        # for messages ("Reading file") and goes back under for pictures.
+        # Without libmpv it is never raised and nothing below changes.
+        self.stage = tk.Frame(self, bg=T.INPUT, bd=0, highlightthickness=0)
+        self.stage.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 6))
+        self.stage.bind("<Button-1>", lambda e: self.toggle_play())
+        tk.Misc.lower(self.stage, self.view)
+        self._stage_up = False
+        self.update_idletasks()
+        if libmpv_player.available():
+            self.player_engine = LibMpvPlayer(
+                self.stage, 480, 270,
+                on_tick=self._on_play_tick, on_state=self._on_play_state,
+                on_fail=self._on_play_fail,
+                post=lambda fn, *a: uithread.post(fn, *a), background=T.INPUT)
+            # One clip at a time, app-wide - see player_engine.claim_playback.
+            joins_playback(self.player_engine)
+            self._mpv = True
+        else:
+            # Real playback (with audio) shares the same view canvas as the
+            # static scrub frames - only one is ever active at a time.
+            self.player_engine = ClipPlayer(
+                self.view, 480, 270,
+                on_tick=self._on_play_tick, on_state=self._on_play_state,
+                on_fail=self._on_play_fail)
+            self._mpv = False
         self.player_engine.volume = max(0, min(int(cfg.player_volume), 100))
         self.player_engine.muted = bool(cfg.player_muted) or not HAS_AUDIO
         self._volume_job = None
@@ -557,8 +564,20 @@ class ScrubPreview(ctk.CTkFrame):
 
         self.clear("Select a file to inspect it")
 
+    def _show_stage(self, up: bool) -> None:
+        """mpv's picture over the canvas, or the canvas over it. Only when
+        it changes: restacking touches mpv's window."""
+        if not self._mpv or up == self._stage_up:
+            return
+        self._stage_up = up
+        if up:
+            tk.Misc.lift(self.stage, self.view)
+        else:
+            tk.Misc.lift(self.view, self.stage)
+
     def clear(self, message: str = "Nothing loaded") -> None:
         self.player_engine.clear()
+        self._show_stage(False)
         self._ghost_hide()
         self._token += 1
         self._strip_token += 1
@@ -604,6 +623,7 @@ class ScrubPreview(ctk.CTkFrame):
         self.strip.delete("all")
         self.meta.configure(text="")
         self.note.configure(text="")
+        self._show_stage(False)
         self._show_message("Reading file")
         self._draw_timeline()
         self._probe_async(position)
@@ -636,7 +656,12 @@ class ScrubPreview(ctk.CTkFrame):
         path = self._current_path()
         if path:
             self.player_engine.load(path, duration, info.fps if info else 30.0)
-            self.player_engine.position = self._pos
+            if self._mpv:
+                # Opened paused; the frame for _pos is a seek away - see
+                # _request_frame - and mpv's picture replaces the canvas.
+                self._show_stage(True)
+            else:
+                self.player_engine.position = self._pos
             # Warm the hover-scrub sheet now rather than on first hover -
             # by the time anyone drags the timeline it's usually ready.
             self.cache.prime_hover(path, duration)
@@ -698,7 +723,13 @@ class ScrubPreview(ctk.CTkFrame):
         self._ghost_hide()
         self._sync_player_size(self.view.winfo_width(), self.view.winfo_height())
         if not self.player_engine.playing:
-            self.player_engine.position = self._pos
+            if self._mpv:
+                # Play from the scrubbed-to frame. Usually mpv is already
+                # there; the seek is queued ahead of the play if not.
+                if abs(self.player_engine.position - self._pos) > 0.04:
+                    self.player_engine.seek(self._pos)
+            else:
+                self.player_engine.position = self._pos
             # One clip at a time across the whole app - the Library and
             # Vault players stand down rather than play over this one.
             claim_playback(self.player_engine)
@@ -737,6 +768,10 @@ class ScrubPreview(ctk.CTkFrame):
             text_color=T.ACCENT)
 
     def _on_play_tick(self, position: float) -> None:
+        # mpv reports position when paused too (each seek lands). During
+        # a drag the pointer owns the playhead, not the last landing.
+        if self._dragging:
+            return
         self._pos = position
         self._draw_timeline()
 
@@ -755,7 +790,7 @@ class ScrubPreview(ctk.CTkFrame):
 
     def _on_view_resize(self, event) -> None:
         self._sync_player_size(event.width, event.height)
-        if self.player_engine.playing:
+        if self.player_engine.playing or self._stage_up:
             return
         if self._image_ref is not None:
             self.view.delete("all")
@@ -769,8 +804,8 @@ class ScrubPreview(ctk.CTkFrame):
         canvas. Skipped while actively playing to avoid restarting the
         decoder on every pixel of a window drag; takes effect on the next
         Play press instead."""
-        if self.player_engine.playing:
-            return
+        if self._mpv or self.player_engine.playing:
+            return      # mpv scales to its own window
         width = max(int(width) - 4, 100) // 2 * 2
         height = max(int(height) - 4, 100)
         self.player_engine.view_w = width
@@ -792,6 +827,14 @@ class ScrubPreview(ctk.CTkFrame):
         self._redraw_placeholder()
 
     def _request_frame(self, immediate: bool = False) -> None:
+        if self._mpv:
+            # The frame at _pos is a seek in the file mpv has open: every
+            # scrub, step, seek and landing comes through here. A run of
+            # them (a drag) collapses to the newest inside the engine.
+            if not self.player_engine.playing and self._current_path():
+                self._show_stage(True)
+                self.player_engine.seek(self._pos)
+            return
         if self._pending is not None:
             try:
                 self.after_cancel(self._pending)
@@ -954,6 +997,10 @@ class ScrubPreview(ctk.CTkFrame):
             # seek() resumes from there by itself, and draws the landing
             # frame if it turns out nothing was playing after all.
             self.player_engine.seek(self._pos)
+            if self._mpv:
+                # mpv's seek keeps whatever pause state it had - the drag
+                # paused it - so playing again is asked for explicitly.
+                self.player_engine.play()
             return
         self._request_frame(immediate=True)
 

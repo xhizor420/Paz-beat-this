@@ -56,10 +56,8 @@ def root():
     call. That is a Tkinter/PIL limitation, not something under test here,
     so the root is made once and reused.
     """
-    try:
-        window = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display")
+    from conftest import make_root
+    window = make_root(tk.Tk)
     window.geometry("640x400")
     _ROOTS.append(window)
     yield window

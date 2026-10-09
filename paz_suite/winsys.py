@@ -40,6 +40,7 @@ ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
 # SetThreadPriority
 THREAD_PRIORITY_ABOVE_NORMAL = 1
+THREAD_MODE_BACKGROUND_BEGIN = 0x00010000
 
 
 def _windll():
@@ -92,9 +93,32 @@ def restore_timers() -> None:
     _timer["on"] = False
 
 
-def raise_ui_thread() -> bool:
-    """A notch above normal for the calling thread. Call it from the UI
-    thread, once."""
+FR_PRIVATE = 0x10
+
+
+def load_private_fonts(folder: str) -> int:
+    """Make every .ttf in `folder` usable by this process, and only this
+    process - nothing is installed, nothing outlives the app. Must run
+    before Tk asks what fonts exist. Returns how many loaded."""
+    windll = _windll()
+    if windll is None or not os.path.isdir(folder):
+        return 0
+    loaded = 0
+    try:
+        add = windll.gdi32.AddFontResourceExW
+    except Exception:
+        return 0
+    for name in sorted(os.listdir(folder)):
+        if name.lower().endswith((".ttf", ".otf")):
+            try:
+                if add(os.path.join(folder, name), FR_PRIVATE, 0):
+                    loaded += 1
+            except Exception:
+                continue
+    return loaded
+
+
+def _set_thread_priority(value: int) -> bool:
     windll = _windll()
     if windll is None:
         return False
@@ -107,10 +131,23 @@ def raise_ui_thread() -> bool:
         kernel32.GetCurrentThread.restype = ctypes.c_void_p
         kernel32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
         kernel32.SetThreadPriority.restype = ctypes.c_int
-        return bool(kernel32.SetThreadPriority(kernel32.GetCurrentThread(),
-                                               THREAD_PRIORITY_ABOVE_NORMAL))
+        return bool(kernel32.SetThreadPriority(kernel32.GetCurrentThread(), value))
     except Exception:
         return False
+
+
+def raise_ui_thread() -> bool:
+    """A notch above normal for the calling thread. Call it from the UI
+    thread, once."""
+    return _set_thread_priority(THREAD_PRIORITY_ABOVE_NORMAL)
+
+
+def background_thread() -> bool:
+    """Background mode for the calling thread: low CPU *and* low disk
+    priority, so its reads queue behind everyone else's. For work that is
+    only ever a head start - prefetch - and must never slow the clip that
+    is actually playing off the same drive. Call it from that thread."""
+    return _set_thread_priority(THREAD_MODE_BACKGROUND_BEGIN)
 
 
 # SetProcessInformation(ProcessPowerThrottling, ...)

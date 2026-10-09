@@ -204,6 +204,22 @@ def parse_query(text: str) -> tuple:
     return includes, excludes
 
 
+# A word, where a quoted stretch inside it ("used:\"summer pmv\"") counts
+# as part of the word, spaces and all. An unclosed quote runs to the end.
+_TOKEN = re.compile(r'(?:[^\s"]|"[^"]*(?:"|$))+')
+
+
+def query_tokens(text: str) -> list:
+    """The query as the user wrote it, one entry per term, quotes kept.
+
+    For anything that shows the terms back or edits them - the chips under
+    the search box and their ✕. A plain split() cut used:"ENEMY AND
+    REVENGE 2" into four chips, and the ✕ on "AND" removed a word from the
+    middle of a project name. parse_query() decides what matches; this
+    only has to agree with it about where one term ends."""
+    return _TOKEN.findall(text)
+
+
 _WILD = set("*?[")
 
 

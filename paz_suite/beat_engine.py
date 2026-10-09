@@ -304,6 +304,32 @@ def load_audio_ffmpeg(path: str) -> tuple:
     return signal.astype(np.float64), SAMPLE_RATE
 
 
+def beat_levels(signal, rate: int, beats, window: float = 0.06):
+    """How loud the song is at each beat, 0..1 - for drawing the beat grid,
+    where a bar's height is the music under it: drops stand tall, breaks
+    sit low, and the shape of the song is readable at a glance.
+
+    RMS over `window` seconds centred on each beat, scaled to the loud end
+    of this song (95th percentile) rather than to its single loudest beat,
+    so one spike does not flatten everything else. Square-rooted, because
+    loudness is heard roughly that way."""
+    import numpy as np
+    signal = np.asarray(signal, dtype=np.float64)
+    beats = np.asarray(beats, dtype=np.float64)
+    if signal.size == 0 or beats.size == 0:
+        return np.zeros(len(beats))
+    half = max(int(window * rate / 2), 1)
+    centres = np.clip((beats * rate).astype(int), 0, signal.size - 1)
+    power = np.cumsum(np.concatenate(([0.0], signal * signal)))
+    lo = np.clip(centres - half, 0, signal.size)
+    hi = np.clip(centres + half, 0, signal.size)
+    rms = np.sqrt((power[hi] - power[lo]) / np.maximum(hi - lo, 1))
+    top = np.percentile(rms, 95) if rms.size else 0.0
+    if top <= 0:
+        return np.zeros(len(beats))
+    return np.sqrt(np.clip(rms / top, 0.0, 1.0))
+
+
 def load_audio(path: str) -> tuple:
     """ffmpeg first, then whatever backends beat_this itself can find."""
     if has_ffmpeg():

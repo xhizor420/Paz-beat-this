@@ -795,27 +795,37 @@ class ThumbCache:
         concurrent ffmpeg passes) so the sheet is usually already done by
         the time the user actually reaches for the seek bar, instead of
         the first several seconds of scrubbing paying the slow per-hover
-        fallback while the sheet is still mid-build."""
-        if (path and duration > 0
-                and not self._board_on_hand(path, cols, rows, cell_w)):
+        fallback while the sheet is still mid-build.
+
+        Touches no disk on the calling thread. It is called on the UI
+        thread for every gallery card the pointer enters, and asking
+        whether the sheet exists means stat()ing the clip - on the library
+        drive, while Topaz has it busy, that was 200-1200ms a card (the
+        freeze log's top entry, media.py _board_key). The question is
+        asked on the worker instead."""
+        if path and duration > 0:
             self._board_build_async(path, duration, cols, rows, cell_w)
 
     def _board_build_async(self, path: str, duration: float,
                             cols: int, rows: int, cell_w: int) -> None:
         """Build this clip's sheet once, off to the side. A burst of
-        hovers over one clip must not start a burst of ffmpeg passes."""
-        key = self._board_key(path, cols, rows, cell_w)
+        hovers over one clip must not start a burst of ffmpeg passes.
+
+        Deduplicated by the clip and sheet size, not by _board_key - the
+        key needs a stat(), and this is called from the UI thread."""
+        job = (os.path.normcase(path), cols, rows, cell_w)
         with self._sprites_lock:
-            if key in self._building:
+            if job in self._building:
                 return
-            self._building.add(key)
+            self._building.add(job)
 
         def work():
             try:
-                self.storyboard(path, duration, cols, rows, cell_w)
+                if not self._board_on_hand(path, cols, rows, cell_w):
+                    self.storyboard(path, duration, cols, rows, cell_w)
             finally:
                 with self._sprites_lock:
-                    self._building.discard(key)
+                    self._building.discard(job)
 
         threading.Thread(target=work, daemon=True).start()
 

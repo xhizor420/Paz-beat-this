@@ -27,6 +27,7 @@ is being torn down are dropped rather than raising.
 from __future__ import annotations
 
 import threading
+import time
 import tkinter as tk
 from collections import deque
 
@@ -38,6 +39,13 @@ PUMP_MS = 10
 # the UI can draw; running them all in one pump would stall the window
 # instead, so a pump takes a bounded slice and comes straight back.
 MAX_PER_PUMP = 200
+# And a slice is also bounded in time, which is the bound that matters to
+# someone using the window. Counted alone, 200 was 200 gallery thumbnails
+# at ~5ms each - measured as a 180ms freeze a moment after every search
+# and page turn, with nothing else able to run until it was done. Past
+# this budget the pump yields so input and redraws get in, and comes back
+# almost at once for the rest.
+SLICE_MS = 12
 
 _lock = threading.Lock()
 _pending: deque = deque()
@@ -69,14 +77,21 @@ def _pump() -> None:
         root, pumping = _root, _pumping
     if not pumping:
         return
+    deadline = time.perf_counter() + SLICE_MS / 1000.0
     for _ in range(MAX_PER_PUMP):
         with _lock:
             if not _pending:
                 break
             fn, args, kwargs = _pending.popleft()
         _invoke(fn, args, kwargs)
+        if time.perf_counter() >= deadline:
+            break
+    with _lock:
+        backlog = bool(_pending)
     try:
-        root.after(PUMP_MS, _pump)
+        # Straight back when there is more to do - after() rather than
+        # carrying on, so whatever the window has queued runs first.
+        root.after(1 if backlog else PUMP_MS, _pump)
     except (RuntimeError, tk.TclError):
         with _lock:
             _pumping = False

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import itertools
 import os
+import tkinter as tk
+from tkinter import ttk
 
 import customtkinter as ctk
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageTk
@@ -248,12 +250,26 @@ def quiet_scrollbars() -> None:
 
     Done per canvas, on its first draw, so nothing outside the
     scrollbars loses the method.
+
+    CTkOptionMenu._draw ends the same way, and there it is worse than
+    slow. The flush delivers the menu's own pending <Configure>, which
+    calls _draw, which flushes again - recursion inside the layout pass.
+    When the menu's size is still settling (the Convert tab being built
+    in the background while the window is busy) the two sizes can trade
+    places on every pass and it never ends: the window goes "Not
+    Responding" for good, at 100% of a core. Caught by the freeze log
+    with the Category menu on top of the stack. Same fix.
     """
     try:
         import customtkinter as ctk
-        cls = ctk.CTkScrollbar
+        classes = (ctk.CTkScrollbar, ctk.CTkOptionMenu)
     except Exception:
         return
+    for cls in classes:
+        _quiet_draw(cls)
+
+
+def _quiet_draw(cls) -> None:
     if getattr(cls._draw, "_paz_quiet", False):
         return
     original = cls._draw
@@ -266,6 +282,39 @@ def quiet_scrollbars() -> None:
 
     _draw._paz_quiet = True
     cls._draw = _draw
+
+
+def table_style(widget, name: str, row_height: int) -> None:
+    """The dark ttk.Treeview style every table in the app uses.
+
+    One definition rather than a copy per tab - Convert's queue, the
+    Vault's lookup and project lists and Beat This's beat list had
+    drifted into three near-identical ones.
+
+    ttk is raw Tk: CustomTkinter scales nothing here, so the row height
+    and point sizes go through px() and pt() or they stay at their 100%
+    size while everything around them grows.
+
+    The layout drops clam's field border. clam draws it in its own light
+    and focus colours, and none of the copies had touched those, so every
+    table sat in a bright white rectangle - inside a rounded card of its
+    tab's colour that already frames it.
+    """
+    style = ttk.Style(widget)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+    style.layout(name, [("Treeview.treearea", {"sticky": "nswe"})])
+    style.configure(name, background=T.ROW, fieldbackground=T.ROW,
+                    foreground=T.TEXT, rowheight=px(row_height), borderwidth=0,
+                    font=(T.UI, pt(10)))
+    style.configure(f"{name}.Heading", background=T.ELEVATED, foreground=T.FAINT,
+                    relief="flat", borderwidth=0, font=(T.UI, pt(9), "bold"),
+                    padding=(px(8), px(7)))
+    style.map(f"{name}.Heading", background=[("active", T.BTN_HOV)])
+    style.map(name, background=[("selected", T.ROW_SEL)],
+              foreground=[("selected", T.TEXT)])
 
 
 def window_size(widget, width: float, height: float) -> str:

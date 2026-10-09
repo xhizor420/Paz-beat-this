@@ -25,6 +25,7 @@ from .media import fit_frame, thumb_key, probe
 from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback, joins_playback
 from .mpv_player import MpvPlayer, available as mpv_available
 from .vlc_player import VlcPlayer, available as vlc_available
+from .libmpv_player import LibMpvPlayer
 from . import uithread
 
 
@@ -72,7 +73,7 @@ class InlinePlayer:
                                  bg=T.INPUT, highlightthickness=0, bd=0)
         self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
         self.canvas.bind("<Button-1>", lambda e: self.toggle())
-        self.stage = tk.Frame(self.stack, bg="black", bd=0, highlightthickness=0)
+        self.stage = tk.Frame(self.stack, bg=T.INPUT, bd=0, highlightthickness=0)
         self.stage.bind("<Button-1>", lambda e: self.toggle())
         # Placed once and left placed. mpv attaches to this window's id, so
         # it has to exist with real geometry before the engine is built,
@@ -84,6 +85,7 @@ class InlinePlayer:
         # tk.Misc.lift, not self.canvas.lift: Canvas overrides lift() with
         # tag_raise, which raises canvas *items*, not the widget.
         tk.Misc.lift(self.canvas)
+        self._stage_on = False
 
         # 4K pool lengths we have already paid an ffprobe for, so the
         # question is asked once per file per session rather than on every
@@ -197,6 +199,10 @@ class InlinePlayer:
     # Best first. Each one that can't be used steps aside for the next, so
     # there is always something that plays.
     #
+    #   libmpv   mpv's library in-process (libmpv_player). The fastest and
+    #            smoothest of them by a distance on this library: a new
+    #            clip on screen in ~90ms, GPU decode, no dropped frames at
+    #            4K60. Needs libmpv-2.dll beside the python-mpv package.
     #   vlc      libVLC in-process. Real A/V sync, hardware decode, and no
     #            channel between us and it that can fail to open - which is
     #            what made the mpv path fragile on Windows.
@@ -204,15 +210,17 @@ class InlinePlayer:
     #            quality; more ways to not come up.
     #   builtin  ffmpeg pipe plus a separate ffplay. Needs nothing beyond
     #            ffmpeg, but has no clock joining sound to picture.
-    CHAIN = ("vlc", "mpv", "builtin")
-    BACKEND_NAMES = {"vlc": "VLC", "mpv": "mpv", "builtin": "the built-in player"}
+    CHAIN = ("libmpv", "vlc", "mpv", "builtin")
+    BACKEND_NAMES = {"libmpv": "mpv (built in)", "vlc": "VLC", "mpv": "mpv",
+                     "builtin": "the built-in player"}
 
     def which_backends(self) -> dict:
         """What each backend would do if asked right now. Drives both the
         chain and the diagnostics report."""
-        from . import vlc_player
+        from . import libmpv_player, vlc_player
         has_mpv = mpv_available()
         return {
+            "libmpv": (libmpv_player.available(), libmpv_player.why_not()),
             "vlc": (vlc_available(), vlc_player.why_not()),
             "mpv": (has_mpv,
                     "" if has_mpv else "mpv isn't installed, or isn't on PATH"),
@@ -233,6 +241,15 @@ class InlinePlayer:
             if not ready[name][0]:
                 continue
             self.backend = name
+            if name == "libmpv":
+                engine = LibMpvPlayer(
+                    self.stage, self.VIEW_W, self.VIEW_H,
+                    on_tick=self._on_tick, on_state=self._on_state,
+                    on_fail=self._on_fail, on_eof=None,
+                    post=lambda fn, *a: uithread.post(fn, *a),
+                    background=T.INPUT)
+                engine.on_unavailable = self._step_down
+                return engine
             if name == "vlc":
                 engine = VlcPlayer(
                     self.stage, self.VIEW_W, self.VIEW_H,
@@ -268,17 +285,26 @@ class InlinePlayer:
         we would be waiting on for a picture we already have cached - so
         for VLC we show our own thumbnail and let its window up only once
         it is actually playing."""
-        return self.backend == "mpv"
+        return self.backend in ("mpv", "libmpv")
+
+    @property
+    def letterboxes(self) -> bool:
+        """True when the engine fits any clip into a fixed box by itself,
+        in the card's own colour - so the box need not change shape per
+        clip. Every resize of the box is a resize of the engine's window,
+        and Tk waits on the engine's thread to answer it; mid-switch that
+        was a 100-400ms freeze of the whole window per clip."""
+        return self.backend == "libmpv"
 
     @property
     def embedded(self) -> bool:
         """True when the engine draws into its own window rather than our
-        canvas - vlc and mpv do, the built-in engine doesn't."""
-        return self.backend in ("vlc", "mpv")
+        canvas - libmpv, vlc and mpv do, the built-in engine doesn't."""
+        return self.backend in ("libmpv", "vlc", "mpv")
 
     AV_STEPS = (-400, -300, -200, -150, -100, -50, 0, 50, 100, 150, 200, 300, 400)
 
-    SHORT_NAMES = {"vlc": "VLC", "mpv": "mpv", "builtin": "built-in"}
+    SHORT_NAMES = {"libmpv": "mpv", "vlc": "VLC", "mpv": "mpv", "builtin": "built-in"}
 
     def _refresh_backend_btn(self) -> None:
         """Name the live player, and say when it is the one that drifts.
@@ -415,6 +441,11 @@ class InlinePlayer:
         """Raise mpv's surface over the thumbnail canvas, or drop it back."""
         if not self.embedded:
             return
+        # Only when it changes. Restacking touches the engine's window, and
+        # this is asked on every clip shown.
+        if getattr(self, "_stage_on", None) == on:
+            return
+        self._stage_on = on
         self.stage.lift() if on else tk.Misc.lift(self.canvas)
 
     def _step_down(self, why: str) -> None:
@@ -478,6 +509,11 @@ class InlinePlayer:
             # Debounced: a drag on the column handle is a resize per mouse
             # movement, and each one of these is a redraw.
             self._show_thumb(self.rec, delay=60)
+        elif self.rec is None and getattr(self, "_idle_text", ""):
+            # The empty-state line is centred on the picture as it was
+            # when drawn - the small size the player starts at - so after
+            # the panel took its real width it sat a third of the way in.
+            self._show_idle_text(self._idle_text)
         self._draw_bar()
 
     def _fit_controls(self, width: int) -> None:
@@ -521,7 +557,22 @@ class InlinePlayer:
     # ── content switching ───────────────────────────────────────────────
 
     def show_rec(self, rec) -> None:
-        """Selection changed: stop whatever is playing, show the new thumb."""
+        """Selection changed: stop whatever is playing, show the new thumb.
+
+        Asked again for the clip already loaded, it leaves playback alone.
+        The details panel re-renders for plenty of reasons that are not a
+        new selection - a background tag fetch landing, a library refresh,
+        settings saved, a tag group folded - and each one used to stop the
+        player. Pressing Play just before a tag fetch finished looked like
+        Play not working: the clip started, was stopped a moment later, and
+        took a second press to go.
+        """
+        current = self.rec
+        if (rec is not None and current is not None
+                and getattr(rec, "path", None) == getattr(current, "path", "")):
+            self.rec = rec          # a reload hands over a fresh record
+            self._update_quality_btn()
+            return
         self.engine.stop()
         self._peek_hide()
         self._last_seek_pos = None
@@ -556,10 +607,21 @@ class InlinePlayer:
         every click of a clip whose pool copy hasn't been looked at yet.
         It happens in :meth:`_offer_premium` instead, and swaps in when it
         has an answer."""
-        cached = self._premium_probe.get(rec.premium_path or "")
-        if rec.premium_path and self.tab.cfg.player_prefer_premium and cached:
-            return rec.premium_path, cached[0], cached[1]
+        if rec.premium_path and self.tab.cfg.player_prefer_premium:
+            cached = self._premium_probe.get(rec.premium_path)
+            if cached:
+                return rec.premium_path, cached[0], cached[1]
+            # Not probed yet - and nothing needs to wait for it. The 4K copy
+            # is the same clip, so the indexed length is right to a frame,
+            # and the pool is 60fps by definition. Waiting for the probe
+            # instead is what made Play pressed in the first moment after a
+            # click play the small copy, with the button still saying 4K.
+            return rec.premium_path, rec.duration, 60.0
         return rec.path, rec.duration, rec.fps or 30.0
+
+    def source_path(self, rec) -> str:
+        """The file Play would open for `rec` - for warming it ahead."""
+        return self._resolve_source(rec)[0] if rec is not None else ""
 
     def _offer_premium(self, rec) -> None:
         """Look up the 4K copy's length off to the side, and switch the
@@ -584,13 +646,13 @@ class InlinePlayer:
             self._premium_probe.pop(path, None)
             return
         self._premium_probe[path] = answer
-        # The user may have moved on, or started playing the small copy;
-        # either way, don't yank the picture out from under them.
-        if self.rec is not rec or self.engine.playing:
+        # The copy is already loaded (see _resolve_source); this only puts
+        # the measured numbers in place of the assumed ones. No reload -
+        # that would stop a clip that is playing.
+        if self.rec is not rec or getattr(self.engine, "path", "") != path:
             return
-        if not self.tab.cfg.player_prefer_premium:
-            return
-        self.engine.load(path, answer[0], answer[1])
+        if answer[0]:
+            self.engine.duration = answer[0]
         self._draw_bar()
 
     def toggle_quality(self) -> None:
@@ -621,6 +683,7 @@ class InlinePlayer:
             text_color=T.ACCENT if prefer else T.DIM)
 
     def _show_idle_text(self, text: str):
+        self._idle_text = text
         self._show_stage(False)
         self.canvas.delete("all")
         self.canvas.create_text(self.engine.view_w // 2, self.engine.view_h // 2,

@@ -30,12 +30,12 @@ from .media import tile_image, thumb_key, make_thumb, probe
 from .e621 import BATCH_SIZE, E621_POST, GIVE_UP_AFTER
 from .similar import rank as rank_similar, tag_weights
 from .library_db import (
-    db_connect, Rec, compile_query, parse_query, SORTS, SIMILAR_SORT,
+    db_connect, Rec, compile_query, parse_query, query_tokens, SORTS, SIMILAR_SORT,
     vault_marks_by_path, vault_unmark, vault_projects_list, vault_ensure_project, vault_mark,
 )
 from .library_player import InlinePlayer
 from .tag_rail import Chip as RailChip, Section as RailSection, TagList, TagRail
-from . import artwork, backups, heap, uithread
+from . import artwork, backups, heap, prefetch, uithread
 from .winsys import awake
 from .speedcheck import SpeedCheck
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
@@ -146,6 +146,8 @@ class LibraryTab(ctk.CTkFrame):
         # so redrawing the same clip keeps its scroll position.
         self._tags_job = None
         self._tags_for = None
+        # Up/Down play the clip they rest on - see _autoplay_soon.
+        self._autoplay_job = None
         self._rail_gen = 0
         # The last tag counts, kept until the results or their tags change
         # - see _render_tagpanel.
@@ -1197,11 +1199,17 @@ class LibraryTab(ctk.CTkFrame):
         # Sized to their labels and no wider: six buttons at comfortable
         # widths did not fit the column at 150% scaling, and the last one
         # ran off the edge rather than the row admitting it was full.
+        # Dimmed while nothing is selected - see _render_details. Six bright
+        # buttons under "Nothing selected" offered to act on nothing.
+        self._detail_buttons = []
+
         def dbtn(text, cmd, color=T.DIM, width=58):
             b = ctk.CTkButton(buttons, text=text, width=width, height=27,
                               corner_radius=7, font=font(11), fg_color=T.BTN,
-                              hover_color=T.BTN_HOV, text_color=color, command=cmd)
+                              hover_color=T.BTN_HOV, text_color=color, command=cmd,
+                              text_color_disabled=T.FAINT, state="disabled")
             b.pack(side="left", padx=(0, 4))
+            self._detail_buttons.append(b)
             return b
 
         dbtn("Folder", self._reveal)
@@ -1358,14 +1366,43 @@ class LibraryTab(ctk.CTkFrame):
             return "break"
         if self.selected is None:
             self._select_index(0)
+            self._autoplay_soon()
             return "break"
         try:
             at = self.filtered.index(self.selected)
         except ValueError:
             self._select_index(0)
+            self._autoplay_soon()
             return "break"
         self._select_index(max(0, min(at + delta, len(self.filtered) - 1)))
+        self._autoplay_soon()
         return "break"
+
+    # How long the selection has to rest on a clip before it plays, on a
+    # player that pays for every clip it opens. VLC tears its video output
+    # down and builds it again per clip, so holding Down through twenty of
+    # them at the key's auto-repeat rate would be twenty of those. libmpv
+    # swaps the file under a live output in ~90ms and only ever opens the
+    # newest one asked for, so it plays at once.
+    AUTOPLAY_MS = 150
+
+    def _autoplay_soon(self) -> None:
+        """A click, or Up and Down, play the clip they land on - look,
+        judge, next, without a key press in between."""
+        job = self._autoplay_job
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except ValueError:
+                pass
+        rec = self.selected
+        delay = 0 if self.player.backend == "libmpv" else self.AUTOPLAY_MS
+        self._autoplay_job = self.after(delay, lambda: self._autoplay(rec))
+
+    def _autoplay(self, rec) -> None:
+        self._autoplay_job = None
+        if rec is not None and rec is self.selected and not self.player.playing:
+            self.player.play()
 
     def _select_index(self, index: int) -> None:
         """Select the result at `index`, turning the page if it is on
@@ -1484,8 +1521,8 @@ class LibraryTab(ctk.CTkFrame):
         self._scrub_stop()
 
     def on_app_close(self) -> bool:
-        # mpv is a separate process embedded in our window. Killing the
-        # window usually takes it with it, but "usually" is not a shutdown.
+        # mpv (either kind) and VLC draw into our window. Killing the
+        # window usually takes them with it, but "usually" is not a shutdown.
         shutdown = getattr(self.player.engine, "shutdown", None)
         if shutdown is not None:
             try:
@@ -2266,7 +2303,7 @@ class LibraryTab(ctk.CTkFrame):
         6.9ms of the 19ms a search took - the largest single piece of it,
         spent destroying twelve widgets to build twelve identical ones.
         """
-        tokens = query.split()[:12]
+        tokens = query_tokens(query)[:12]
         pool = self._query_chips
         for index, token in enumerate(tokens):
             negative = token.startswith("-")
@@ -2284,7 +2321,9 @@ class LibraryTab(ctk.CTkFrame):
                 chip.configure(command=lambda c=chip: self._remove_token(
                     getattr(c, "paz_token", "")))
             chip.paz_token = token
-            restyle(chip, text=f"{token}  ✕",
+            # The quotes are how the box knows a term has spaces in it; on
+            # a chip, which is already one term, they are just noise.
+            restyle(chip, text=f"{token.replace(chr(34), '')}  ✕",
                     fg_color=T.FAIL_DEEP if negative else T.ACCENT_DEEP,
                     text_color=T.FAIL if negative else T.ACCENT)
         # How many are packed is counted rather than asked, because
@@ -2320,7 +2359,7 @@ class LibraryTab(ctk.CTkFrame):
                                   pady=0)
 
     def _remove_token(self, token: str):
-        tokens = [t for t in self.search.get().split() if t != token]
+        tokens = [t for t in query_tokens(self.search.get()) if t != token]
         self.search.delete(0, tk.END)
         self.search.insert(0, " ".join(tokens))
         self.run_search()
@@ -2547,7 +2586,13 @@ class LibraryTab(ctk.CTkFrame):
 
     def _on_grid_resize(self, event):
         columns = max(2, (event.width - self.GAP) // (self.card_width + self.GAP))
-        if columns == getattr(self, "_columns", 0):
+        # The cards stretch to fill the row, so their width follows the
+        # gallery's even when the column count does not. Watching only the
+        # count left a page drawn while the gallery was still narrow (early
+        # in startup) as narrow cards in a wide space, half of it empty.
+        card = max(int((event.width - self.GAP * (columns + 1)) // columns), 120)
+        if (columns == getattr(self, "_columns", 0)
+                and abs(card - getattr(self, "CARD_W", 0)) <= 2):
             return
         # A drag on the handle gets one re-layout when the hand lets go,
         # not one per step of the drag.
@@ -2689,6 +2734,11 @@ class LibraryTab(ctk.CTkFrame):
     def render_page(self):
         if not self.visible():
             self._page_dirty = True
+            return
+        if not self._window_ready():
+            # Drawn at the size it will really be, once - see _window_ready.
+            self._page_dirty = True
+            self._after_window_ready()
             return
         self._page_dirty = False
         # Cancelled, not just forgotten. Setting this to None left the
@@ -2940,6 +2990,8 @@ class LibraryTab(ctk.CTkFrame):
                 self.frames.prime_hover(rec.path, rec.duration)
             # And its still, so clicking it is only a Tk image away.
             self._prepare_stills([rec])
+            # And the file itself, so playing it opens from memory.
+            self._prefetch_hovered(rec)
 
     def _card_box(self, index: int) -> tuple:
         slot = self._layout[index]
@@ -3762,6 +3814,10 @@ class LibraryTab(ctk.CTkFrame):
             self.marked.clear()
             self._mark_anchor = index
         self._select(rec)
+        if not (ctrl or shift):
+            # A plain click is "show me this" - it plays. Ctrl and Shift
+            # are for marking, and leave the player alone.
+            self._autoplay_soon()
 
     def targets(self, fallback: Rec | None = None) -> list:
         """What an action should act on: the marked set if there is one,
@@ -3809,6 +3865,7 @@ class LibraryTab(ctk.CTkFrame):
         self._restyle_these(was, rec)
         self._render_details()
         self._report_marks()
+        self._prefetch_around(rec)
         # The arrow keys go to a neighbour next; have its still ready.
         page = self._layout
         for index, slot in enumerate(page):
@@ -3816,6 +3873,29 @@ class LibraryTab(ctk.CTkFrame):
                 self._prepare_stills([page[i]["rec"] for i in (index + 1, index - 1)
                                       if 0 <= i < len(page)])
                 break
+
+    def _prefetch_around(self, rec) -> None:
+        """Warm the selected clip and the ones Up/Down reach next - see
+        prefetch. Down is the usual direction, so it gets two."""
+        if rec is None:
+            return
+        try:
+            at = self.filtered.index(rec)
+        except ValueError:
+            at = None
+        near = [rec]
+        if at is not None:
+            near += [self.filtered[i] for i in (at + 1, at - 1, at + 2)
+                     if 0 <= i < len(self.filtered)]
+        self._prefetch_base = [self.player.source_path(r) for r in near]
+        prefetch.want(self._prefetch_base)
+
+    def _prefetch_hovered(self, rec) -> None:
+        """The card under the pointer, ahead of the neighbours - it is the
+        most likely next click."""
+        if rec is not None:
+            prefetch.want([self.player.source_path(rec)]
+                          + getattr(self, "_prefetch_base", []))
 
     def _prepare_stills(self, recs) -> None:
         """Have the player make these clips' stills ahead of a click -
@@ -3839,7 +3919,55 @@ class LibraryTab(ctk.CTkFrame):
         self._peek_hide()
         self.player.play()
 
+    # How long the first layout may wait for the window to reach the size
+    # it asked for. A window resized or maximised by hand straight away
+    # never gets there, and must not be left waiting.
+    WINDOW_SETTLE_S = 3.0
+
+    def _window_ready(self) -> bool:
+        """Whether the window is on screen at its real size yet.
+
+        It is first shown at its minimum size (1180x700 here) and reaches
+        the size it asked for (1996x1180) about a second later. The first
+        layout used to be done against the small one: a narrow panel and
+        gallery, then the real size landing and the whole tab re-laying
+        itself out in front of you, twice, just as the tags were arriving.
+        Measured. Laid out only once this is true, it happens once."""
+        if getattr(self, "_window_settled", False):
+            return True
+        try:
+            if not self.root.winfo_viewable():
+                return False
+            width, height = self.root.winfo_width(), self.root.winfo_height()
+        except tk.TclError:
+            return False
+        want = getattr(self.app, "requested_size", None)
+        started = getattr(self.app, "started_at", None)
+        waited_out = started is not None and time.monotonic() - started > self.WINDOW_SETTLE_S
+        if want is None or waited_out or (abs(width - want[0]) <= 16 and abs(height - want[1]) <= 16):
+            self._window_settled = True
+        return self._window_settled
+
+    def _after_window_ready(self) -> None:
+        """Come back for the first layout once the window is up."""
+        if getattr(self, "_ready_job", None) is not None:
+            return
+
+        def retry():
+            self._ready_job = None
+            if not self._window_ready():
+                self._after_window_ready()
+                return
+            self._fit_panel()
+            if self._page_dirty:
+                self.render_page()
+
+        self._ready_job = self.after(30, retry)
+
     def _fit_panel(self, _event=None):
+        if not self._window_ready():
+            self._after_window_ready()
+            return
         width = self.panel_width()
         inner = width - 26
         box = self._picture_box(inner)
@@ -3953,7 +4081,14 @@ class LibraryTab(ctk.CTkFrame):
         centred in the card. Theater and the handles are how it gets
         bigger than that.
         """
-        aspect = self.clip_aspect(rec)
+        # A player that letterboxes in the card's colour keeps one box for
+        # every clip: it looks the same, and the window is never resized
+        # mid-switch - see InlinePlayer.letterboxes.
+        player = getattr(self, "player", None)
+        if getattr(player, "letterboxes", False):
+            aspect = self.DEFAULT_ASPECT
+        else:
+            aspect = self.clip_aspect(rec)
         width = max(int(inner), 240)
         # Kept as a float for the width below: rounding here and then
         # again there loses a pixel or two off the column's width, which
@@ -4089,6 +4224,11 @@ class LibraryTab(ctk.CTkFrame):
         """
         rec = self.selected
         self.player.show_rec(rec)
+        state = "normal" if rec else "disabled"
+        if getattr(self, "_detail_state", None) != state:
+            self._detail_state = state
+            for button in getattr(self, "_detail_buttons", ()):
+                button.configure(state=state)
         # A different clip can be a different shape, and the box is built
         # to the clip - see clip_aspect().
         self._fit_panel()

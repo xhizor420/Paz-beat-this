@@ -60,6 +60,37 @@ def test_other_canvases_keep_their_flush(monkeypatch):
     assert other.flushes == 1
 
 
+def test_an_option_menu_cannot_redraw_itself_for_ever(monkeypatch):
+    """The Convert tab's Category menu froze the window for good: its
+    _draw flushed, the flush delivered its own <Configure> with the other
+    of two sizes, and that called _draw again - for ever."""
+    class Menu:
+        def __init__(self):
+            self.drawn = 0
+            self.width = 170
+            menu = self
+
+            class FlushingCanvas:
+                def update_idletasks(self):
+                    # A size that will not settle: every flush resizes,
+                    # and a resize redraws. Capped so a regression fails
+                    # rather than hanging the test run.
+                    if menu.drawn < 50:
+                        menu.width = 342 - menu.width
+                        menu._draw(no_color_updates=True)
+            self._canvas = FlushingCanvas()
+
+        def _draw(self, no_color_updates=False):
+            self.drawn += 1
+            self._canvas.update_idletasks()    # what CTk 6 does
+
+    monkeypatch.setattr(ctk, "CTkOptionMenu", Menu)
+    theme.quiet_scrollbars()
+    menu = Menu()
+    menu._draw()
+    assert menu.drawn == 1, "the redraw re-entered itself through the flush"
+
+
 def test_installing_twice_wraps_once(monkeypatch):
     Bar = fake_scrollbar_class()
     monkeypatch.setattr(ctk, "CTkScrollbar", Bar)

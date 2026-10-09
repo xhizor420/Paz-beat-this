@@ -29,10 +29,8 @@ _ROOTS: list = []       # freed on the main thread at exit - see app._ROOT_KEEP
 
 @pytest.fixture(scope="module")
 def root():
-    try:
-        window = ctk.CTk()
-    except tk.TclError:
-        pytest.skip("no display")
+    from conftest import make_root
+    window = make_root(ctk.CTk)
     _ROOTS.append(window)
     yield window
     try:
@@ -46,9 +44,13 @@ class Shell:
     _select_tab = appmod.PazApp._select_tab
     _show_tab = appmod.PazApp._show_tab
     _lay_out_early = appmod.PazApp._lay_out_early
+    _idle = appmod.PazApp._idle
+    IDLE_BEFORE_BUILD = appmod.PazApp.IDLE_BEFORE_BUILD
+    _last_input = 0.0          # long idle: lay out at once
 
     def __init__(self, root):
-        self.root = type("R", (), {"after": lambda *_a: None})()
+        self.afters = []
+        self.root = type("R", (), {"after": lambda _s, *a: self.afters.append(a)})()
         self.tabview = ctk.CTkTabview(root)
         self.tabview.pack(fill="both", expand=True)
         for name in appmod.TAB_NAMES:
@@ -104,6 +106,26 @@ def test_laying_out_early_leaves_the_showing_tab_on_top(root):
         order = stacking(shell.tabview)
         assert shell.tabview.get() == "Library"
         assert not shell.tabview.tab("Vault").winfo_ismapped()
+        assert order.index(str(shell.tabview.tab("Library"))) > \
+            order.index(str(shell.tabview._canvas))
+    finally:
+        shell.tabview.destroy()
+
+
+def test_a_hidden_tab_waits_while_the_window_is_in_use(root):
+    """Laying out a hidden tab holds the window; with input in the last
+    second it is put off, not done under the user's hand."""
+    import time
+    shell = Shell(root)
+    try:
+        shell._select_tab("Library")
+        root.update()
+        shell._last_input = time.monotonic()
+        shell._lay_out_early("Vault")
+        root.update()
+        assert not shell.tabview.tab("Vault").winfo_ismapped()
+        assert shell.afters, "it should have come back later"
+        order = stacking(shell.tabview)
         assert order.index(str(shell.tabview.tab("Library"))) > \
             order.index(str(shell.tabview._canvas))
     finally:

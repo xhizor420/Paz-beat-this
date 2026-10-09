@@ -20,11 +20,16 @@ class FakeEngine:
     def __init__(self, playing=False):
         self.playing = playing
         self.paused = 0
+        self.played = 0
         self.sought = []
 
     def pause(self):
         self.playing = False
         self.paused += 1
+
+    def play(self):
+        self.playing = True
+        self.played += 1
 
     def seek(self, pos):
         self.sought.append(pos)
@@ -39,7 +44,8 @@ class FakeScrub:
     _on_press = ScrubPreview._on_press
     _on_release = ScrubPreview._on_release
 
-    def __init__(self, playing=False, duration=120.0):
+    def __init__(self, playing=False, duration=120.0, mpv=False):
+        self._mpv = mpv
         self.player_engine = FakeEngine(playing)
         self._duration_value = duration
         self._dragging = False
@@ -93,3 +99,13 @@ def test_a_release_without_a_drag_does_nothing():
     scrub._on_release(Event(600))
     assert scrub.player_engine.sought == []
     assert scrub.frames_requested == []
+
+
+def test_with_mpv_releasing_a_scrub_plays_on_from_the_drop():
+    """mpv's seek keeps the pause the drag put it in, so the release has
+    to ask for playing again - the built-in engine's seek did that itself."""
+    scrub = FakeScrub(playing=True, mpv=True)
+    scrub._on_press(Event(600))
+    scrub._on_release(Event(450))
+    assert scrub.player_engine.sought[-1] == 60.0
+    assert scrub.player_engine.played == 1

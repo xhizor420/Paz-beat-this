@@ -115,6 +115,56 @@ def test_speed_scales_the_wall_clock_fallback(engine):
     assert engine._elapsed() == pytest.approx(10.0, abs=0.6)
 
 
+# ── the device clock between writes ─────────────────────────────────────
+
+def _track_at(written_s: float, latency: float, anchors, start: float = 0.0):
+    """An AudioTrack with its bookkeeping set by hand - no device, no
+    ffmpeg. `anchors` are (seconds ago, heard then) pairs."""
+    import collections
+    t = audio_out.AudioTrack.__new__(audio_out.AudioTrack)
+    t._failed = False
+    t._lock = threading.Lock()
+    t._written = int(written_s * audio_out.RATE)
+    t._latency = latency
+    t._started_at = time.monotonic() - 1.0
+    t._opened = t._started_at
+    t.start, t.speed = start, 1.0
+    t._last_heard = 0.0
+    now = time.monotonic()
+    t._anchors = collections.deque((now - ago, heard - (now - ago))
+                                   for ago, heard in anchors)
+    return t
+
+
+def test_the_clock_keeps_moving_between_writes():
+    """Windows takes the sound in bursts ~40ms apart. A clock that only
+    moved when a write returned held the picture to ~23fps whatever the
+    clip - every frame due in between was dropped."""
+    track = _track_at(written_s=2.0, latency=0.2, anchors=[(0.030, 1.8)])
+    assert track.position() == pytest.approx(1.83, abs=0.01)
+
+
+def test_the_full_buffer_anchor_wins():
+    """Writes inside a burst land while the buffer is still filling and
+    read low; the one that ends the burst reads true."""
+    track = _track_at(written_s=2.0, latency=0.2,
+                      anchors=[(0.040, 1.70), (0.039, 1.72), (0.020, 1.80)])
+    assert track.position() == pytest.approx(1.82, abs=0.01)
+
+
+def test_the_clock_never_claims_sound_not_yet_handed_over():
+    """If the decoder stalls, the device runs dry - the clock has to stop
+    with it rather than run the picture on ahead of silence."""
+    track = _track_at(written_s=2.0, latency=0.2, anchors=[(5.0, 1.8)])
+    assert track.position() == pytest.approx(2.0)
+
+
+def test_the_clock_never_runs_backwards():
+    track = _track_at(written_s=2.0, latency=0.2, anchors=[(0.0, 1.5)])
+    track._last_heard = 1.6
+    assert track.position() == pytest.approx(1.6)
+
+
 # ── volume without breaking sync ────────────────────────────────────────
 
 def test_muting_does_not_stop_the_clock(engine):

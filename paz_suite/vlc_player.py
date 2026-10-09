@@ -189,7 +189,11 @@ class VlcPlayer:
     # A clock that hasn't moved this long while we believe we are playing
     # means the picture is stuck, whatever libVLC thinks.
     STALL_AFTER = 4.0
-    POLL = 0.05
+    # ~30 updates a second, so the seek bar glides rather than steps.
+    POLL = 0.033
+    # How far position() may run ahead of the last time libVLC reported -
+    # see _tick. Past this, a clock that has stopped is believed.
+    COAST = 0.5
 
     def __init__(self, widget, width: int, height: int,
                  on_tick=None, on_state=None, on_fail=None, on_eof=None,
@@ -229,6 +233,14 @@ class VlcPlayer:
         self._played_from = 0.0
         self._played_at = None
         self._last_told = -1.0
+        # libVLC's own clock, as last reported, and when it changed. The
+        # stall check reads this, never the smoothed position.
+        self._vlc_time = 0.0
+        self._vlc_ms = None
+        self._vlc_at = 0.0
+        # After a seek, the times libVLC reports from before the jump.
+        self._seek_target = None
+        self._seek_at = 0.0
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._worker.start()
 
@@ -329,8 +341,8 @@ class VlcPlayer:
 
     # ── commands, as run on the worker ──────────────────────────────────
 
-    def _set_media(self, path: str) -> None:
-        """Point the player at `path`.
+    def _set_media(self, path: str, start: float = 0.0) -> None:
+        """Point the player at `path`, to open at `start` seconds.
 
         The release has to happen after set_media, not before: set_media
         takes its own reference, and dropping ours first frees the object
@@ -339,6 +351,11 @@ class VlcPlayer:
         # Modest read-ahead: this is local disk, and a big cache only
         # makes the first frame later.
         media.add_option("file-caching=300")
+        if start > 0.05:
+            # Part of opening the file, so it cannot be missed. set_time()
+            # straight after play() was ignored - the file was not open
+            # yet - and resuming went back to 0:00.
+            media.add_option(f"start-time={start:.3f}")
         self._player.set_media(media)
         media.release()
 
@@ -362,10 +379,13 @@ class VlcPlayer:
                 # Nothing left to un-pause: hand it the clip again.
                 if not self.path:
                     return
-                self._set_media(self.path)
+                self._set_media(self.path, self.position)
                 player.play()
                 if self.position > 0.05:
-                    player.set_time(int(self.position * 1000))
+                    # Until it opens, libVLC reports 0 - not where we are.
+                    self._seek_target = self.position
+                    self._seek_at = time.monotonic()
+                    self._vlc_ms = None
             else:
                 player.set_pause(0)
             self._played_from = self.position
@@ -381,6 +401,9 @@ class VlcPlayer:
             player.set_time(int(max(seconds, 0.0) * 1000))
             self._played_from = max(seconds, 0.0)
             self._played_at = time.monotonic() if self.playing else None
+            self._seek_target = max(seconds, 0.0)
+            self._seek_at = time.monotonic()
+            self._vlc_ms = None
         elif name == "volume":
             player.audio_set_volume(int(command[1]))
         elif name == "mute":
@@ -422,7 +445,45 @@ class VlcPlayer:
             return
         if millis is None or millis < 0:
             return
-        self.position = millis / 1000.0
+        now = time.monotonic()
+        reported = millis / 1000.0
+        if self._seek_target is not None:
+            # Until libVLC lands near where it was sent, what it reports
+            # is where it was before the jump - showing that would bounce
+            # the playhead back for a moment after every click on the bar.
+            # Long enough to cover a cold 4K open on the library drive.
+            if abs(reported - self._seek_target) > 0.5 and now - self._seek_at < 2.5:
+                return
+            self._seek_target = None
+        self._vlc_time = reported
+        if millis != self._vlc_ms:
+            self._vlc_ms, self._vlc_at = millis, now
+        # libVLC's clock moves in steps - every 250ms on a clip with no
+        # sound, which is most of the 4K pool - and the seek bar and clock
+        # followed it, so a perfectly smooth picture came with a playhead
+        # that lurched along four times a second. Between steps, carry it
+        # on in real time; never more than COAST past the last report, so
+        # a picture that has really stopped still reads as stopped.
+        estimate = reported
+        if not self.playing and self.position - 0.3 < reported < self.position:
+            # Paused just now: libVLC's last word is a step behind where
+            # the playhead had coasted to. Hold it where it stopped.
+            estimate = self.position
+        elif self.playing and self._played_at is not None:
+            try:
+                moving = bool(player.is_playing())
+            except Exception:
+                moving = False
+            if moving:
+                estimate += min(now - self._vlc_at, self.COAST) * (self.speed or 1.0)
+                # Forwards only, bar a real jump (a loop or a seek): a
+                # report that lands a hair behind the estimate must not
+                # twitch the playhead backwards.
+                if self.position - 0.3 < estimate < self.position:
+                    estimate = self.position
+        if self.duration:
+            estimate = min(estimate, self.duration)
+        self.position = estimate
         if not self.duration:
             try:
                 length = player.get_length()
@@ -430,9 +491,8 @@ class VlcPlayer:
                 length = 0
             if length and length > 0:
                 self.duration = length / 1000.0
-        # 20 polls a second keeps the stall check honest, but the panel
-        # does not need redrawing that often.
-        if self.on_tick and abs(self.position - self._last_told) >= 0.08:
+        # Every poll that moved: ~30 redraws of one small canvas a second.
+        if self.on_tick and abs(self.position - self._last_told) >= 0.02:
             self._last_told = self.position
             self._post(self.on_tick, self.position)
 
@@ -449,6 +509,11 @@ class VlcPlayer:
         self.position = 0.0
         self.playing = False
         self._played_at = None
+        # The last clip's clock is not this one's - left in place, the
+        # stall check could read the old clip's progress as this one's.
+        self._vlc_time = 0.0
+        self._vlc_ms = None
+        self._seek_target = None
         self._put("load", path)
 
     def clear(self) -> None:
@@ -526,7 +591,9 @@ class VlcPlayer:
         waited = time.monotonic() - self._played_at
         if waited < self.STALL_AFTER:
             return ""
-        if self.position - self._played_from > 0.20:
+        # libVLC's own clock, not the smoothed position, which coasts on
+        # for up to COAST seconds by design and would hide a stall.
+        if self._vlc_time - self._played_from > 0.20:
             return ""
         return ("VLC has the clip but the picture isn't moving. "
                 "Settings > e621 & App > Playback can switch players.")

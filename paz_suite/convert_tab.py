@@ -31,7 +31,7 @@ from .convert_widgets import (
     QueueTable, STATE_LABELS, ScrubPreview, ContactSheet, DuplicateWindow,
 )
 from .widgets import (Card, Bar, StatTile, JobPanel, LogView, LibraryBar,
-                      menu_rule)
+                      menu_rule, popup_menu)
 from . import uithread
 from .winsys import awake
 
@@ -251,23 +251,26 @@ class ConvertTab(ctk.CTkFrame):
             progress_color=T.ACCENT, button_color=T.TEXT, height=20,
             command=self._save_toggles)
         self.auto_preview.select() if self.cfg.auto_preview else self.auto_preview.deselect()
-        self.auto_preview.pack(anchor="w", pady=(2, 6))
+        self.auto_preview.pack(anchor="w", pady=(0, 6))
         self.reencode = ctk.CTkSwitch(
             toggles, text="Re-encode files that already exist", font=font(11),
             text_color=T.DIM, progress_color=T.ACCENT, button_color=T.TEXT,
             height=20, command=self._scan)
         self.reencode.pack(anchor="w")
 
-        watch_col = ctk.CTkFrame(controls, fg_color="transparent")
-        watch_col.grid(row=0, column=2, sticky="w", padx=0, pady=13)
+        # The third switch, stacked with the other two. It had a column of
+        # its own with a two-line caption, which left it jammed against
+        # Scan folders with no gap at 125% - the row was out of room.
+        watch_row = ctk.CTkFrame(toggles, fg_color="transparent")
+        watch_row.pack(anchor="w", pady=(6, 0))
         self.watch_switch = ctk.CTkSwitch(
-            watch_col, text="Watch mode", font=font(11), text_color=T.DIM,
+            watch_row, text="Watch mode", font=font(11), text_color=T.DIM,
             progress_color=T.OK, button_color=T.TEXT, height=20,
             command=self._toggle_watch)
-        self.watch_switch.pack(anchor="w", pady=(2, 2))
-        ctk.CTkLabel(watch_col, text="Converts new files as they\nfinish downloading",
-                     font=font(9), text_color=T.FAINT, justify="left"
-                     ).pack(anchor="w")
+        self.watch_switch.pack(side="left")
+        ctk.CTkLabel(watch_row, text="converts new downloads as they land",
+                     font=font(9), text_color=T.FAINT
+                     ).pack(side="left", padx=(8, 0))
 
         buttons = ctk.CTkFrame(controls, fg_color="transparent")
         buttons.grid(row=0, column=3, sticky="e", padx=(0, 14), pady=13)
@@ -333,12 +336,39 @@ class ConvertTab(ctk.CTkFrame):
         # directly act on).
         actions = ctk.CTkFrame(panel, fg_color="transparent")
         actions.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 14))
+        actions.grid_columnconfigure(0, weight=1)
+        # The queue clusters on the left, the whole-library tools on the
+        # right - and when the panel is too narrow for both on one line
+        # (1.25x scaling on a 1440p screen is enough), the tools drop to a
+        # second line. Packed into one row they didn't: pack squeezed the
+        # last one in, and "Find upscale gaps (938)" came out "scale ga".
+        lead = ctk.CTkFrame(actions, fg_color="transparent")
+        lead.grid(row=0, column=0, sticky="w")
+        tools = ctk.CTkFrame(actions, fg_color="transparent")
+        tools.grid(row=0, column=1, sticky="e")
+        self._actions_wrapped = False
+
+        def place_tools(_event=None):
+            room = actions.winfo_width()
+            if room <= 1:
+                return
+            wrap = lead.winfo_reqwidth() + tools.winfo_reqwidth() + 14 > room
+            if wrap != self._actions_wrapped:
+                self._actions_wrapped = wrap
+                if wrap:
+                    tools.grid(row=1, column=0, columnspan=2, sticky="e", pady=(7, 0))
+                else:
+                    tools.grid(row=0, column=1, columnspan=1, sticky="e", pady=0)
+
+        actions.bind("<Configure>", place_tools, add="+")
+        # The gaps button grows when its count arrives, after the last resize.
+        tools.bind("<Configure>", place_tools, add="+")
 
         def divider(parent):
             ctk.CTkFrame(parent, fg_color=T.LINE, width=1, height=22
                         ).pack(side="left", padx=8)
 
-        row_cluster = ctk.CTkFrame(actions, fg_color="transparent")
+        row_cluster = ctk.CTkFrame(lead, fg_color="transparent")
         row_cluster.pack(side="left")
         self.row_buttons = []
         for text, command in (("Play file", self._play),
@@ -350,38 +380,33 @@ class ConvertTab(ctk.CTkFrame):
             button.pack(side="left", padx=(0, 7))
             self.row_buttons.append(button)
 
-        divider(actions)
+        divider(lead)
 
-        maintenance = ctk.CTkFrame(actions, fg_color="transparent")
+        maintenance = ctk.CTkFrame(lead, fg_color="transparent")
         maintenance.pack(side="left")
-        ctk.CTkButton(maintenance, text="Retry failures", height=30, corner_radius=7,
-                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                     text_color=T.DIM, width=110, command=self._retry
-                     ).pack(side="left", padx=(0, 7))
-        ctk.CTkButton(maintenance, text="Export report", height=30, corner_radius=7,
-                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                     text_color=T.DIM, width=110, command=self._export
-                     ).pack(side="left", padx=(0, 7))
         self.e621_btn = ctk.CTkButton(
             maintenance, text="Fetch e621 tags", height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.ACCENT, width=130, command=self._fetch_e621)
-        self.e621_btn.pack(side="left")
-
-        self.dupes_btn = ctk.CTkButton(
-            actions, text="Find duplicates", height=30, corner_radius=7,
+        self.e621_btn.pack(side="left", padx=(0, 7))
+        # The occasional ones, behind one button. Eight buttons did not fit
+        # one row at 125%, and the row wrapping onto two read as clutter
+        # for the sake of things reached for once a week.
+        self.more_btn = ctk.CTkButton(
+            maintenance, text="More ▾", height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT2, width=140, command=self._duplicates)
-        self.dupes_btn.pack(side="right", padx=(7, 0))
+            text_color=T.DIM, width=78, command=self._more_menu)
+        self.more_btn.pack(side="left")
+
         self.promote_btn = ctk.CTkButton(
-            actions, text="Promote upscales", height=30, corner_radius=7,
+            tools, text="Promote upscales", height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.ACCENT2, width=150, command=self._promote)
         self.promote_btn.pack(side="right", padx=(7, 0))
         # Measured so the button can grow when a count is appended.
         self._btn_font = tkfont.Font(family=T.UI, size=11)
         self.gaps_btn = ctk.CTkButton(
-            actions, text="Find upscale gaps", height=30, corner_radius=7,
+            tools, text="Find upscale gaps", height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.WARN, width=150, command=self._find_gaps)
         self.gaps_btn.pack(side="right", padx=(7, 0))
@@ -497,7 +522,6 @@ class ConvertTab(ctk.CTkFrame):
             self.pause_btn.configure(text=self.F("pause"))
         self.watch_switch.configure(text=self.F("watch"))
         self.promote_btn.configure(text=self.F("promote"))
-        self.dupes_btn.configure(text=self.F("dupes"))
         self.gaps_btn.configure(text=self.F("gaps"))
         self.e621_btn.configure(text=self.F("fetch_tags"))
         self.inspector_head.configure(text=self.F("inspector"))
@@ -1661,6 +1685,19 @@ class ConvertTab(ctk.CTkFrame):
             self.table.set_row(task.iid, state="queued", dest="--")
         self._refresh_counts()
 
+    def _more_menu(self) -> None:
+        menu = popup_menu(self)
+        menu.add_command(label="Retry failures", command=self._retry)
+        menu.add_command(label="Export report…", command=self._export)
+        menu_rule(menu)
+        menu.add_command(label=self.F("dupes") + "…", command=self._duplicates)
+        button = self.more_btn
+        try:
+            menu.tk_popup(button.winfo_rootx(),
+                          button.winfo_rooty() + button.winfo_height() + 2)
+        finally:
+            menu.grab_release()
+
     def _retry(self):
         if self.processing:
             return
@@ -1715,4 +1752,12 @@ class ConvertTab(ctk.CTkFrame):
                 return False
             self.cancel.set()
             time.sleep(0.3)
+        # The preview's mpv draws into our window - shut it down, rather
+        # than leave the window's destruction to take it down "usually".
+        shutdown = getattr(self.preview.player_engine, "shutdown", None)
+        if shutdown is not None:
+            try:
+                shutdown()
+            except Exception:
+                pass
         return True

@@ -21,6 +21,7 @@ the old ffplay path, out of sync but working.
 
 from __future__ import annotations
 
+import collections
 import importlib.util
 import subprocess
 import threading
@@ -37,6 +38,9 @@ BYTES_PER_FRAME = CHANNELS * 4
 # Frames per write. ~21 ms - small enough that a pause or a seek stops the
 # sound promptly, large enough not to spend all day in Python.
 BLOCK = 1024
+# How far back position() looks for the write that left the device's
+# buffer full. Several bursts' worth, short enough to follow a stall.
+ANCHOR_WINDOW = 0.5
 
 
 # Whether we can really drive a device is settled once, on a thread, and
@@ -157,6 +161,9 @@ class AudioTrack:
         self._written = 0            # audio frames handed to the device
         self._latency = 0.0          # seconds of them not yet heard
         self._started_at = None      # when the first block went out
+        # (when, heard-minus-when) after each write - see position().
+        self._anchors: collections.deque = collections.deque()
+        self._last_heard = 0.0
         self._failed = False
         self._ended = False
         self._stop = threading.Event()
@@ -180,8 +187,13 @@ class AudioTrack:
             # Before -i, so ffmpeg seeks rather than decodes and discards.
             cmd += ["-ss", f"{self.start:.3f}"]
         cmd += ["-i", self.path, "-vn", "-sn", "-dn"]
+        # first_pts=0 pads (or trims) the start to the file's own zero, the
+        # same zero the picture is pinned to - see player_engine._spawn.
+        # Before tempo, which would otherwise stretch the padding too.
+        filters = ["aresample=first_pts=0"]
         if abs(self.speed - 1.0) > 0.01:
-            cmd += ["-af", _atempo(self.speed)]
+            filters.append(_atempo(self.speed))
+        cmd += ["-af", ",".join(filters)]
         cmd += ["-f", "f32le", "-acodec", "pcm_f32le",
                 "-ac", str(CHANNELS), "-ar", str(RATE), "pipe:1"]
         try:
@@ -218,10 +230,15 @@ class AudioTrack:
                 if self._stop.is_set():
                     break
                 self._stream.write(block)
+                now = time.monotonic()
                 with self._lock:
                     self._written += block.shape[0]
                     if self._started_at is None:
-                        self._started_at = time.monotonic()
+                        self._started_at = now
+                    anchors = self._anchors
+                    anchors.append((now, self._written / RATE - self._latency - now))
+                    while len(anchors) > 1 and now - anchors[0][0] > ANCHOR_WINDOW:
+                        anchors.popleft()
         except Exception:
             pass
         finally:
@@ -271,17 +288,29 @@ class AudioTrack:
             return None
         with self._lock:
             written, started = self._written, self._started_at
-        if started is None:
+            offset = max(o for _, o in self._anchors) if self._anchors else None
+        if started is None or offset is None:
             if time.monotonic() - self._opened > self.START_TIMEOUT:
                 self._failed = True
             return None
-        # Written minus what is still sitting in the device's buffer. In
-        # steady state the buffer is full, because write() blocks until
-        # there is room for the next block - so the reported latency is a
-        # good measure of the audio we have handed over but not yet heard.
-        heard = (written / RATE) - self._latency
-        if heard < 0.0:
-            heard = 0.0
+        # Written minus what is still sitting in the device's buffer is
+        # only true the moment a write returns with the buffer full. In
+        # between, the sound carries on and that number does not: Windows
+        # takes the audio two blocks at a time, so it moved in 43ms jumps
+        # every 40ms. The picture, paced to it, could only change when the
+        # clock did - 23 frames a second, whatever the clip, and on
+        # average 20ms behind the sound.
+        #
+        # So run it on the wall clock from the best recent anchor. Within
+        # a burst of writes the buffer is still filling and the estimate
+        # reads low; the write that ends a burst leaves it full and reads
+        # true - and that is the largest heard-minus-time, so the max over
+        # the last half second is the one to trust. Never past what has
+        # actually been handed over, and never backwards.
+        heard = time.monotonic() + offset
+        heard = min(heard, written / RATE)
+        heard = max(heard, self._last_heard, 0.0)
+        self._last_heard = heard
         return self.start + heard * self.speed
 
     @property

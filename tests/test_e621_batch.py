@@ -39,6 +39,7 @@ def meta(tmp_path, monkeypatch):
     monkeypatch.setattr(e621, "CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(e621, "E621_META_PATH", str(tmp_path / "meta.json"))
     monkeypatch.setattr(e621, "E621_META_LOG", str(tmp_path / "meta.log"))
+    monkeypatch.setattr(e621, "E621_DB_PATH", str(tmp_path / "meta.sqlite3"))
     made = e621.E621Meta()
     made.wait_until_read()
     return made

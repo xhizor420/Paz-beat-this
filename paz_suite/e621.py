@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -19,7 +20,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from .config import CONFIG_DIR, E621_META_LOG, E621_META_PATH
+from .config import CONFIG_DIR, E621_DB_PATH, E621_META_LOG, E621_META_PATH
 
 APP_NAME = "PAZ Suite"
 # Still finding its edges - Resolve, the beat models and the
@@ -121,6 +122,13 @@ class E621Meta:
     A post that 404s (or is hidden from anonymous users) is cached as
     {"missing": True} so it is not retried every run; transient network
     errors are NOT cached.
+
+    Held in memory, kept in SQLite - one row per post. It used to be one
+    JSON file rewritten whole on every save: 16MB for ten thousand posts,
+    growing with the library, plus a journal of posts fetched since the
+    last rewrite so an interrupted run lost nothing. Now a save writes the
+    posts that changed and nothing else, in one transaction - which is
+    also the crash safety the journal was there to provide.
     """
 
     def __init__(self):
@@ -136,8 +144,9 @@ class E621Meta:
         # itself over the real one: the test had moved the globals,
         # the thread wrote after the test put them back. An object's file
         # should not be able to change underneath it.
-        self._path = E621_META_PATH
-        self._log = E621_META_LOG
+        self._db = E621_DB_PATH
+        self._path = E621_META_PATH     # the old JSON - imported once
+        self._log = E621_META_LOG       # and its journal
         self._dir = CONFIG_DIR
         # Many posts per call until e621 shows it will not do that - see
         # fetch_many. For this run of the program; the next one tries
@@ -159,7 +168,65 @@ class E621Meta:
         self._ready = threading.Event()
         threading.Thread(target=self._read_cache, daemon=True).start()
 
+    def _connect(self) -> sqlite3.Connection:
+        os.makedirs(self._dir, exist_ok=True)
+        conn = sqlite3.connect(self._db, timeout=15.0)
+        # WAL: a save never blocks a reader, and a crash mid-save leaves
+        # the last committed state intact.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("CREATE TABLE IF NOT EXISTS posts ("
+                     "pid TEXT PRIMARY KEY, rec TEXT NOT NULL)")
+        return conn
+
     def _read_cache(self) -> None:
+        data: dict = {}
+        try:
+            conn = self._connect()
+            try:
+                rows = conn.execute("SELECT pid, rec FROM posts").fetchall()
+                if rows:
+                    for pid, text in rows:
+                        try:
+                            record = json.loads(text)
+                        except ValueError:
+                            continue
+                        if isinstance(record, dict):
+                            data[pid] = record
+                else:
+                    # First run on the database: bring the old JSON cache
+                    # (and any journal an interrupted run left) across in
+                    # one transaction. The JSON is left where it is - it
+                    # is never written again, and it is a backup as it
+                    # stands - but the journal is folded in, so it goes.
+                    data = self._import_legacy()
+                    if data:
+                        with conn:
+                            conn.executemany(
+                                "INSERT OR REPLACE INTO posts (pid, rec) VALUES (?, ?)",
+                                [(pid, json.dumps(rec)) for pid, rec in data.items()])
+                        try:
+                            os.remove(self._log)
+                        except OSError:
+                            pass
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            # A database that will not open must not cost the tags: work
+            # from the old files in memory for this session.
+            data = self._import_legacy()
+        with self._lock:
+            # Merged, not assigned. fetch() deliberately does not wait
+            # for this read - it is a network call, and blocking one on a
+            # disk read would be backwards - so a record could already
+            # be in memory by the time the stored ones arrive. What was
+            # just fetched is newer, so it wins.
+            data.update(self._data)
+            self._data = data
+        self._ready.set()
+
+    def _import_legacy(self) -> dict:
+        """The old JSON cache, with its journal folded in."""
         try:
             with open(self._path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -167,23 +234,8 @@ class E621Meta:
             data = {}
         if not isinstance(data, dict):
             data = {}
-        with self._lock:
-            # Merged, not assigned. fetch() deliberately does not wait
-            # for this read - it is a network call, and blocking one on a
-            # disk parse would be backwards - so a record could already
-            # be in memory by the time the file arrives. What was just
-            # fetched is newer than what is on disk, so it wins.
-            data.update(self._data)
-            self._data = data
-        if self._replay_log():
-            # A previous run was interrupted mid-fetch. Fold its journal
-            # back into the cache and start clean. Done before anyone is
-            # let in, so nobody ever sees the cache without the journal
-            # already folded into it - and it only happens after a run
-            # that was cut short, not on an ordinary launch.
-            self._dirty = True
-            self._write_cache()
-        self._ready.set()
+        self._replay_log(data)
+        return data
 
     def wait_until_read(self, timeout: float = 60.0) -> bool:
         """Block until the cache is in memory. True if it got there.
@@ -217,67 +269,55 @@ class E621Meta:
             return dict(self._data)
 
     def save(self) -> None:
-        """Rewrite the whole cache. Use at shutdown and at the end of a
-        fetch - see checkpoint() for the one to call during it.
+        """Write the posts that changed. At shutdown and at the end of a
+        fetch; checkpoint() is the same thing during one.
 
-        Waits for the read first: writing what is in memory before the
-        file has been read into it would put an empty cache over ten
-        thousand posts.
+        Waits for the read first. With the old JSON file that was what
+        kept an empty cache from being written over ten thousand posts;
+        here it is what lets the first run's import happen before anything
+        is written beside it.
         """
         self._ready.wait(60.0)
-        self._write_cache()
-
-    def _write_cache(self) -> None:
-        """The write itself, without waiting for the read. Called by
-        save(), which waits, and by the reader thread once it has folded
-        in a journal - where waiting would be waiting on itself."""
-        with self._lock:
-            if not self._dirty:
-                return
-            data = dict(self._data)
-            self._dirty = False
-            self._pending.clear()
-        try:
-            os.makedirs(self._dir, exist_ok=True)
-            tmp = self._path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
-            os.replace(tmp, self._path)
-        except OSError:
-            return
-        try:
-            os.remove(self._log)
-        except OSError:
-            pass
+        self._flush()
 
     def checkpoint(self) -> None:
         """Put the posts fetched since the last checkpoint somewhere safe.
 
         Tagging a whole library is thousands of posts over hours, and it
-        has to survive being interrupted - but a full rewrite to bank ten
-        new posts means writing the other ten thousand as well. On this
-        library that is seven and a half megabytes and an eighth of a
-        second, over a thousand times in one run: eight gigabytes of
-        writes and two minutes of CPU to save work that would fit in a
-        few kilobytes. So the checkpoint appends the new records to a
-        journal instead, and the next full save folds them in.
+        has to survive being interrupted. Each checkpoint is one small
+        transaction holding just the new posts - a few kilobytes, not the
+        whole cache - and once it commits, those posts survive anything.
         """
+        self._ready.wait(60.0)
+        self._flush()
+
+    def _flush(self) -> None:
         with self._lock:
-            rows = [(pid, self._data[pid]) for pid in sorted(self._pending)
+            rows = [(pid, json.dumps(self._data[pid])) for pid in sorted(self._pending)
                     if pid in self._data]
+            pids = set(self._pending)
             self._pending.clear()
+            self._dirty = False
         if not rows:
             return
         try:
-            os.makedirs(self._dir, exist_ok=True)
-            with open(self._log, "a", encoding="utf-8") as fh:
-                for pid, record in rows:
-                    fh.write(json.dumps({"pid": pid, "rec": record}) + "\n")
-        except OSError:
-            pass
+            conn = self._connect()
+            try:
+                with conn:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO posts (pid, rec) VALUES (?, ?)", rows)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            # Not written: keep them pending for the next save, rather
+            # than believing they are on disk.
+            with self._lock:
+                self._pending |= pids
+                self._dirty = True
 
-    def _replay_log(self) -> int:
-        """Apply a journal left by an interrupted run. Returns how many."""
+    def _replay_log(self, data: dict) -> int:
+        """Apply the old journal - posts fetched after the JSON's last
+        rewrite - to `data`. Returns how many."""
         count = 0
         try:
             with open(self._log, "r", encoding="utf-8") as fh:
@@ -291,7 +331,7 @@ class E621Meta:
                         continue        # a half-written last line
                     pid = row.get("pid")
                     if isinstance(pid, str) and isinstance(row.get("rec"), dict):
-                        self._data[pid] = row["rec"]
+                        data[pid] = row["rec"]
                         count += 1
         except OSError:
             return 0

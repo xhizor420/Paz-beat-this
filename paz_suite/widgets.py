@@ -102,14 +102,19 @@ class Bar(ctk.CTkFrame):
         self._track.grid_propagate(False)
         self._fill = ctk.CTkFrame(self._track, fg_color=color, height=height,
                                    corner_radius=height // 2)
-        self._fill.place(x=0, y=0, relheight=1.0, relwidth=0)
 
     def set(self, fraction: float, color: str | None = None) -> None:
         if color and color != self._color:
             self._color = color
             self._fill.configure(fg_color=color)
-        self._fill.place(x=0, y=0, relheight=1.0,
-                          relwidth=max(0.0, min(float(fraction), 1.0)))
+        fraction = max(0.0, min(float(fraction), 1.0))
+        if fraction <= 0.0:
+            # Not drawn at all. A rounded fill has a minimum width of its
+            # two corners, so an empty bar showed a dot of colour at its
+            # left end - an idle Convert tab looked mid-encode.
+            self._fill.place_forget()
+            return
+        self._fill.place(x=0, y=0, relheight=1.0, relwidth=fraction)
 
     def reset(self) -> None:
         self.set(0)
@@ -338,16 +343,26 @@ class Toaster:
 
 
 class JobPanel(ctk.CTkFrame):
-    """Live rows for whatever is encoding right now, one per worker."""
+    """Live rows for whatever is encoding right now, one per worker.
+
+    Only on screen while there is something to show. It used to sit there
+    between runs as a full-width card reading "Idle" - the same word the
+    status pill in the tab's header already says - taking room from the
+    queue table (Convert) and the log (Beat This) below it. grid_remove()
+    keeps the place it was gridded into, so it comes back to exactly
+    that spot when a job starts.
+    """
 
     def __init__(self, parent, **kw):
         super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
                           border_width=1, border_color=T.LINE, **kw)
         self.grid_columnconfigure(0, weight=1)
         self._rows: dict = {}
-        self.idle = ctk.CTkLabel(self, text="Idle", font=font(11),
-                                  text_color=T.FAINT, anchor="w")
-        self.idle.grid(row=0, column=0, sticky="ew", padx=14, pady=12)
+
+    def grid(self, **kw):
+        super().grid(**kw)
+        if not self._rows:
+            self.grid_remove()
 
     def _next_row(self) -> int:
         return len(self._rows) + 1
@@ -355,7 +370,6 @@ class JobPanel(ctk.CTkFrame):
     def start(self, job_id: str, name: str) -> None:
         if job_id in self._rows:
             self.finish(job_id)
-        self.idle.grid_remove()
 
         holder = ctk.CTkFrame(self, fg_color="transparent")
         holder.grid(row=self._next_row(), column=0, sticky="ew", padx=14, pady=(9, 3))
@@ -372,6 +386,7 @@ class JobPanel(ctk.CTkFrame):
         bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 6))
 
         self._rows[job_id] = {"holder": holder, "bar": bar, "readout": readout}
+        super().grid()
 
     def set_progress(self, job_id: str, fraction: float, text: str,
                       color: str = T.ACCENT) -> None:
@@ -386,7 +401,7 @@ class JobPanel(ctk.CTkFrame):
         if row:
             row["holder"].destroy()
         if not self._rows:
-            self.idle.grid()
+            self.grid_remove()
 
     def clear(self) -> None:
         for job_id in list(self._rows):

@@ -186,10 +186,8 @@ def test_the_candidate_set_finds_the_true_widest_glyph():
     of printable ASCII, for whatever fonts this machine has."""
     tkfont = pytest.importorskip("tkinter.font")
     tk = pytest.importorskip("tkinter")
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display")
+    from conftest import make_root
+    root = make_root(tk.Tk)
     try:
         printable = [c for c in string.printable if c.isprintable()]
         checked = 0

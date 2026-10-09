@@ -56,20 +56,30 @@ itself. Only exclude that folder, not your video library.
 The tests run on Windows on every push (the **Windows tests** workflow
 under the repository's Actions tab).
 
-**For playback, install VLC.** The player uses the best backend it finds,
-in this order:
+**For playback, install libmpv.** The player uses the best backend it
+finds, in this order:
 
 | | needs | sound against picture |
 |---|---|---|
+| libmpv | `libmpv-2.dll` + `python-mpv` | locked - mpv keeps one clock |
 | VLC | [VLC](https://videolan.org) + `python-vlc` | locked - VLC keeps one clock |
 | mpv | `mpv` on PATH | locked |
 | built-in | ffmpeg + `sounddevice` | locked - see below |
 | built-in | ffmpeg alone | drifts; adjustable by hand |
 
-VLC is the one to have. It is loaded into the program rather than run
-beside it, so unlike mpv there is no connection between the two that can
-fail to open - which is what makes it dependable on Windows. `python-vlc`
-comes with `requirements.txt`; VLC itself is a normal install.
+libmpv is the one to have: mpv's own engine, loaded into the program. On
+this library a new clip is on screen in about a tenth of a second (VLC
+took 0.3-0.5s, longer off a busy drive), everything decodes on the GPU
+including AV1 4K60, and nothing drops at 4K60. Like VLC it is in-process,
+so there is no connection between the two that can fail to open - the
+weak point of the older mpv backend, which runs mpv.exe beside the app.
+
+`python-mpv` comes with `requirements.txt`. The DLL comes from a Windows
+build of mpv's library - the `mpv-dev-x86_64-….7z` archives at
+[shinchiro/mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases)
+(the builds mpv.io links to). Put `libmpv-2.dll` from it in
+`%LOCALAPPDATA%\PAZ Suite\mpv\`, or point `PAZ_LIBMPV_DIR` at its folder.
+Without it the player falls back to VLC, then the others, by itself.
 
 The built-in player used to decode video with ffmpeg and play sound with a
 separate ffplay - two processes with no clock between them, so sound sat a
@@ -230,13 +240,20 @@ main.py                     entry point
 paz_suite/
   config.py                 AppConfig (+ legacy migration)
   theme.py, format.py       palette/fonts, human-readable formatting
+  fonts/                    Space Grotesk, Bricolage Grotesque, JetBrains Mono
+                            (SIL OFL, licences beside them) - loaded for the
+                            app only at startup, nothing is installed
   uithread.py               safe hand-off from worker threads to the UI
   files.py                  proxy-folder filtering, post-ID parsing, open/reveal
-  e621.py                   e621 tag lookup + cache
+  e621.py                   e621 tag lookup + cache (~/.video_tool/e621_meta.sqlite3,
+                            one row per post; the old e621_meta.json is
+                            imported once and left as a backup)
   media.py                  ffprobe, thumbnailing, frame/storyboard cache, dhash
   player_engine.py          shared ffmpeg-decode + ffplay-audio playback engine
   audio_out.py              audio device output, and the clock the picture follows
+  libmpv_player.py          libmpv playback, in-process - the first choice
   vlc_player.py             libVLC playback, in-process, same surface as above
+  prefetch.py               reads the clips you are about to play into RAM
   mpv_player.py             mpv playback over a socket, same surface as above
   widgets.py                Card/Bar/StatTile/PeekWindow/Toaster/JobPanel/LogView
   convert_engine.py         encode planning + ffmpeg command/run/verify (no UI)

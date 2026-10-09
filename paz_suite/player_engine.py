@@ -49,6 +49,8 @@ HAS_FFPLAY = has_ffplay()
 # know. Whether the picture gets a real clock out of it is a different and
 # slower question - see ClipPlayer.synced.
 HAS_AUDIO = audio_out.bindings_present() or HAS_FFPLAY
+# Read buffer on the decoder's pipe - see _spawn.
+PIPE_BUFFER = 1 << 20
 
 
 def _reap(proc) -> None:
@@ -406,10 +408,16 @@ class ClipPlayer:
         # look like it froze or jumped.
         frame_queue: queue.Queue = queue.Queue(maxsize=self._queue_size(rate))
         self._queue = frame_queue
+        # start_time=0 pins frame one to the file's own zero. Without it
+        # the first frame out was simply the video stream's first frame,
+        # and the sound (decoded by a separate ffmpeg - see audio_out) was
+        # pinned to the audio stream's first sample: a file whose streams
+        # start apart played that far out of sync from 0:00 and on every
+        # loop. Measured: sound 279ms early on a 0.28s gap; 1ms with this.
         vf = (f"scale={self.view_w}:{self.view_h}:"
               f"force_original_aspect_ratio=decrease,"
               f"pad={self.view_w}:{self.view_h}:(ow-iw)/2:(oh-ih)/2,"
-              f"fps={rate:.3f}")
+              f"fps={rate:.3f}:start_time=0")
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
         # Decoding 4K on the CPU and pushing it through a pipe is the one
         # thing here that cannot keep up with 60fps on most machines - the
@@ -424,9 +432,17 @@ class ClipPlayer:
                 "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
         self._decoded = 0
         try:
+            # Buffered. Unbuffered (bufsize=0), a frame came through as a
+            # long run of small pipe reads, each a syscall plus a Python
+            # round trip - measured on Windows at 45 frames a second, 125
+            # MB/s, whatever the decoder could do. Below 60, so every 60fps
+            # clip slid further behind its own sound: a second adrift after
+            # ten seconds of 4K60. A 1MB buffer reads the same frames at
+            # over 600fps. read() still returns at EOF, so a stop or seek
+            # (which ends the process) still releases the reader promptly.
             self.proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                bufsize=0, creationflags=NO_WINDOW)
+                bufsize=PIPE_BUFFER, creationflags=NO_WINDOW)
         except OSError:
             self.proc = None
             self._fail("ffmpeg not found - install it and add it to PATH")

@@ -195,14 +195,16 @@ def import_clips(clips: list, bin_name: str = "") -> tuple:
     that happens the clip is still imported against the real file and the
     count is reported, rather than failing the whole import.
     """
-    project, problem = current_project()
-    if project is None:
-        return False, problem
-
+    # Missing files first: that is something the Library can fix, and it
+    # holds whether or not Resolve happens to be open.
     wanted = [(master, proxy) for master, proxy in clips
               if master and os.path.exists(master)]
     if not wanted:
         return False, "None of those files are where the library thinks they are."
+
+    project, problem = current_project()
+    if project is None:
+        return False, problem
 
     resolve, _ = connect()
     pool = project.GetMediaPool()

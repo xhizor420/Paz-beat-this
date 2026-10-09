@@ -124,7 +124,13 @@ def test_a_failing_callback_does_not_strand_the_rest(root):
 
     uithread.post(boom)
     uithread.post(seen.append, "after")
-    root.run_once()
+    # A few pumps, not one: printing the traceback can outlast a pump's
+    # time slice on a busy machine, and then "after" runs on the next one.
+    # What matters is that it runs at all.
+    for _ in range(5):
+        root.run_once()
+        if seen:
+            break
     assert seen == ["after"], "one bad callback stopped every other worker"
 
 
@@ -138,6 +144,28 @@ def test_a_flood_is_taken_in_slices(root):
     assert len(seen) == uithread.MAX_PER_PUMP
     root.run_once()
     assert len(seen) == uithread.MAX_PER_PUMP * 2
+
+
+def test_a_slice_is_bounded_in_time_not_only_in_count(root):
+    """200 gallery thumbnails at ~5ms each held the window for 180ms after
+    every page turn. However many are waiting, one pump gives the window
+    back within about SLICE_MS."""
+    seen = []
+
+    def slow(index):
+        time.sleep(0.005)
+        seen.append(index)
+
+    for index in range(40):
+        uithread.post(slow, index)
+    start = time.perf_counter()
+    root.run_once()
+    took = (time.perf_counter() - start) * 1000
+    assert 1 <= len(seen) < 40
+    assert took < uithread.SLICE_MS + 15, f"one pump held the window {took:.0f}ms"
+    while len(seen) < 40:
+        root.run_once()
+    assert seen == list(range(40)), "every one still runs, in order"
 
 
 def test_stopping_ends_the_pump(root):

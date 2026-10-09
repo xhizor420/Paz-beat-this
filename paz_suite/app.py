@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import tkinter as tk
 
 import customtkinter as ctk
@@ -27,7 +28,7 @@ from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
 from .watchdog import Watchdog
 from . import watchdog
-from . import artwork, audio_out, heap, uithread, vlc_player, winsys
+from . import artwork, audio_out, heap, libmpv_player, uithread, vlc_player, winsys
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
 
@@ -72,6 +73,12 @@ class PazApp:
         width = min(max(1760, int((room_w + 80) * 0.78)), room_w)
         height = min(max(1020, int((room_h + 120) * 0.82)), room_h)
         root.geometry(f"{width}x{height}")
+        # What was asked for, and when. The window is first shown at its
+        # minimum size and reaches this a moment later; tabs that lay
+        # themselves out to the window wait for it - see
+        # LibraryTab._window_ready.
+        self.requested_size = (width, height)
+        self.started_at = time.monotonic()
         # Every panel below (gallery columns, the inspector/player, the
         # queue table) already recalculates its own layout on resize, so
         # this is a floor for legibility, not a hard requirement - the
@@ -112,6 +119,11 @@ class PazApp:
         # would never get its first-look call. Give it one, after the
         # window is up rather than in the middle of building it.
         self.root.after(200, self._first_look)
+        # Hidden tabs are built in pauses in input - see _build_rest. Only
+        # a timestamp is kept per event, so watching every widget is free.
+        self._last_input = time.monotonic()
+        for sequence in ("<Motion>", "<KeyPress>", "<ButtonPress>", "<MouseWheel>"):
+            root.bind_all(sequence, self._note_input, add="+")
         self.root.after(700, self._build_rest)
 
         self._apply_chrome()
@@ -570,13 +582,31 @@ class PazApp:
         self._tabs[name] = tab
         return tab
 
+    # How long mouse and keyboard must have been still before a hidden tab
+    # is built. Each build holds the window for a few hundred milliseconds;
+    # done while you are using it, that was the hitching of the first few
+    # seconds after launch. Done in a pause, nobody is there to feel it,
+    # and the tabs are still usually ready before they are first opened.
+    IDLE_BEFORE_BUILD = 1.0
+
+    def _note_input(self, _event=None) -> None:
+        self._last_input = time.monotonic()
+
+    def _idle(self) -> bool:
+        return time.monotonic() - getattr(self, "_last_input", 0.0) >= self.IDLE_BEFORE_BUILD
+
     def _build_rest(self) -> None:
         """Build one not-yet-built tab, then come back for the next.
 
         One per callback rather than all three in a row: each is a few
         hundred milliseconds, and three of them together is the startup
-        stall this exists to remove - just moved later.
+        stall this exists to remove - just moved later. And only in a
+        pause in input - see IDLE_BEFORE_BUILD. A tab opened before its
+        turn is built on the spot by _tab_object, as it always was.
         """
+        if not self._idle():
+            self.root.after(250, self._build_rest)
+            return
         for name in TAB_NAMES:
             if name not in self._tabs:
                 # Announced, so the freeze log does not record a tab
@@ -612,6 +642,9 @@ class PazApp:
         """
         tv = self.tabview
         showing = tv.get()
+        if name != showing and not self._idle():
+            self.root.after(250, lambda: self._lay_out_early(name))
+            return
         if name != showing:
             watchdog.building(True)
             try:
@@ -877,6 +910,11 @@ def main() -> None:
     winsys.full_speed()
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
+    # The design's typefaces (Space Grotesk, Bricolage Grotesque, JetBrains
+    # Mono) ship in paz_suite/fonts and are loaded for this process only -
+    # nothing is installed. Before the root, so Tk sees them when
+    # resolve_fonts() asks what exists.
+    winsys.load_private_fonts(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts"))
     root = ctk.CTk()
     _ROOT_KEEP.append(root)
     # Needs the root to exist (it asks Tk what's installed) but must run
@@ -888,6 +926,7 @@ def main() -> None:
     # what loads the audio library, and on an unhappy machine that is slow
     # or worse. Nothing waits on the answer.
     audio_out.start_probe()
+    libmpv_player.start_load()
     vlc_player.start_load()
 
     # A hung window is the one failure that leaves no evidence - nothing

@@ -19,12 +19,125 @@ from tkinter import filedialog, ttk
 
 import customtkinter as ctk
 
-from .theme import T, font, px, pt, column_width, BEAT_LABELS, window_size
+from .theme import T, font, pt, px, column_width, BEAT_LABELS, table_style, window_size
 from .format import fmt_clock, fmt_len
 from . import beat_engine as be
 from . import uithread
 from .widgets import Card, StatTile, JobPanel, LogView
 from .media import probe
+
+
+# The marker colours as Resolve names them, as they look - so the grid
+# shows each beat in the colour it will land on the timeline in.
+RESOLVE_HEX = {"Blue": "#4DA3FF", "Cyan": "#4DD9E6", "Green": "#3FD96B",
+               "Yellow": "#FFD24D", "Red": "#FF5C6E", "Pink": "#FF6BB5",
+               "Purple": "#A46BFF"}
+
+
+class BeatGrid(Card):
+    """The whole song as a row of beats.
+
+    One bar per beat, placed at its time; a bar's height is how loud the
+    music is there, so a drop or a break is visible before reading a
+    single number. Downbeats stand taller. Colours are the marker colours
+    chosen for the export. Clicking it picks the nearest beat in the table.
+    """
+
+    PAD = 12
+
+    def __init__(self, parent, on_pick=None):
+        super().__init__(parent, title="Beat grid")
+        self.on_pick = on_pick
+        self.grid_rowconfigure(1, weight=1)
+        self._times = None
+        self._levels = None
+        self._down = None
+        self._duration = 0.0
+        self._colours = ("#A46BFF", "#FF5C6E")
+        self._names = ("beat", "downbeat")
+        self.canvas = tk.Canvas(self, bg=T.INPUT, highlightthickness=0, bd=0,
+                                height=px(110), cursor="hand2")
+        self.canvas.grid(row=1, column=0, sticky="nsew", padx=14, pady=(8, 4))
+        self.canvas.bind("<Configure>", lambda e: self._paint())
+        self.canvas.bind("<Button-1>", self._click)
+        self.summary = ctk.CTkLabel(self, text="", font=font(10, mono=True),
+                                    text_color=T.DIM, anchor="w")
+        self.summary.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 10))
+
+    def show(self, times, levels, downbeats, duration: float,
+             beat_colour: str, down_colour: str, summary: str = "") -> None:
+        import numpy as np
+        self._times = np.asarray(times, dtype=float)
+        self._levels = (np.asarray(levels, dtype=float) if levels is not None
+                        else np.full(len(self._times), 0.6))
+        self._down = np.asarray(downbeats, dtype=bool)
+        self._duration = max(float(duration), float(self._times[-1]) if len(self._times) else 0.0)
+        self._colours = (RESOLVE_HEX.get(beat_colour, T.ACCENT2),
+                         RESOLVE_HEX.get(down_colour, T.FAIL))
+        self._names = (beat_colour.lower(), down_colour.lower())
+        self.summary.configure(text=summary)
+        self._paint()
+
+    def clear(self) -> None:
+        self._times = None
+        self.summary.configure(text="")
+        self._paint()
+
+    # Not _draw: CustomTkinter frames have their own _draw, which they call
+    # with arguments of their own - overriding it broke the whole tab.
+    def _paint(self) -> None:
+        c = self.canvas
+        c.delete("all")
+        w, h = c.winfo_width(), c.winfo_height()
+        if w < 40 or h < 30:
+            return
+        pad = px(self.PAD)
+        scale_h = px(16)
+        floor = h - scale_h - px(6)
+        if self._times is None or not len(self._times) or self._duration <= 0:
+            c.create_text(w // 2, h // 2, text="Analyze a song to see its beats here",
+                          fill=T.FAINT, font=(T.UI, pt(11)))
+            return
+        span = w - 2 * pad
+        tall = floor - px(22)          # clear of the legend along the top
+        beat_col, down_col = self._colours
+        # Beats first, downbeats over them - a downbeat is also a beat.
+        for want_down in (False, True):
+            colour = down_col if want_down else beat_col
+            width = px(3) if want_down else max(px(2), 1)
+            for t, level, down in zip(self._times, self._levels, self._down):
+                if bool(down) != want_down:
+                    continue
+                x = pad + span * (t / self._duration)
+                bar = tall * (0.18 + 0.82 * float(level)) * (1.0 if down else 0.72)
+                c.create_line(x, floor, x, floor - bar, fill=colour, width=width,
+                              capstyle="round")
+        # Legend, top right, in the colours themselves.
+        x = w - pad
+        for colour, label in ((beat_col, f"{self._names[0]} beat"),
+                              (down_col, f"{self._names[1]} downbeat")):
+            item = c.create_text(x, px(9), text=label, fill=T.DIM,
+                                 font=(T.UI, pt(9)), anchor="e")
+            left = c.bbox(item)[0]
+            c.create_rectangle(left - px(12), px(5), left - px(4), px(13),
+                               fill=colour, outline="")
+            x = left - px(22)
+        # Time scale: five marks across the song.
+        for i in range(5):
+            t = self._duration * i / 4
+            x = pad + span * i / 4
+            anchor = "w" if i == 0 else ("e" if i == 4 else "center")
+            c.create_text(x, h - scale_h // 2 - px(2), text=fmt_clock(t).split(".")[0],
+                          fill=T.FAINT, font=(T.MONO, pt(9)), anchor=anchor)
+
+    def _click(self, event) -> None:
+        if self._times is None or not len(self._times) or not self.on_pick:
+            return
+        import numpy as np
+        pad = px(self.PAD)
+        span = max(self.canvas.winfo_width() - 2 * pad, 1)
+        t = max(0.0, min((event.x - pad) / span, 1.0)) * self._duration
+        self.on_pick(int(np.argmin(np.abs(self._times - t))))
 
 
 class BeatTab(ctk.CTkFrame):
@@ -39,6 +152,7 @@ class BeatTab(ctk.CTkFrame):
 
         self._audio_path = ""
         self._result = None
+        self._levels = None
         self._busy = False
         self._rows: dict = {}
         self._missing: list = []
@@ -122,7 +236,10 @@ class BeatTab(ctk.CTkFrame):
         panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
         panel.grid(row=1, column=0, sticky="nsew", padx=(14, 7), pady=14)
         panel.grid_columnconfigure(0, weight=1)
-        panel.grid_rowconfigure(5, weight=1)
+        # The beat grid is the point of this column once a song is in;
+        # the log is for when something needs explaining, so it gets less.
+        panel.grid_rowconfigure(5, weight=3)
+        panel.grid_rowconfigure(6, weight=1)
 
         self._build_setup(panel)
 
@@ -165,8 +282,11 @@ class BeatTab(ctk.CTkFrame):
         self.jobs = JobPanel(panel)
         self.jobs.grid(row=4, column=0, sticky="ew", pady=(0, 10))
 
+        self.beat_grid = BeatGrid(panel, on_pick=self._pick_beat)
+        self.beat_grid.grid(row=5, column=0, sticky="nsew", pady=(0, 10))
+
         self.logview = LogView(panel)
-        self.logview.grid(row=5, column=0, sticky="nsew")
+        self.logview.grid(row=6, column=0, sticky="nsew")
 
     # ── setup panel ──────────────────────────────────────────────────────
     #
@@ -381,23 +501,29 @@ class BeatTab(ctk.CTkFrame):
 
         ctk.CTkLabel(body, text="Frame rate", font=font(11), text_color=T.DIM
                      ).grid(row=0, column=0, sticky="w", padx=(0, 6), pady=4)
+        # The box and its "From video…" button share one frame in column 1.
+        # Gridded into the same cell (one sticky w, one sticky e) they
+        # overlapped whenever the column came out narrower than both - the
+        # button sat on top of the box's drop-down arrow.
+        fps_row = ctk.CTkFrame(body, fg_color="transparent")
+        fps_row.grid(row=0, column=1, sticky="w", pady=4)
         self.fps_box = ctk.CTkComboBox(
-            body, width=90, height=30, corner_radius=7, font=font(11),
+            fps_row, width=90, height=30, corner_radius=7, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=[str(f) for f in be.FRAME_RATES], state="readonly")
         self.fps_box.set(str(self.cfg.beat_fps) if self.cfg.beat_fps in be.FRAME_RATES
                          else "30.0")
-        self.fps_box.grid(row=0, column=1, sticky="w", pady=4)
+        self.fps_box.pack(side="left")
         # Getting this wrong is the one setting that silently ruins an
         # export - markers drift a little further from the beat with every
         # bar. Reading it off the footage removes the guess.
-        ctk.CTkButton(body, text="From video…", width=88, height=30,
+        ctk.CTkButton(fps_row, text="From video…", width=88, height=30,
                       corner_radius=7, font=font(10), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.DIM,
                       command=self._fps_from_video
-                      ).grid(row=0, column=1, sticky="e", padx=(0, 8), pady=4)
+                      ).pack(side="left", padx=(6, 8))
 
         ctk.CTkLabel(body, text="Beat colour", font=font(11), text_color=T.DIM
                      ).grid(row=0, column=2, sticky="w", padx=(16, 6), pady=4)
@@ -406,7 +532,8 @@ class BeatTab(ctk.CTkFrame):
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
-            text_color=T.TEXT, values=list(be.MARKER_COLORS), state="readonly")
+            text_color=T.TEXT, values=list(be.MARKER_COLORS), state="readonly",
+            command=lambda _v: self._refresh_grid())
         self.beat_color_box.set(self.cfg.beat_beat_color if self.cfg.beat_beat_color
                                 in be.MARKER_COLORS else "Blue")
         self.beat_color_box.grid(row=0, column=3, sticky="w", pady=4)
@@ -418,7 +545,8 @@ class BeatTab(ctk.CTkFrame):
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
-            text_color=T.TEXT, values=list(be.MARKER_COLORS), state="readonly")
+            text_color=T.TEXT, values=list(be.MARKER_COLORS), state="readonly",
+            command=lambda _v: self._refresh_grid())
         self.down_color_box.set(self.cfg.beat_downbeat_color
                                 if self.cfg.beat_downbeat_color in be.MARKER_COLORS
                                 else "Red")
@@ -475,25 +603,7 @@ class BeatTab(ctk.CTkFrame):
             ).grid(row=3, column=0, sticky="w", padx=14, pady=(0, 12))
 
     def _build_style(self) -> None:
-        style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        # ttk is raw Tk: CustomTkinter scales nothing here, so a bare
-        # rowheight and a bare point size are the literal numbers on
-        # screen at any display scaling. On a 4K screen at 150% the rows
-        # of this table stayed at their 100% size while every control
-        # around them grew.
-        style.configure("B.Treeview", background=T.ROW, fieldbackground=T.ROW,
-                        foreground=T.TEXT, rowheight=px(26), borderwidth=0,
-                        font=(T.UI, pt(10)))
-        style.configure("B.Treeview.Heading", background=T.ELEVATED, foreground=T.FAINT,
-                        relief="flat", borderwidth=0, font=(T.UI, pt(9), "bold"),
-                        padding=(px(8), px(7)))
-        style.map("B.Treeview.Heading", background=[("active", T.BTN_HOV)])
-        style.map("B.Treeview", background=[("selected", T.ROW_SEL)],
-                  foreground=[("selected", T.TEXT)])
+        table_style(self, "B.Treeview", 26)
 
     # ── status ──────────────────────────────────────────────────────────
 
@@ -593,7 +703,16 @@ class BeatTab(ctk.CTkFrame):
         except Exception as exc:
             self.ui(self._analyze_failed, str(exc))
             return
-        self.ui(self._analyze_done, result)
+        # How loud each beat is, for the grid's bar heights. A second
+        # decode of the song - about a second for a four-minute track, on
+        # this thread - and optional: without it the bars are level.
+        levels = None
+        try:
+            signal, rate = be.load_audio(path)
+            levels = be.beat_levels(signal, rate, result.beats)
+        except Exception:
+            pass
+        self.ui(self._analyze_done, result, levels)
 
     def _analyze_failed(self, message: str) -> None:
         self._busy = False
@@ -602,12 +721,13 @@ class BeatTab(ctk.CTkFrame):
         self.logview.write(f"Analysis failed: {message}", "fail")
         self.set_status("Analysis failed - see log.", T.FAIL)
 
-    def _analyze_done(self, result) -> None:
+    def _analyze_done(self, result, levels=None) -> None:
         self._busy = False
         self._refresh_setup()
         self.jobs.set_progress("analyze", 1.0, "done", T.OK)
         self.jobs.finish("analyze")
         self._result = result
+        self._levels = levels
         self._fill_results(self.markers)
         msg = self.F("analyze_done", n=len(result.beats), d=len(result.downbeats),
                      bpm=result.bpm)
@@ -638,6 +758,8 @@ class BeatTab(ctk.CTkFrame):
 
     def _clear_results(self) -> None:
         self._result = None
+        self._levels = None
+        self.beat_grid.clear()
         self.density_seg.set(be.DEFAULT_DENSITY)
         self.tree.delete(*self.tree.get_children())
         self.tile_bpm.set("--")
@@ -660,6 +782,31 @@ class BeatTab(ctk.CTkFrame):
             iid = f"b{index}"
             self.tree.insert("", "end", iid=iid, values=(
                 fmt_clock(float(time)), int(number), "Downbeat" if is_down else "Beat"))
+        self._refresh_grid(result)
+
+    def _refresh_grid(self, result=None) -> None:
+        """The beat grid, for the markers as currently spaced and coloured."""
+        result = result if result is not None else self.markers
+        if result is None:
+            return
+        levels = None
+        raw = getattr(self, "_levels", None)
+        if raw is not None and self._result is not None and len(self._result.beats):
+            import numpy as np
+            # Density adds or drops beats; their loudness is read off the
+            # analysed ones either side.
+            levels = np.interp(result.beats, self._result.beats, raw)
+        self.beat_grid.show(
+            result.beats, levels, result.is_downbeat, result.duration,
+            self.beat_color_box.get(), self.down_color_box.get(),
+            summary=f"{len(result.beats)} beats  ·  {len(result.downbeats)} downbeats"
+                    f"  ·  {result.bpm:.1f} BPM  ·  {fmt_len(result.duration)}")
+
+    def _pick_beat(self, index: int) -> None:
+        iid = f"b{index}"
+        if self.tree.exists(iid):
+            self.tree.selection_set(iid)
+            self.tree.see(iid)
 
     # ── export ──────────────────────────────────────────────────────────
 

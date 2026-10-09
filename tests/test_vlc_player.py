@@ -134,7 +134,7 @@ def test_a_moving_clock_is_not_a_stall(player):
     player.playing = True
     player._played_from = 0.0
     player._played_at = time.monotonic() - 99
-    player.position = 5.0
+    player._vlc_time = 5.0
     assert player.check_progress() == ""
 
 
@@ -143,8 +143,103 @@ def test_a_stopped_clock_is_reported(player):
     player.playing = True
     player._played_from = 0.0
     player._played_at = time.monotonic() - 99
-    player.position = 0.0
+    player._vlc_time = 0.0
     assert "VLC" in player.check_progress()
+
+
+def test_the_smoothed_playhead_cannot_hide_a_stall(player):
+    """position() coasts on between libVLC's reports by design. A stuck
+    picture must still be caught off libVLC's own clock."""
+    player.load("/clips/a.mp4", 12.0, 24.0)
+    player.playing = True
+    player._played_from = 0.0
+    player._played_at = time.monotonic() - 99
+    player._vlc_time = 0.0
+    player.position = 0.5
+    assert "VLC" in player.check_progress()
+
+
+# ── a smooth playhead from a stepping clock ─────────────────────────────
+
+class SteppingVlc:
+    """libVLC as seen from _tick: a clock that moves in coarse steps."""
+
+    def __init__(self, millis=0, moving=True):
+        self.millis = millis
+        self.moving = moving
+
+    def get_time(self):
+        return self.millis
+
+    def get_length(self):
+        return 12000
+
+    def is_playing(self):
+        return 1 if self.moving else 0
+
+    def set_time(self, millis):
+        pass                             # lands later, as the real one does
+
+
+def _ticking(player, millis):
+    player.load("/clips/a.mp4", 12.0, 60.0)
+    player.playing = True
+    player._played_at = time.monotonic()
+    player._player = SteppingVlc(millis)
+    return player._player
+
+
+def test_the_playhead_moves_between_vlc_steps(player):
+    """A clip with no sound reports time every 250ms. The seek bar
+    followed it in quarter-second lurches."""
+    vlc_side = _ticking(player, 2000)
+    player._tick()
+    player._vlc_at -= 0.1                # 100ms since libVLC last spoke
+    player._tick()
+    assert player.position == pytest.approx(2.1, abs=0.02)
+    assert player._vlc_time == pytest.approx(2.0)
+    vlc_side.millis = 2250
+    player._tick()
+    assert player.position == pytest.approx(2.25, abs=0.02)
+
+
+def test_the_playhead_does_not_coast_for_ever(player):
+    _ticking(player, 2000)
+    player._tick()
+    player._vlc_at -= 30.0
+    player._tick()
+    assert player.position == pytest.approx(2.0 + player.COAST, abs=0.02)
+
+
+def test_a_late_report_does_not_twitch_the_playhead_back(player):
+    vlc_side = _ticking(player, 2000)
+    player._tick()
+    player.position = 2.2
+    vlc_side.millis = 2150               # behind where it coasted to
+    player._tick()
+    assert player.position >= 2.2
+
+
+def test_a_loop_back_to_the_start_is_shown(player):
+    vlc_side = _ticking(player, 11500)
+    player._tick()
+    vlc_side.millis = 0
+    player._tick()
+    assert player.position < 0.1
+
+
+def test_after_a_seek_the_old_time_is_ignored(player):
+    """Otherwise the playhead jumps back for a moment after every click."""
+    vlc_side = _ticking(player, 2000)
+    player._tick()
+    player._apply(("seek", 8.0))
+    vlc_side.millis = 2050               # libVLC hasn't moved yet
+    player.position = 8.0
+    player._tick()
+    assert player.position == pytest.approx(8.0)
+    vlc_side.millis = 8000
+    player._tick()
+    assert player.position == pytest.approx(8.0, abs=0.05)
 
 
 def test_nothing_is_reported_while_paused(player):

@@ -74,8 +74,12 @@ class FakeTab:
         self.bumps = []
         self.scrolled = []
         self.picked = 0
+        self.autoplays = 0
 
     # -- the surroundings, stubbed -----------------------------------------
+    def _autoplay_soon(self):
+        self.autoplays += 1
+
     def set_status(self, text, colour=None):
         self.status.append(text)
 
@@ -329,6 +333,7 @@ def test_down_goes_to_the_next_clip():
     tab.selected = tab.records[1]
     tab.key_step_clip(Key(), 1)
     assert tab.selected is tab.records[2]
+    assert tab.autoplays == 1, "landing on a clip with Down should play it"
 
 
 def test_up_goes_to_the_previous_clip():

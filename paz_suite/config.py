@@ -22,11 +22,14 @@ CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".video_tool")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "paz_config.json")
 DB_PATH = os.path.join(CONFIG_DIR, "paz_library.sqlite3")
 THUMB_DIR = os.path.join(CONFIG_DIR, "paz_thumbs")
+# The e621 tag cache: one row per post. Saving writes only the posts that
+# changed - see E621Meta.
+E621_DB_PATH = os.path.join(CONFIG_DIR, "e621_meta.sqlite3")
+# Where the cache used to live: one JSON file rewritten whole on every
+# save, plus a journal of posts fetched since. Read once, into the
+# database, the first time the database is empty; then left alone as the
+# backup it already is.
 E621_META_PATH = os.path.join(CONFIG_DIR, "e621_meta.json")
-# Records fetched since the last full rewrite, one JSON object per line.
-# See E621Meta.checkpoint for why the cache is not rewritten whole every
-# ten posts. Folded back into E621_META_PATH and deleted on the next
-# full save, so it only exists mid-fetch or after a crash.
 E621_META_LOG = E621_META_PATH + ".log"
 
 # Legacy per-app files, from before the two tools were combined.
@@ -178,7 +181,7 @@ class AppConfig:
     # never uses mpv. mpv decodes on the GPU and keeps picture locked to
     # sound, which the built-in player cannot do - it drives a separate
     # ffplay with no clock between them.
-    player_backend: str = "auto"      # auto | vlc | mpv | builtin
+    player_backend: str = "auto"      # auto | libmpv | vlc | mpv | builtin
     # Built-in player only: how far ahead to start the audio, to cancel
     # ffplay's start-up delay. Positive if sound lags the picture. mpv
     # needs none of this - it has a real clock between the two.

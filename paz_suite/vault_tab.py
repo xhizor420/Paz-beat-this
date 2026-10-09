@@ -30,7 +30,7 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, px, pt, unscaled, column_width, VAULT_LABELS
+from .theme import T, font, px, pt, unscaled, column_width, table_style, VAULT_LABELS
 from .format import fmt_clock, fmt_short, fmt_size
 from .config import THUMB_DIR
 from .media import fit_frame, round_corners, thumb_key
@@ -224,23 +224,7 @@ class VaultTab(ctk.CTkFrame):
                       ).pack(side="left", padx=(10, 0))
 
     def _build_style(self) -> None:
-        style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        # ttk is raw Tk - see the same style in convert_widgets and
-        # beat_tab. None of these numbers were scaled, so the table sat
-        # at its 100% size on a display where everything else had grown.
-        style.configure("V.Treeview", background=T.ROW, fieldbackground=T.ROW,
-                        foreground=T.TEXT, rowheight=px(26), borderwidth=0,
-                        font=(T.UI, pt(10)))
-        style.configure("V.Treeview.Heading", background=T.ELEVATED, foreground=T.FAINT,
-                        relief="flat", borderwidth=0, font=(T.UI, pt(9), "bold"),
-                        padding=(px(8), px(7)))
-        style.map("V.Treeview.Heading", background=[("active", T.BTN_HOV)])
-        style.map("V.Treeview", background=[("selected", T.ROW_SEL)],
-                  foreground=[("selected", T.TEXT)])
+        table_style(self, "V.Treeview", 26)
 
     STRIP_W, STRIP_H = 112, 63
     STRIP_GAP = 6
@@ -255,11 +239,21 @@ class VaultTab(ctk.CTkFrame):
                      font=font(9, "bold"), text_color=T.FAINT, anchor="w"
                      ).grid(row=0, column=0, sticky="w", pady=(0, 4))
 
+        # The list sits in a box whose height is set from the number of
+        # projects (see _fit_projects_list) and is stretched to fill it.
+        # A CTkScrollableFrame ignores any height asked of it below the
+        # default of its own canvas - over 300px - so on its own it was a
+        # tall empty box over one project, however it was configured.
+        self._projects_box = ctk.CTkFrame(panel, fg_color="transparent",
+                                          height=self.PROJECT_ROW_H + 16)
+        self._projects_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        self._projects_box.grid_propagate(False)
+        self._projects_box.pack_propagate(False)
         self.projects_list = ctk.CTkScrollableFrame(
-            panel, fg_color=T.SURFACE, corner_radius=10, border_width=1,
-            border_color=T.ACCENT3_DEEP, height=118,
+            self._projects_box, fg_color=T.SURFACE, corner_radius=10, border_width=1,
+            border_color=T.ACCENT3_DEEP,
             scrollbar_button_color=T.LINE, scrollbar_button_hover_color=T.FAINT)
-        self.projects_list.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        self.projects_list.place(x=0, y=0, relwidth=1, relheight=1)
         self.projects_list.grid_columnconfigure(0, weight=1)
 
         head = ctk.CTkFrame(panel, fg_color="transparent")
@@ -629,6 +623,7 @@ class VaultTab(ctk.CTkFrame):
             conn.close()
 
         self.project_box.configure(values=[name for name, _c, _n, _t in projects])
+        self._fit_projects_list(len(projects))
 
         if not projects:
             ctk.CTkLabel(self.projects_list, text="No projects yet - mark some clips "
@@ -666,6 +661,19 @@ class VaultTab(ctk.CTkFrame):
             label.grid(row=0, column=1, sticky="ew", padx=(0, 6))
             label.bind("<Button-3>", lambda e, n=name: self._project_menu(e, n))
             self._project_widgets[name] = (line, swatch, label)
+
+    # The project list is as tall as its projects, up to this many rows,
+    # then it scrolls. A fixed height was a tall empty box over one or two
+    # projects, pushing the project's own clips and player down the tab.
+    PROJECT_ROWS_MAX = 6
+    PROJECT_ROW_H = 30
+
+    def _fit_projects_list(self, count: int) -> None:
+        rows = max(1, min(count, self.PROJECT_ROWS_MAX))
+        try:
+            self._projects_box.configure(height=rows * self.PROJECT_ROW_H + 16)
+        except (tk.TclError, ValueError):
+            pass
 
     COVER_W, COVER_H = 48, 27          # 16:9, sized to the row
 
@@ -1038,9 +1046,8 @@ class VaultTab(ctk.CTkFrame):
         self._run_lookup()
 
     def on_app_close(self) -> bool:
-        # mpv and VLC are separate processes embedded in our window.
-        # Killing the window usually takes them with it, but "usually" is
-        # not a shutdown.
+        # mpv (either kind) and VLC draw into our window. Killing the
+        # window usually takes them with it, but "usually" is not a shutdown.
         player = getattr(self, "player", None)
         shutdown = getattr(getattr(player, "engine", None), "shutdown", None)
         if shutdown is not None:
