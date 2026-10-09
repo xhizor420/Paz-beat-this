@@ -22,7 +22,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import customtkinter as ctk
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageTk
+from PIL import Image, ImageChops, ImageDraw, ImageTk
 
 
 class T:
@@ -144,8 +144,11 @@ class T:
     # (JetBrains Mono) for numbers, times and file names, and everything
     # else is the UI face (Space Grotesk).
     #
-    # Corners: 6 for small controls (24px and under), 7 for controls, 11
-    # for pills (half their 22px height), 12 for cards and panels.
+    # Two corner radii, on the 8 px grid. Everything else was a 7 or an
+    # 11 that sat one pixel off a pill or a control. Pills still take
+    # half their own height, which is a different kind of round.
+    R_SM = 6                 # buttons, fields, chips that aren't pills
+    R_LG = 12                # cards, panels, menus, the search box
 
 
 # The design canvas is set in Space Grotesk / Bricolage Grotesque /
@@ -648,44 +651,6 @@ def restyle(widget, **options) -> None:
         widget.configure(**changed)
 
 
-def mark_photo(size: int, color: str) -> "ImageTk.PhotoImage":
-    """The app's window/taskbar icon: a paw knocked out of a rounded tile
-    in the accent colour, with a soft bloom behind it so it reads as lit
-    rather than flat. Drawn 8x and downsampled for a clean edge at 16px.
-
-    A paw rather than the old plain square because at icon size the suite
-    needs to be recognisable in a taskbar full of other dark squares, and
-    because it says what this library is about without the icon having to
-    be something you would rather not have on a shared screen.
-    """
-    big = size * 8
-    tile = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(tile)
-    draw.rounded_rectangle((0, 0, big - 1, big - 1), radius=big * 0.28, fill=color)
-
-    # Bloom: a blurred copy of the tile under the crisp one, so the mark
-    # carries the same "glow" the rest of the palette is built on.
-    glow = tile.filter(ImageFilter.GaussianBlur(big * 0.06))
-    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    img.alpha_composite(glow)
-    img.alpha_composite(tile)
-
-    paw = ImageDraw.Draw(img)
-
-    def ellipse(cx: float, cy: float, w: float, h: float) -> None:
-        paw.ellipse((int((cx - w / 2) * big), int((cy - h / 2) * big),
-                     int((cx + w / 2) * big), int((cy + h / 2) * big)),
-                    fill=T.BG)
-
-    ellipse(0.50, 0.69, 0.46, 0.34)      # main pad
-    ellipse(0.235, 0.40, 0.16, 0.21)     # toes, outer pair sits lower
-    ellipse(0.415, 0.325, 0.16, 0.21)
-    ellipse(0.605, 0.325, 0.16, 0.21)
-    ellipse(0.785, 0.40, 0.16, 0.21)
-
-    return ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
-
-
 def lens_photo(size: int, color: str) -> "ImageTk.PhotoImage":
     """A magnifier for the search field.
 
@@ -898,8 +863,8 @@ LIBRARY_LABELS = {
     "indexing":   "Indexing",
     "synced":     "Library synced",
     "fetching":   "Fetching tags",
-    "empty_db":   ("No library yet. Press Sync to build it - the first "
-                    "build probes every file, later runs only touch changes."),
+    "empty_db":   ("Sync library in the ⋯ menu (or F5) builds it. The first build "
+                    "reads every file; later ones only touch what changed."),
     "no_results": "No clips match this search.",
 }
 

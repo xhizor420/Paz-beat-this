@@ -91,7 +91,7 @@ class ArtworkWindow(ctk.CTkToplevel):
                          wraplength=px(520)
                          ).grid(row=2, column=0, sticky="w", pady=(px(4), 0))
 
-        body = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=12,
+        body = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=T.R_LG,
                             border_width=1, border_color=T.LINE)
         body.grid(row=1, column=0, sticky="nsew", padx=px(16), pady=px(10))
         body.grid_columnconfigure(0, weight=1)
@@ -126,7 +126,7 @@ class ArtworkWindow(ctk.CTkToplevel):
         self.zoom_slider.set(self.zoom)
         self.zoom_slider.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(zoom_row, text="Reset", width=px(56), height=px(24),
-                      corner_radius=6, font=font(10), fg_color=T.BTN,
+                      corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.DIM,
                       command=self._reset_crop).pack(side="left", padx=(px(8), 0))
 
@@ -149,15 +149,15 @@ class ArtworkWindow(ctk.CTkToplevel):
         foot = ctk.CTkFrame(self, fg_color="transparent")
         foot.grid(row=2, column=0, sticky="ew", padx=px(16), pady=(0, px(14)))
         ctk.CTkButton(foot, text="Choose picture…", height=px(30),
-                      corner_radius=7, font=font(11), fg_color=T.BTN,
+                      corner_radius=T.R_SM, font=font(11), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.TEXT,
                       command=self._choose).pack(side="left")
         ctk.CTkButton(foot, text="Remove", height=px(30), width=px(80),
-                      corner_radius=7, font=font(11), fg_color=T.BTN,
+                      corner_radius=T.R_SM, font=font(11), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.FAINT,
                       command=self._remove).pack(side="left", padx=(px(8), 0))
         ctk.CTkButton(foot, text="Use it", height=px(30), width=px(96),
-                      corner_radius=7, font=font(11, "bold"),
+                      corner_radius=T.R_SM, font=font(11, "bold"),
                       fg_color=T.ACCENT2_DEEP, hover_color=T.BTN_HOV,
                       text_color=T.ACCENT2,
                       command=self._save).pack(side="right")

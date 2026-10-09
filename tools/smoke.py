@@ -19,6 +19,13 @@ import tempfile
 import threading
 import traceback
 
+for stream in (sys.stdout, sys.stderr):
+    # A traceback holding a "·" or "⋯" must not be what stops the report.
+    try:
+        stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
+
 OUT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "smoke-shots")
 HOME = tempfile.mkdtemp(prefix="paz-smoke-")
 # Before paz_suite is imported: CONFIG_DIR is worked out at import time.
@@ -54,11 +61,34 @@ def _blank(image) -> bool:
     return image.convert("RGB").resize((160, 90)).getcolors(12) is not None
 
 
+def _dialogs(root) -> list:
+    import tkinter as tk
+    return [w for w in root.winfo_children()
+            if isinstance(w, tk.Toplevel) and w.winfo_viewable()]
+
+
 def _grab(root, name: str) -> None:
     root.update_idletasks()
-    x, y = root.winfo_rootx(), root.winfo_rooty()
-    image = ImageGrab.grab(bbox=(x, y, x + root.winfo_width(), y + root.winfo_height()),
+    # A dialog that opened for this step is what gets photographed, and
+    # then closed so the next step starts from the main window.
+    dialogs = _dialogs(root)
+    window = dialogs[-1] if dialogs else root
+    if dialogs:
+        # The root is topmost while the run drives it, so a dialog opens
+        # underneath unless it is raised too.
+        window.attributes("-topmost", True)
+        window.lift()
+        window.update()
+        import time
+        time.sleep(0.4)
+    x, y = window.winfo_rootx(), window.winfo_rooty()
+    image = ImageGrab.grab(bbox=(x, y, x + window.winfo_width(), y + window.winfo_height()),
                            all_screens=True)
+    for dialog in dialogs:
+        try:
+            dialog.destroy()
+        except Exception:
+            pass
     path = os.path.join(OUT, f"{name}.png")
     image.save(path)
     shots.append(path)
@@ -74,6 +104,9 @@ def _drive(app) -> None:
     for tab in paz_app.TAB_NAMES:
         steps.append((lambda t=tab: app._select_tab(t), 2500, tab.replace(" ", "_")))
     steps.append((app._shortcuts, 1500, "Shortcuts"))
+    steps.append((app.open_settings, 2000, "Settings"))
+    from paz_suite.library_windows import HelpWindow
+    steps.append((lambda: HelpWindow(root), 1500, "Help"))
 
     def run(i: int = 0) -> None:
         if i:
@@ -115,7 +148,7 @@ def main() -> int:
         print("shot", path)
     for error in errors:
         print("ERROR", error, file=sys.stderr)
-    expected = len(paz_app.TAB_NAMES) + 1
+    expected = len(paz_app.TAB_NAMES) + 3
     if len(shots) != expected:
         print(f"smoke: {len(shots)} of {expected} screenshots taken", file=sys.stderr)
         return 1

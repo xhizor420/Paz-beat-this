@@ -18,7 +18,7 @@ from .theme import T, font, px, pt, column_width, table_style, window_size
 from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
-from .widgets import PeekWindow, draw_empty, popup_menu, tip
+from .widgets import PeekWindow, draw_empty, empty_overlay, popup_menu, tip
 from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback, joins_playback
 from .libmpv_player import LibMpvPlayer
 from . import icons, libmpv_player, uithread
@@ -68,7 +68,7 @@ class QueueTable(ctk.CTkFrame):
 
     def __init__(self, parent, on_select=None, on_activate=None, **kw):
         kw.setdefault("border_color", T.ACCENT_DEEP)
-        super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
+        super().__init__(parent, fg_color=T.SURFACE, corner_radius=T.R_LG,
                           border_width=1, **kw)
         self.on_select = on_select
         self.on_activate = on_activate
@@ -89,7 +89,7 @@ class QueueTable(ctk.CTkFrame):
 
         self.search = ctk.CTkEntry(
             bar, placeholder_text="Filter name, artist or tags", width=200, height=28,
-            font=font(11), corner_radius=6, fg_color=T.INPUT,
+            font=font(11), corner_radius=T.R_SM, fg_color=T.INPUT,
             border_color=T.LINE, border_width=1, text_color=T.TEXT)
         self.search.grid(row=0, column=0, sticky="w")
         self.search.bind("<KeyRelease>", self._on_search)
@@ -101,7 +101,7 @@ class QueueTable(ctk.CTkFrame):
         self.state_filter = ctk.CTkSegmentedButton(
             bar, values=["All", "Done", "Failed", "Queued"],
             command=self._on_state_filter, font=font(10), height=28,
-            corner_radius=6, fg_color=T.INPUT, selected_color=T.ACCENT_DEEP,
+            corner_radius=T.R_SM, fg_color=T.INPUT, selected_color=T.ACCENT_DEEP,
             selected_hover_color=T.ACCENT_DEEP, unselected_color=T.INPUT,
             unselected_hover_color=T.BTN_HOV, text_color=T.DIM, border_width=1)
         self.state_filter.grid(row=0, column=2, sticky="e")
@@ -114,6 +114,7 @@ class QueueTable(ctk.CTkFrame):
             self, style="Q.Treeview", columns=[c[0] for c in self.COLUMNS],
             show="tree headings", selectmode="browse")
         self.tree.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=(0, 10))
+        empty_overlay(self.tree, "check", "Nothing to convert  ·  Scan folders looks again")
 
         self._configure_tags()
         # Column widths are real pixels, like everything else ttk takes.
@@ -419,7 +420,7 @@ class ScrubPreview(ctk.CTkFrame):
     STRIP_COUNT_MIN = 6
 
     def __init__(self, parent, cache: ThumbCache, cfg, **kw):
-        super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
+        super().__init__(parent, fg_color=T.SURFACE, corner_radius=T.R_LG,
                           border_width=1, border_color=T.LINE, **kw)
         self.cache = cache
         self.cfg = cfg
@@ -508,11 +509,11 @@ class ScrubPreview(ctk.CTkFrame):
         footer.grid_columnconfigure(2, weight=1)
 
         transport = ctk.CTkFrame(footer, fg_color="transparent")
-        transport.grid(row=0, column=0, sticky="w", rowspan=2, padx=(0, 12))
+        transport.grid(row=0, column=0, sticky="w", padx=(0, 12))
 
         def tbtn(text, command, width=34, image=None, hint=""):
             button = ctk.CTkButton(
-                transport, text=text, width=width, height=26, corner_radius=6,
+                transport, text=text, width=width, height=26, corner_radius=T.R_SM,
                 font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                 text_color=T.DIM, image=image, compound="left", command=command)
             button.pack(side="left", padx=(0, 4))
@@ -534,7 +535,7 @@ class ScrubPreview(ctk.CTkFrame):
         volume_box.pack(side="left", padx=(8, 0))
         self.mute_btn = ctk.CTkButton(
             volume_box, text="", image=self._mute_icon(self.player_engine.muted),
-            width=28, height=26, corner_radius=6, font=font(11),
+            width=28, height=26, corner_radius=T.R_SM, font=font(11),
             fg_color="transparent", hover_color=T.BTN_HOV,
             state="normal" if HAS_AUDIO else "disabled",
             command=self._toggle_mute)
@@ -551,16 +552,18 @@ class ScrubPreview(ctk.CTkFrame):
             self.volume_slider.configure(state="disabled")
 
         self.meta = ctk.CTkLabel(footer, text="", font=font(10, mono=True),
-                                  text_color=T.DIM, anchor="w")
-        self.meta.grid(row=0, column=2, sticky="w")
+                                  text_color=T.DIM, anchor="w", height=18)
+        # Its own line under the transport. Beside it, the line ran under
+        # the Source / Output switch as soon as the column was narrow.
+        self.meta.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
         self.note = ctk.CTkLabel(footer, text="", font=font(10), text_color=T.FAIL,
-                                  anchor="w", justify="left", wraplength=380)
-        self.note.grid(row=1, column=2, columnspan=2, sticky="w", pady=(3, 0))
+                                  anchor="w", justify="left", wraplength=520, height=16)
+        self.note.grid(row=2, column=0, columnspan=4, sticky="w", pady=(3, 0))
 
         self.switch = ctk.CTkSegmentedButton(
             footer, values=["Source", "Output"], command=self._on_switch,
-            font=font(10), height=24, corner_radius=6,
+            font=font(10), height=24, corner_radius=T.R_SM,
             fg_color=T.INPUT, selected_color=T.ACCENT_DEEP,
             selected_hover_color=T.ACCENT_DEEP, unselected_color=T.INPUT,
             unselected_hover_color=T.BTN_HOV, text_color=T.DIM,
@@ -1376,7 +1379,7 @@ class DuplicateWindow(ctk.CTkToplevel):
         self.status.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
 
         self.body = ctk.CTkScrollableFrame(
-            self, fg_color=T.SURFACE, corner_radius=12,
+            self, fg_color=T.SURFACE, corner_radius=T.R_LG,
             scrollbar_button_color=T.LINE, scrollbar_button_hover_color=T.FAINT)
         self.body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
         self.body.grid_columnconfigure(0, weight=1)
@@ -1488,7 +1491,7 @@ class DuplicateWindow(ctk.CTkToplevel):
                  f"reclaimable", text_color=T.WARN)
 
         for row, group in enumerate(groups):
-            card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=7)
+            card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=T.R_SM)
             card.grid(row=row, column=0, sticky="ew", padx=8, pady=5)
             card.grid_columnconfigure(0, weight=1)
 
@@ -1500,7 +1503,7 @@ class DuplicateWindow(ctk.CTkToplevel):
 
             ctk.CTkButton(
                 card, text="Keep largest, delete rest", height=24, width=170,
-                corner_radius=6, font=font(10), fg_color=T.BTN,
+                corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
                 hover_color=T.FAIL_DEEP, text_color=T.DIM,
                 command=lambda g=group, b=best, c=card: self._cull(g, b, c)
             ).grid(row=0, column=1, padx=10, pady=(8, 2))
@@ -1516,7 +1519,7 @@ class DuplicateWindow(ctk.CTkToplevel):
                          f"{os.path.basename(path)}")
                 label.grid(row=line, column=0, sticky="w", padx=12)
                 ctk.CTkButton(
-                    card, text="Open", height=20, width=48, corner_radius=6,
+                    card, text="Open", height=20, width=48, corner_radius=T.R_SM,
                     font=font(9), fg_color=T.BTN, hover_color=T.BTN_HOV,
                     text_color=T.DIM,
                     command=lambda p=path: open_in_explorer(p)

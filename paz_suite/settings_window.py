@@ -39,7 +39,7 @@ class SettingsWindow(ctk.CTkToplevel):
             segmented_button_selected_hover_color=T.ACCENT_DEEP,
             segmented_button_unselected_color=T.INPUT,
             segmented_button_unselected_hover_color=T.BTN_HOV,
-            text_color=T.TEXT, corner_radius=12)
+            text_color=T.TEXT, corner_radius=T.R_LG)
         tabs.grid(row=0, column=0, sticky="nsew", padx=14, pady=(14, 8))
         for name in ("Convert Folders", "Encoding", "Sorting", "Library", "e621 & App"):
             tabs.add(name)
@@ -119,7 +119,7 @@ class SettingsWindow(ctk.CTkToplevel):
                              text_color=T.TEXT)
         entry.insert(0, getattr(self.cfg, key))
         entry.grid(row=row, column=1, sticky="ew", pady=4)
-        ctk.CTkButton(parent, text="Browse", width=70, height=30, corner_radius=6,
+        ctk.CTkButton(parent, text="Browse", width=70, height=30, corner_radius=T.R_SM,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=lambda e=entry: self._browse(e)
                       ).grid(row=row, column=2, padx=(6, 4), pady=3)
@@ -178,12 +178,12 @@ class SettingsWindow(ctk.CTkToplevel):
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 14))
         footer.grid_columnconfigure(0, weight=1)
-        ctk.CTkButton(footer, text="Cancel", width=90, height=32, corner_radius=7,
+        ctk.CTkButton(footer, text="Cancel", width=90, height=32, corner_radius=T.R_SM,
                       font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=self.destroy
                       ).grid(row=0, column=1, padx=(0, 8))
         ctk.CTkButton(footer, text="Save settings", width=130, height=32,
-                      corner_radius=7, font=font(11, "bold"), fg_color=T.BTN_GO,
+                      corner_radius=T.R_SM, font=font(11, "bold"), fg_color=T.BTN_GO,
                       hover_color=T.BTN_GO_H, text_color="#FFFFFF",
                       command=self._save).grid(row=0, column=2)
 
@@ -244,14 +244,11 @@ class SettingsWindow(ctk.CTkToplevel):
                     ["ultrafast", "veryfast", "fast", "medium", "slow", "veryslow"])
 
         self._section(tab, "Frame rate for editing", 8)
-        self._hint(tab, 9, "This is real behavior, not just a label: sources "
-                          "reading 58.5 fps up to just under your Minimum fps "
-                          "(Sorting tab, 60 by default) are actually re-encoded "
-                          "at exactly that rate - 59.94 is NTSC's way of "
-                          "writing 60, off by a rounding hair, not a genuinely "
-                          "slower clip. The output file really is 60.000 fps, "
-                          "not 59.94 counted as close enough. Sources already "
-                          "at or above the target are left untouched.")
+        # Sources from 58.5 fps up to just under Minimum fps are re-encoded
+        # at exactly that rate: 59.94 is NTSC's 60, not a slower clip, and
+        # the file really comes out 60.000.
+        self._hint(tab, 9, "A source a hair under your Minimum fps (59.94 for 60) is "
+                          "re-encoded to exactly that rate. Faster sources are left as they are.")
         self._switch(tab, 10, "force_cfr", "Force constant frame rate")
         self._switch(tab, 11, "edit_gop", "1-second keyframes (smooth scrubbing)")
         self._switch(tab, 12, "loop_short", "Loop very short clips")
@@ -311,7 +308,7 @@ class SettingsWindow(ctk.CTkToplevel):
                      text_color=T.ACCENT2 if summary else T.FAINT, anchor="w",
                      wraplength=self.HINT_W, justify="left"
                      ).grid(row=1, column=1, columnspan=2, sticky="w", pady=4)
-        ctk.CTkButton(tab, text="Change folders…", width=150, height=32, corner_radius=7,
+        ctk.CTkButton(tab, text="Change folders…", width=150, height=32, corner_radius=T.R_SM,
                       font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=self._change_library_folders
                       ).grid(row=2, column=1, sticky="w", pady=(2, 4))
@@ -319,7 +316,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._section(tab, "Display", 3)
         self._label(tab, "Thumbnail fit", 4)
         fit = ctk.CTkSegmentedButton(
-            tab, values=["contain", "cover"], font=font(11), height=32, corner_radius=7,
+            tab, values=["contain", "cover"], font=font(11), height=32, corner_radius=T.R_SM,
             fg_color=T.INPUT, selected_color=T.ACCENT_DEEP,
             selected_hover_color=T.ACCENT_DEEP, unselected_color=T.INPUT,
             unselected_hover_color=T.BTN_HOV, text_color=T.DIM, border_width=1)
@@ -425,7 +422,7 @@ class SettingsWindow(ctk.CTkToplevel):
         for slot in artwork.SLOTS:
             button = ctk.CTkButton(
                 art_row, text=slot.title, width=132, height=32,
-                corner_radius=7, font=font(11), fg_color=T.BTN,
+                corner_radius=T.R_SM, font=font(11), fg_color=T.BTN,
                 hover_color=T.BTN_HOV, text_color=T.DIM,
                 command=lambda s=slot: self._open_artwork(s))
             button.pack(side="left", padx=(0, 8))

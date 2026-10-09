@@ -16,59 +16,337 @@ from .theme import T, button_style, font, label_style, mix, pt, px
 from .format import fmt_size
 
 
-def popup_menu(parent, **kw) -> tk.Menu:
-    """A right-click menu styled like the rest of the suite.
+# Native tk.Menu is a Win32 HMENU: square corners, a 3D bevel on hover,
+# and no way to round it. Every popup in the suite is this instead - a
+# borderless window with a rounded card drawn on it - so right-click
+# matches the rest of the chrome. The methods named like tk.Menu
+# (add_command, add_cascade, tk_popup, …) are what the call sites already
+# use, so restyling them is still a one-line change.
 
-    Tk's default menu is a raised, bordered, system-grey affair with a
-    chunky 3D highlight around whichever entry is under the pointer. Every
-    one of those defaults fights the theme, so they are all turned off
-    here: flat surface, no window border, no active border, and a solid
-    accent bar behind the hovered entry instead of a bevel. Entries also
-    read one step larger than Tk's default, which is sized for 96 DPI
-    desktops from twenty years ago.
-
-    Every popup in the suite comes from here, so restyling them is a
-    one-line change rather than a hunt through six modules.
-    """
-    kw.setdefault("tearoff", 0)
-    kw.setdefault("bg", T.ELEVATED)
-    kw.setdefault("fg", T.TEXT)
-    kw.setdefault("activebackground", T.ACCENT_DEEP)
-    kw.setdefault("activeforeground", T.ACCENT)
-    kw.setdefault("disabledforeground", T.FAINT)
-    kw.setdefault("selectcolor", T.ACCENT)
-    # pt(), not a bare 11: a tk.Menu is raw Tk, so the size it is given
-    # is the size on screen. Every right-click menu in the app comes
-    # through here, and all of them stayed at their 100% size.
-    kw.setdefault("font", (T.UI, pt(11)))
-    # bd/relief kill the raised outer frame; activeborderwidth kills the
-    # bevel Tk draws around the hovered entry (the single ugliest default).
-    kw.setdefault("bd", 0)
-    kw.setdefault("relief", "flat")
-    kw.setdefault("activeborderwidth", 0)
-    kw.setdefault("borderwidth", 0)
-    return tk.Menu(parent, **kw)
+_MENU_KEY = "#FF00FE"        # chroma-key; not in the palette
+_OPEN_MENUS: list = []
 
 
-def menu_rule(menu: tk.Menu) -> None:
-    """A separator that matches the theme.
+class PopupMenu:
+    """A rounded, themed popup. Built like tk.Menu so existing call
+    sites keep working; drawn like a card so it doesn't look like 1998."""
 
-    Tk derives a separator's 3D shading from the entry's own background,
-    and the default lands on a near-white hairline that is the loudest
-    thing in an otherwise dark menu. Shading it from the hairline colour
-    instead gives the same soft violet rule the panels use.
-    """
-    menu.add_separator()
-    try:
-        menu.entryconfigure(menu.index("end"), background=T.LINE)
-    except tk.TclError:
+    ROW_H = 28
+    PAD_X = 8
+    MIN_W = 200
+
+    def __init__(self, parent, **kw):
+        self.parent = parent.parent if isinstance(parent, PopupMenu) else parent
+        self.items: list = []
+        self.hot_bg = kw.get("activebackground") or T.ACCENT_DEEP
+        self.hot_fg = kw.get("activeforeground") or T.ACCENT
+        self._win = None
+        self._canvas = None
+        self._photos: list = []
+        self._hover = -1
+        self._sub = None
+        self._sub_item = -1
+        self._close_ids: list = []
+        self._owner = None
+
+    def add_command(self, label="", command=None, state="normal",
+                    accelerator="", **_kw) -> None:
+        self.items.append({"kind": "cmd", "label": label, "command": command,
+                           "state": state or "normal", "accelerator": accelerator})
+
+    def add_separator(self, **_kw) -> None:
+        self.items.append({"kind": "sep"})
+
+    def add_cascade(self, label="", menu=None, **_kw) -> None:
+        self.items.append({"kind": "cascade", "label": label, "menu": menu,
+                           "state": "normal", "accelerator": "›"})
+
+    def entryconfigure(self, index, **kw) -> None:
+        if not self.items:
+            return
+        if index == "end":
+            index = len(self.items) - 1
+        try:
+            item = self.items[int(index)]
+        except (TypeError, ValueError, IndexError):
+            return
+        if "label" in kw:
+            item["label"] = kw["label"]
+        if "state" in kw:
+            item["state"] = kw["state"]
+        if "command" in kw:
+            item["command"] = kw["command"]
+
+    def index(self, which) -> int | None:
+        if which == "end":
+            return len(self.items) - 1 if self.items else None
+        return None
+
+    def delete(self, start=0, end="end") -> None:
+        if end == "end":
+            self.items.clear()
+        else:
+            del self.items[int(start):int(end) + 1]
+
+    def grab_release(self) -> None:
         pass
 
+    def tk_popup(self, x: int, y: int) -> None:
+        self._show(int(x), int(y))
 
-def menu_header(menu: tk.Menu, text: str) -> None:
-    """A dim, non-clickable caption above a group of entries. Long menus
-    (the gallery card menu runs to a dozen items) read as an undifferentiated
-    list without them."""
+    # ── draw ────────────────────────────────────────────────────────────
+
+    def _row_count(self) -> int:
+        return sum(1 for item in self.items if item["kind"] != "sep")
+
+    def _metrics(self):
+        import tkinter.font as tkfont
+        face = tkfont.Font(family=T.UI, size=pt(11))
+        small = tkfont.Font(family=T.UI, size=pt(10))
+        widest = 0
+        for item in self.items:
+            if item["kind"] == "sep":
+                continue
+            w = face.measure(item["label"]) + small.measure(item.get("accelerator") or "")
+            if w > widest:
+                widest = w
+        width = max(px(self.MIN_W), widest + px(self.PAD_X) * 2 + px(36))
+        height = px(8)
+        for item in self.items:
+            height += px(7) if item["kind"] == "sep" else px(self.ROW_H)
+        height += px(8)
+        return width, height, face, small
+
+    def _show(self, x: int, y: int, owner=None) -> None:
+        self.close()
+        if not self.items:
+            return
+        root = self.parent.winfo_toplevel()
+        self._owner = owner
+        width, height, face, small = self._metrics()
+        screen_w = root.winfo_screenwidth()
+        screen_h = root.winfo_screenheight()
+        if x + width > screen_w - 8:
+            x = max(8, screen_w - width - 8)
+        if y + height > screen_h - 8:
+            y = max(8, screen_h - height - 8)
+
+        win = tk.Toplevel(root)
+        win.withdraw()
+        win.overrideredirect(True)
+        keyed = False
+        try:
+            win.attributes("-topmost", True)
+            win.attributes("-transparentcolor", _MENU_KEY)
+            keyed = True
+        except tk.TclError:
+            try:
+                win.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+        hole = _MENU_KEY if keyed else T.ELEVATED
+        win.configure(bg=hole)
+        canvas = tk.Canvas(win, width=width, height=height, bg=hole,
+                           highlightthickness=0, bd=0)
+        canvas.pack()
+        r = px(T.R_LG)
+        canvas.create_polygon(_round_pts(1, 1, width - 2, height - 2, r),
+                              smooth=True, fill=T.LINE, outline="")
+        canvas.create_polygon(_round_pts(2, 2, width - 3, height - 3, r - 1),
+                              smooth=True, fill=T.ELEVATED, outline="")
+        self._win = win
+        self._canvas = canvas
+        self._photos = []
+        self._hover = -1
+        self._paint_rows(face, small, width)
+        canvas.bind("<Motion>", self._on_move)
+        canvas.bind("<Leave>", self._on_leave)
+        canvas.bind("<Button-1>", self._on_click)
+        win.bind("<Escape>", lambda e: self.close())
+        win.geometry(f"{width}x{height}+{x}+{y}")
+        win.deiconify()
+        win.lift()
+        try:
+            win.focus_force()
+        except tk.TclError:
+            pass
+        # After this click finishes, so the right-click that opened us
+        # does not also dismiss us.
+        self._close_ids.append(("after", win.after(80, lambda: self._bind_outside(root))))
+        _OPEN_MENUS.append(self)
+
+    def _paint_rows(self, face, small, width: int) -> None:
+        c = self._canvas
+        c.delete("row")
+        y = px(8)
+        pad = px(self.PAD_X)
+        row_h = px(self.ROW_H)
+        for i, item in enumerate(self.items):
+            if item["kind"] == "sep":
+                c.create_line(pad, y + px(3), width - pad, y + px(3),
+                              fill=T.LINE, tags=("row",))
+                y += px(7)
+                continue
+            item["_y0"] = y
+            item["_y1"] = y + row_h
+            disabled = item.get("state") == "disabled"
+            hover = i == self._hover and not disabled
+            if hover:
+                rr = px(6)
+                c.create_polygon(
+                    _round_pts(pad - px(2), y + 1, width - pad + px(2), y + row_h - 1, rr),
+                    smooth=True, fill=self.hot_bg, outline="", tags=("row", "hot"))
+            fill = T.FAINT if disabled else (self.hot_fg if hover else T.TEXT)
+            c.create_text(pad + px(6), y + row_h // 2, text=item["label"],
+                          anchor="w", fill=fill, font=face, tags=("row",))
+            extra = item.get("accelerator") or ""
+            if extra:
+                c.create_text(width - pad - px(6), y + row_h // 2, text=extra,
+                              anchor="e", fill=T.FAINT if not hover else self.hot_fg,
+                              font=small, tags=("row",))
+            y += row_h
+
+    def _item_at(self, y: int) -> int:
+        for i, item in enumerate(self.items):
+            if item["kind"] == "sep":
+                continue
+            if item.get("_y0", 0) <= y < item.get("_y1", 0):
+                return i
+        return -1
+
+    def _on_move(self, event) -> None:
+        i = self._item_at(event.y)
+        if i == self._hover:
+            if i >= 0 and self.items[i]["kind"] == "cascade":
+                self._open_sub(i)
+            return
+        self._hover = i
+        width = int(self._canvas.cget("width"))
+        import tkinter.font as tkfont
+        self._paint_rows(tkfont.Font(family=T.UI, size=pt(11)),
+                         tkfont.Font(family=T.UI, size=pt(10)), width)
+        item = self.items[i] if i >= 0 else None
+        if item and item["kind"] == "cascade":
+            self._open_sub(i)
+        elif self._sub is not None and (item is None or item["kind"] != "cascade"):
+            self._close_sub()
+
+    def _on_leave(self, _event=None) -> None:
+        # Keep the highlight if the pointer moved into a submenu.
+        if self._sub is not None:
+            return
+        if self._hover >= 0:
+            self._hover = -1
+            width = int(self._canvas.cget("width"))
+            import tkinter.font as tkfont
+            self._paint_rows(tkfont.Font(family=T.UI, size=pt(11)),
+                             tkfont.Font(family=T.UI, size=pt(10)), width)
+
+    def _on_click(self, event) -> None:
+        i = self._item_at(event.y)
+        if i < 0:
+            self.close()
+            return
+        item = self.items[i]
+        if item.get("state") == "disabled":
+            return
+        if item["kind"] == "cascade":
+            self._open_sub(i)
+            return
+        command = item.get("command")
+        self._close_all()
+        if command:
+            command()
+
+    def _open_sub(self, i: int) -> None:
+        item = self.items[i]
+        sub = item.get("menu")
+        if sub is None or self._win is None:
+            return
+        if self._sub is sub and self._sub_item == i:
+            return
+        self._close_sub()
+        self._sub = sub
+        self._sub_item = i
+        x = self._win.winfo_rootx() + self._win.winfo_width() - px(6)
+        y = self._win.winfo_rooty() + item.get("_y0", 0)
+        sub._show(x, y, owner=self)
+
+    def _close_sub(self) -> None:
+        if self._sub is not None:
+            self._sub.close()
+            self._sub = None
+            self._sub_item = -1
+
+    def _bind_outside(self, root) -> None:
+        def dismiss(event):
+            if self._win is None:
+                return
+            w = event.widget
+            try:
+                if str(w) == str(self._canvas) or str(w) == str(self._win):
+                    return
+                if self._sub is not None and (
+                        str(w) == str(self._sub._canvas) or str(w) == str(self._sub._win)):
+                    return
+            except tk.TclError:
+                pass
+            self.close()
+        for seq in ("<Button-1>", "<Button-3>"):
+            ident = root.bind_all(seq, dismiss, add="+")
+            self._close_ids.append((seq, ident))
+
+    def close(self) -> None:
+        self._close_sub()
+        root = None
+        try:
+            root = self.parent.winfo_toplevel()
+        except tk.TclError:
+            pass
+        for seq, ident in self._close_ids:
+            try:
+                if seq == "after" and self._win is not None:
+                    self._win.after_cancel(ident)
+                elif root is not None and ident:
+                    root.unbind(seq, ident)
+            except (tk.TclError, ValueError):
+                pass
+        self._close_ids = []
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except tk.TclError:
+                pass
+        self._win = None
+        self._canvas = None
+        if self in _OPEN_MENUS:
+            _OPEN_MENUS.remove(self)
+
+    def _close_all(self) -> None:
+        owner = self
+        while owner._owner is not None:
+            owner = owner._owner
+        owner.close()
+
+
+def _round_pts(x0, y0, x1, y1, r):
+    r = min(r, (x1 - x0) / 2, (y1 - y0) / 2)
+    return (x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+            x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0)
+
+
+def popup_menu(parent, **kw) -> PopupMenu:
+    """A right-click menu styled like the rest of the suite."""
+    return PopupMenu(parent, **kw)
+
+
+def menu_rule(menu) -> None:
+    """A separator that matches the theme."""
+    menu.add_separator()
+
+
+def menu_header(menu, text: str) -> None:
+    """A dim, non-clickable caption above a group of entries."""
     menu.add_command(label=text.upper(), state="disabled")
 
 
@@ -241,6 +519,37 @@ def draw_empty(canvas, cx: int, cy: int, icon_name: str, text: str,
                        font=(T.UI, pt(10)), tags=(tag,))
 
 
+def empty_overlay(tree, icon_name: str, text: str) -> None:
+    """The same empty state over a ttk.Treeview whenever it has no rows.
+    A Treeview has no event for rows coming and going, so it is checked
+    a few times a second - one get_children() call, nothing to notice."""
+    from tkinter import ttk
+    style = str(tree.cget("style") or "Treeview")
+    bg = ttk.Style().lookup(style, "fieldbackground") or T.SURFACE
+    width, height = px(340), px(96)
+    canvas = tk.Canvas(tree.master, width=width, height=height, bg=bg,
+                       highlightthickness=0, bd=0)
+    draw_empty(canvas, width // 2, height // 2, icon_name, text)
+    shown = [False]
+
+    def check() -> None:
+        try:
+            empty = not tree.get_children()
+        except tk.TclError:
+            return
+        if empty != shown[0]:
+            shown[0] = empty
+            if empty:
+                canvas.place(in_=tree, relx=0.5, rely=0.5, anchor="center")
+                # Not canvas.lift(): on a Canvas that raises canvas items.
+                tk.Misc.lift(canvas)
+            else:
+                canvas.place_forget()
+        tree.after(400, check)
+
+    check()
+
+
 class EmptyState(ctk.CTkFrame):
     """The same, as a widget for CTk containers."""
 
@@ -262,7 +571,7 @@ class Card(ctk.CTkFrame):
 
     def __init__(self, parent, title: str = "", **kw):
         kw.setdefault("fg_color", T.SURFACE)
-        kw.setdefault("corner_radius", 12)
+        kw.setdefault("corner_radius", T.R_LG)
         kw.setdefault("border_width", 1)
         kw.setdefault("border_color", T.LINE)
         super().__init__(parent, **kw)
@@ -364,15 +673,19 @@ class StatTile(ctk.CTkFrame):
     """One number, one label. The number is mono so tiles stay aligned."""
 
     def __init__(self, parent, label: str, color: str = T.TEXT, **kw):
-        super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
+        super().__init__(parent, fg_color=T.SURFACE, corner_radius=T.R_LG,
                           border_width=1, border_color=T.LINE, **kw)
+        self.color = color
         self.value = ctk.CTkLabel(self, text="—", font=font(21, "bold", mono=True),
-                                   text_color=color)
+                                   text_color=T.DIM)
         self.value.pack(pady=(11, 0))
         ctk.CTkLabel(self, text=label.upper(), **label_style()).pack(pady=(2, 11))
 
     def set(self, text: str) -> None:
-        self.value.configure(text=text)
+        # Colour only when there is something to count. A green 0 and a
+        # red 0 side by side read as news when nothing has happened.
+        quiet = str(text).strip() in ("", "0", "—", "-", "0.0")
+        self.value.configure(text=text, text_color=T.DIM if quiet else self.color)
 
 
 class PeekWindow:
@@ -593,7 +906,7 @@ class JobPanel(ctk.CTkFrame):
     """
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
+        super().__init__(parent, fg_color=T.SURFACE, corner_radius=T.R_LG,
                           border_width=1, border_color=T.LINE, **kw)
         self.grid_columnconfigure(0, weight=1)
         self._rows: dict = {}
@@ -659,7 +972,7 @@ class LogView(ctk.CTkFrame):
     }
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
+        super().__init__(parent, fg_color=T.SURFACE, corner_radius=T.R_LG,
                           border_width=1, border_color=T.LINE, **kw)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -673,12 +986,12 @@ class LogView(ctk.CTkFrame):
         self.header_label.grid(row=0, column=0, sticky="w")
 
         self.filter_btn = ctk.CTkButton(
-            head, text="Errors only", width=84, height=22, corner_radius=6,
+            head, text="Errors only", width=84, height=22, corner_radius=T.R_SM,
             font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, command=self.toggle_filter)
         self.filter_btn.grid(row=0, column=1, padx=(0, 6))
 
-        ctk.CTkButton(head, text="Clear", width=52, height=22, corner_radius=6,
+        ctk.CTkButton(head, text="Clear", width=52, height=22, corner_radius=T.R_SM,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=self.clear).grid(row=0, column=2)
 
@@ -745,7 +1058,7 @@ class LibraryBar(ctk.CTkFrame):
     """
 
     def __init__(self, parent, **kw):
-        super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
+        super().__init__(parent, fg_color=T.SURFACE, corner_radius=T.R_LG,
                           border_width=1, border_color=T.LINE, **kw)
         self.grid_columnconfigure(0, weight=1)
         self.text = ctk.CTkLabel(self, text="Library: scanning",

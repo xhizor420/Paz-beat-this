@@ -204,7 +204,7 @@ class ConvertTab(ctk.CTkFrame):
         ctk.CTkLabel(picker, text="CATEGORY", **label_style()).pack(anchor="w", pady=(0, 5))
         self.folder_menu = ctk.CTkOptionMenu(
             picker, values=["All categories"] + self.cfg.subfolders, width=170,
-            height=32, font=font(11), corner_radius=7, fg_color=T.INPUT,
+            height=32, font=font(11), corner_radius=T.R_SM, fg_color=T.INPUT,
             button_color=T.LINE, button_hover_color=T.BTN_HOV,
             dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT,
@@ -236,33 +236,31 @@ class ConvertTab(ctk.CTkFrame):
             progress_color=T.OK, button_color=T.TEXT, height=20,
             command=self._toggle_watch)
         self.watch_switch.pack(side="left")
-        ctk.CTkLabel(watch_row, text="converts new downloads as they land",
-                     font=font(9), text_color=T.FAINT
-                     ).pack(side="left", padx=(8, 0))
+        tip(self.watch_switch, "Convert new downloads as they land in the source folders")
 
         buttons = ctk.CTkFrame(controls, fg_color="transparent")
         buttons.grid(row=0, column=3, sticky="e", padx=(0, 14), pady=13)
 
         self.scan_btn = ctk.CTkButton(
-            buttons, text="Scan folders", width=110, height=38, corner_radius=7,
+            buttons, text="Scan folders", width=110, height=38, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, command=self._scan)
         self.scan_btn.pack(side="left", padx=(0, 8))
 
         self.pause_btn = ctk.CTkButton(
-            buttons, text="Pause", width=84, height=38, corner_radius=7,
+            buttons, text="Pause", width=84, height=38, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, state="disabled", command=self._toggle_pause)
         self.pause_btn.pack(side="left", padx=(0, 8))
 
         self.stop_btn = ctk.CTkButton(
-            buttons, text="Stop", width=84, height=38, corner_radius=7,
+            buttons, text="Stop", width=84, height=38, corner_radius=T.R_SM,
             font=font(11, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, state="disabled", command=self._stop)
         self.stop_btn.pack(side="left", padx=(0, 8))
 
         self.start_btn = PrimaryButton(
-            buttons, T.ACCENT, text="Start", width=132, height=38, corner_radius=7,
+            buttons, T.ACCENT, text="Start", width=132, height=38, corner_radius=T.R_SM,
             command=self._start)
         self.start_btn.pack(side="left")
 
@@ -341,7 +339,7 @@ class ConvertTab(ctk.CTkFrame):
         for text, command in (("Play file", self._play),
                               ("Show in folder", self._reveal)):
             button = ctk.CTkButton(
-                row_cluster, text=text, height=30, corner_radius=7, font=font(11),
+                row_cluster, text=text, height=30, corner_radius=T.R_SM, font=font(11),
                 fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
                 width=110, command=command, state="disabled")
             button.pack(side="left", padx=(0, 7))
@@ -352,26 +350,26 @@ class ConvertTab(ctk.CTkFrame):
         maintenance = ctk.CTkFrame(lead, fg_color="transparent")
         maintenance.pack(side="left")
         self.e621_btn = ctk.CTkButton(
-            maintenance, text="Fetch e621 tags", height=30, corner_radius=7,
+            maintenance, text="Fetch e621 tags", height=30, corner_radius=T.R_SM,
             width=130, command=self._fetch_e621, **button_style("secondary"))
         self.e621_btn.pack(side="left", padx=(0, 7))
         # The occasional ones, behind one button. Eight buttons did not fit
         # one row at 125%, and the row wrapping onto two read as clutter
         # for the sake of things reached for once a week.
         self.more_btn = ctk.CTkButton(
-            maintenance, text="More ▾", height=30, corner_radius=7,
+            maintenance, text="More ▾", height=30, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, width=78, command=self._more_menu)
         self.more_btn.pack(side="left")
 
         self.promote_btn = ctk.CTkButton(
-            tools, text="Promote upscales", height=30, corner_radius=7,
+            tools, text="Promote upscales", height=30, corner_radius=T.R_SM,
             width=150, command=self._promote, **button_style("secondary"))
         self.promote_btn.pack(side="right", padx=(7, 0))
         # Measured so the button can grow when a count is appended.
         self._btn_font = tkfont.Font(family=T.UI, size=11)
         self.gaps_btn = ctk.CTkButton(
-            tools, text="Find upscale gaps", height=30, corner_radius=7,
+            tools, text="Find upscale gaps", height=30, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.WARN, width=150, command=self._find_gaps)
         self.gaps_btn.pack(side="right", padx=(7, 0))
@@ -1604,23 +1602,28 @@ class ConvertTab(ctk.CTkFrame):
         if not task:
             return
         has_output = os.path.exists(task.target)
-        menu.add_command(label="Play converted file",
+        menu.add_command(label="Play converted",
                          state="normal" if has_output else "disabled",
                          command=lambda: open_file(task.target))
         menu.add_command(label="Play original", command=lambda: open_file(task.source))
         menu.add_command(label="Show in folder",
                          command=lambda: open_in_explorer(task.target if has_output
                                                            else task.source))
-        menu_rule(menu)
-        menu.add_command(label="Copy source path", command=lambda: self._copy(task.source))
         if task.pid:
-            menu.add_command(label=f"Open e621 post #{task.pid}",
+            menu.add_command(label=f"Open e621 #{task.pid}",
                              command=lambda: self._open_post(task))
-            record = self.emeta.get(task.pid)
-            if record and record.get("tags"):
-                menu.add_command(label="Copy tags", command=lambda: self._copy(record["tags"]))
+        menu_rule(menu)
+        copy_menu = popup_menu(menu, activebackground=T.ACCENT_DEEP,
+                               activeforeground=T.ACCENT)
+        copy_menu.add_command(label="Source path", command=lambda: self._copy(task.source))
+        if has_output:
+            copy_menu.add_command(label="Converted path", command=lambda: self._copy(task.target))
+        record = self.emeta.get(task.pid) if task.pid else None
+        if record and record.get("tags"):
+            copy_menu.add_command(label="Tags", command=lambda: self._copy(record["tags"]))
         if task.error:
-            menu.add_command(label="Copy error", command=lambda: self._copy(task.error))
+            copy_menu.add_command(label="Error", command=lambda: self._copy(task.error))
+        menu.add_cascade(label="Copy", menu=copy_menu)
         menu_rule(menu)
         menu.add_command(label="Queue again",
                          state="disabled" if self.processing else "normal",

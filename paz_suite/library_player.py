@@ -18,7 +18,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, pt, px, text_width, unscaled
+from .theme import T, font, mix, pt, px, text_width, unscaled
 from .format import fmt_clock, fmt_short
 from .config import THUMB_DIR
 from .media import fit_frame, thumb_key, probe
@@ -34,9 +34,15 @@ class InlinePlayer:
     # Starting geometry only. The player resizes with the window - on a 4K
     # screen a fixed small canvas is unreadably small next to 4K stills.
     VIEW_W, VIEW_H = 424, 238
+    accent = T.ACCENT2
+    accent_hov = mix(T.ACCENT2, "#FFFFFF", 0.25)
 
     def __init__(self, parent, tab):
         self.tab = tab
+        # The host tab's colour - violet in Library, mint in Vault - not
+        # Convert's magenta, which is what every player used to wear.
+        self.accent = getattr(tab, "PLAYER_ACCENT", T.ACCENT2)
+        self.accent_hov = mix(self.accent, "#FFFFFF", 0.25)
         self.rec = None
         # One clip plays at a time, across the whole app - see
         # player_engine.claim_playback.
@@ -121,13 +127,13 @@ class InlinePlayer:
         # taking the volume slider with it.
         def cbtn(text, cmd, width=38, color=T.DIM, image=None):
             b = ctk.CTkButton(controls, text=text, width=width, height=26,
-                               corner_radius=6, font=font(10), fg_color=T.BTN,
+                               corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
                                hover_color=T.BTN_HOV, text_color=color,
                                image=image, compound="left", command=cmd)
             b.pack(side="left", padx=(0, 4))
             return b
 
-        self.play_btn = cbtn("", self.toggle, 38, image=icons.icon("play", 15, T.ACCENT))
+        self.play_btn = cbtn("", self.toggle, 38, image=icons.icon("play", 15, self.accent))
         self.back_btn = cbtn("5", lambda: self.nudge(-5), 40, image=icons.icon("back", 13, T.DIM))
         self.fwd_btn = cbtn("5", lambda: self.nudge(5), 40, image=icons.icon("forward", 13, T.DIM))
         tip(self.play_btn, "Play / pause  ·  Space")
@@ -140,7 +146,7 @@ class InlinePlayer:
         self.loop_btn.pack_configure(padx=(8, 4))
         self.speed_menu = ctk.CTkOptionMenu(
             controls, values=["0.5x", "1x", "1.5x", "2x"], width=58, height=26,
-            font=font(10), corner_radius=6, fg_color=T.INPUT,
+            font=font(10), corner_radius=T.R_SM, fg_color=T.INPUT,
             button_color=T.LINE, button_hover_color=T.BTN_HOV,
             dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11), text_color=T.TEXT,
@@ -153,22 +159,22 @@ class InlinePlayer:
         # icon turns amber when the player cannot hold sync on its own,
         # and reads "4K" while the 4K copy is what is playing.
         self.sync_btn = ctk.CTkButton(
-            controls, text="", width=28, height=26, corner_radius=6, font=font(10),
-            fg_color="transparent", hover_color=T.BTN_HOV, text_color=T.ACCENT,
+            controls, text="", width=28, height=26, corner_radius=T.R_SM, font=font(10),
+            fg_color="transparent", hover_color=T.BTN_HOV, text_color=self.accent,
             image=icons.icon("settings", 14, T.FAINT), compound="left",
             command=self._sync_menu)
         self.sync_btn.pack(side="right", padx=(4, 0))
 
         self.volume_slider = ctk.CTkSlider(
             controls, from_=0, to=100, number_of_steps=100, width=44,
-            height=14, button_color=T.ACCENT, button_hover_color=T.ACCENT_HOV,
-            progress_color=T.ACCENT, fg_color=T.LINE,
+            height=14, button_color=self.accent, button_hover_color=self.accent_hov,
+            progress_color=self.accent, fg_color=T.LINE,
             command=self._on_volume_drag)
         self.volume_slider.set(0 if self.engine.muted else self.engine.volume)
         self.volume_slider.pack(side="right", padx=(2, 6))
         self.mute_btn = ctk.CTkButton(
             controls, text="", image=self._mute_icon(self.engine.muted),
-            width=28, height=26, corner_radius=6, font=font(11),
+            width=28, height=26, corner_radius=T.R_SM, font=font(11),
             fg_color="transparent", hover_color=T.BTN_HOV,
             text_color=T.FAINT if self.engine.muted else T.TEXT,
             state="normal" if HAS_AUDIO else "disabled",
@@ -323,7 +329,7 @@ class InlinePlayer:
         if offset and drifts:
             label, colour = f"{-offset:+d} ms", T.ACCENT2
         elif rec is not None and rec.premium_path and self.tab.cfg.player_prefer_premium:
-            label, colour = "4K", T.ACCENT
+            label, colour = "4K", self.accent
         else:
             label, colour = "", T.FAINT
         # unscaled(): measure() answers in real screen pixels and CTk
@@ -900,9 +906,8 @@ class InlinePlayer:
         self.tab.cfg.player_loop = loop
         self.loop_btn.configure(image=self._loop_icon(loop))
 
-    @staticmethod
-    def _loop_icon(loop: bool):
-        return icons.icon("repeat", 14, T.ACCENT if loop else T.DIM)
+    def _loop_icon(self, loop: bool):
+        return icons.icon("repeat", 14, self.accent if loop else T.DIM)
 
     def nudge(self, seconds: float) -> None:
         if self.rec:
@@ -1012,7 +1017,7 @@ class InlinePlayer:
         if playing:
             self._show_stage(True)
             self._watch_progress()
-        self.play_btn.configure(image=icons.icon("pause" if playing else "play", 15, T.ACCENT))
+        self.play_btn.configure(image=icons.icon("pause" if playing else "play", 15, self.accent))
 
     def _on_tick(self, position: float) -> None:
         self._draw_bar()
@@ -1097,10 +1102,10 @@ class InlinePlayer:
             return
         frac = max(0.0, min(self.engine.position / self.engine.duration, 1.0))
         head = pad + frac * max(track_end - 2 * pad, 1)
-        c.create_line(pad, y, head, y, fill=T.ACCENT, width=track,
+        c.create_line(pad, y, head, y, fill=self.accent, width=track,
                       capstyle="round")
         c.create_oval(head - head_r, y - head_r, head + head_r, y + head_r,
-                      fill=T.ACCENT_HOV, outline="")
+                      fill=self.accent_hov, outline="")
         self._track_end = track_end
 
     def _bar_press(self, event):

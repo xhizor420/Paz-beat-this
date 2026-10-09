@@ -16,7 +16,7 @@ import customtkinter as ctk
 from PIL import ImageTk
 
 from .theme import (T, BANNER_H, banner_image, faster_corners,
-                    mark_photo, mix, px, pt, resolve_fonts)
+                    mix, px, pt, resolve_fonts)
 from .config import AppConfig, CONFIG_DIR
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
@@ -30,7 +30,7 @@ from .library_windows import HelpWindow
 from .shortcuts import open_shortcuts
 from .watchdog import Watchdog
 from . import watchdog
-from . import artwork, audio_out, heap, icons, libmpv_player, uithread, vlc_player, winsys
+from . import appicon, artwork, audio_out, heap, icons, libmpv_player, uithread, vlc_player, winsys
 
 TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
 
@@ -423,7 +423,8 @@ class PazApp:
     def _mark_for(self, colour: str):
         marks = self.__dict__.setdefault("_marks", {})
         if colour not in marks:
-            marks[colour] = mark_photo(px(22), colour)
+            from PIL import ImageTk
+            marks[colour] = ImageTk.PhotoImage(appicon.header_mark(px(24), colour))
         return marks[colour]
 
     def _paint_header_buttons(self, mid: int) -> None:
@@ -563,24 +564,17 @@ class PazApp:
 
     def _apply_chrome(self) -> None:
         self.root.title(f"{APP_NAME}  {APP_VERSION}")
-        try:
-            if self._icon is None:
-                self._icon = self._window_icon()
-            self.root.iconphoto(False, self._icon)
-        except tk.TclError:
-            pass
-
-    def _window_icon(self):
-        """The taskbar icon: the user's own square if they set one, the
-        drawn PAZ mark otherwise."""
-        from PIL import ImageTk
-        picture = artwork.render_slot(self.cfg, "icon", (64, 64))
-        if picture is not None:
+        if self._icon is None:
+            # The user's own square from Settings > Artwork if they set
+            # one, the drawn PAZ mark otherwise - see appicon.
             try:
-                return ImageTk.PhotoImage(picture)
+                picture = artwork.render_slot(self.cfg, "icon", (256, 256))
             except Exception:
-                pass
-        return mark_photo(32, T.ACCENT)
+                picture = None
+            try:
+                self._icon = appicon.install(self.root, picture)
+            except Exception:
+                self._icon = ""
 
     # Each tab has its own identity colour (pink for Convert, violet for
     # Library, teal for Vault, amber for Beat This) used throughout its own

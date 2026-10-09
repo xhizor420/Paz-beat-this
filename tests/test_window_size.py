@@ -206,3 +206,24 @@ def test_no_treeview_row_height_is_left_unscaled():
 
 def test_no_window_is_sized_in_literal_pixels():
     assert offenders(r"""\.geometry\(\s*["']\d+x\d+["']""") == []
+
+
+def test_corners_are_the_two_named_radii():
+    """6 and 12, or a pill of half the widget's height. A 7 or an 11 that
+    is not a 22px chip was the leftover mix."""
+    allowed = []
+    for path, lines in paz_source():
+        for number, line in enumerate(lines, 1):
+            if "corner_radius" not in line or line.lstrip().startswith("#"):
+                continue
+            if "T.R_SM" in line or "T.R_LG" in line:
+                continue
+            if "height // 2" in line or "height//2" in line:
+                continue
+            if "corner_radius=0" in line or "corner_radius=3" in line:
+                continue
+            # Pills: half of 22px.
+            if "corner_radius=11" in line:
+                continue
+            allowed.append(f"{path.name}:{number}  {line.strip()}")
+    assert allowed == []

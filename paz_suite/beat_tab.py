@@ -24,7 +24,8 @@ from .theme import (T, button_style, font, label_style, pt, px, column_width, BE
 from .format import fmt_clock, fmt_len
 from . import beat_engine as be
 from . import uithread
-from .widgets import Card, StatTile, JobPanel, LogView, PrimaryButton, draw_empty, tip
+from .widgets import (Card, StatTile, JobPanel, LogView, PrimaryButton, draw_empty,
+                      empty_overlay, tip)
 from .media import probe
 
 
@@ -233,7 +234,7 @@ class BeatTab(ctk.CTkFrame):
                                        border_width=1, text_color=T.TEXT,
                                        placeholder_text="No song chosen")
         self.file_entry.grid(row=0, column=0, sticky="ew")
-        ctk.CTkButton(row, text="Browse…", width=90, height=32, corner_radius=7,
+        ctk.CTkButton(row, text="Browse…", width=90, height=32, corner_radius=T.R_SM,
                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                      text_color=T.DIM, command=self._browse_audio
                      ).grid(row=0, column=1, padx=(8, 0))
@@ -249,7 +250,7 @@ class BeatTab(ctk.CTkFrame):
         run_row = ctk.CTkFrame(panel, fg_color="transparent")
         run_row.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         self.analyze_btn = PrimaryButton(
-            run_row, T.ACCENT4, text="Analyze", width=120, height=34, corner_radius=7,
+            run_row, T.ACCENT4, text="Analyze", width=120, height=34, corner_radius=T.R_SM,
             command=self._analyze)
         self.analyze_btn.pack(side="left")
         tip(self.analyze_btn, "Find the beats in the chosen song  ·  F5")
@@ -288,15 +289,15 @@ class BeatTab(ctk.CTkFrame):
         row = ctk.CTkFrame(card, fg_color="transparent")
         row.grid(row=2, column=0, sticky="ew", padx=14, pady=(8, 12))
         self.install_btn = ctk.CTkButton(
-            row, text="Install dependencies", width=150, height=30, corner_radius=7,
+            row, text="Install dependencies", width=150, height=30, corner_radius=T.R_SM,
             command=self._install_deps, **button_style("secondary"))
         self.install_btn.pack(side="left")
         self.download_btn = ctk.CTkButton(
-            row, text="Download model", width=130, height=30, corner_radius=7,
+            row, text="Download model", width=130, height=30, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
             command=self._download_checkpoint)
         self.download_btn.pack(side="left", padx=(8, 0))
-        ctk.CTkButton(row, text="Re-check", width=90, height=30, corner_radius=7,
+        ctk.CTkButton(row, text="Re-check", width=90, height=30, corner_radius=T.R_SM,
                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                      text_color=T.DIM, command=self._refresh_setup
                      ).pack(side="left", padx=(8, 0))
@@ -441,7 +442,7 @@ class BeatTab(ctk.CTkFrame):
         ctk.CTkLabel(head, text="markers", font=font(10), text_color=T.FAINT,
                      anchor="e").grid(row=0, column=2, sticky="e", padx=(0, 8))
         self.density_seg = ctk.CTkSegmentedButton(
-            head, values=list(be.DENSITIES), height=26, corner_radius=7,
+            head, values=list(be.DENSITIES), height=26, corner_radius=T.R_SM,
             font=font(11), fg_color=T.INPUT, selected_color=T.ACCENT4_DEEP,
             selected_hover_color=T.ACCENT4_DEEP, unselected_color=T.INPUT,
             unselected_hover_color=T.BTN_HOV, text_color=T.DIM, border_width=1,
@@ -450,7 +451,7 @@ class BeatTab(ctk.CTkFrame):
         self.density_seg.grid(row=0, column=3, sticky="e")
 
         self._build_style()
-        tree_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=12,
+        tree_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=T.R_LG,
                                  border_width=1, border_color=T.ACCENT4_DEEP)
         tree_wrap.grid(row=2, column=0, sticky="nsew")
         tree_wrap.grid_columnconfigure(0, weight=1)
@@ -459,6 +460,7 @@ class BeatTab(ctk.CTkFrame):
         columns = ("time", "beat", "kind")
         self.tree = ttk.Treeview(tree_wrap, style="B.Treeview", columns=columns,
                                  show="headings", selectmode="browse")
+        empty_overlay(self.tree, "music", "Every beat lists here after Analyze")
         for key, title, width, anchor in (
                 ("time", "Time", 90, "e"), ("beat", "Beat", 60, "center"),
                 ("kind", "", 110, "w")):
@@ -488,7 +490,7 @@ class BeatTab(ctk.CTkFrame):
         fps_row = ctk.CTkFrame(body, fg_color="transparent")
         fps_row.grid(row=0, column=1, sticky="w", pady=4)
         self.fps_box = ctk.CTkComboBox(
-            fps_row, width=90, height=30, corner_radius=7, font=font(11),
+            fps_row, width=90, height=30, corner_radius=T.R_SM, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
@@ -500,7 +502,7 @@ class BeatTab(ctk.CTkFrame):
         # export - markers drift a little further from the beat with every
         # bar. Reading it off the footage removes the guess.
         ctk.CTkButton(fps_row, text="From video…", width=88, height=30,
-                      corner_radius=7, font=font(10), fg_color=T.BTN,
+                      corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.DIM,
                       command=self._fps_from_video
                       ).pack(side="left", padx=(6, 8))
@@ -508,7 +510,7 @@ class BeatTab(ctk.CTkFrame):
         ctk.CTkLabel(body, text="Beat colour", font=font(11), text_color=T.DIM
                      ).grid(row=0, column=2, sticky="w", padx=(16, 6), pady=4)
         self.beat_color_box = ctk.CTkComboBox(
-            body, width=100, height=30, corner_radius=7, font=font(11),
+            body, width=100, height=30, corner_radius=T.R_SM, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
@@ -521,7 +523,7 @@ class BeatTab(ctk.CTkFrame):
         ctk.CTkLabel(body, text="Downbeat colour", font=font(11), text_color=T.DIM
                      ).grid(row=0, column=4, sticky="w", padx=(16, 6), pady=4)
         self.down_color_box = ctk.CTkComboBox(
-            body, width=100, height=30, corner_radius=7, font=font(11),
+            body, width=100, height=30, corner_radius=T.R_SM, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT4_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
@@ -535,7 +537,7 @@ class BeatTab(ctk.CTkFrame):
         ctk.CTkLabel(body, text="Timeline starts at", font=font(11), text_color=T.DIM
                      ).grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(10, 4))
         self.start_tc_box = ctk.CTkComboBox(
-            body, width=120, height=30, corner_radius=7, font=font(11, mono=True),
+            body, width=120, height=30, corner_radius=T.R_SM, font=font(11, mono=True),
             fg_color=T.INPUT, border_color=T.ACCENT4_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
             dropdown_hover_color=T.ACCENT4_DEEP, dropdown_text_color=T.TEXT,
@@ -555,16 +557,16 @@ class BeatTab(ctk.CTkFrame):
         btn_row = ctk.CTkFrame(export, fg_color="transparent")
         btn_row.grid(row=2, column=0, sticky="ew", padx=14, pady=(6, 12))
         self.save_tsv_btn = ctk.CTkButton(
-            btn_row, text="Save .beats", width=110, height=32, corner_radius=7,
+            btn_row, text="Save .beats", width=110, height=32, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
             state="disabled", command=self._save_tsv)
         self.save_tsv_btn.pack(side="left")
         self.save_edl_btn = PrimaryButton(
             btn_row, T.ACCENT4, text="Save EDL for Resolve", width=160, height=32,
-            corner_radius=7, state="disabled", command=self._save_edl)
+            corner_radius=T.R_SM, state="disabled", command=self._save_edl)
         self.save_edl_btn.pack(side="left", padx=(8, 0))
         self.send_resolve_btn = ctk.CTkButton(
-            btn_row, text="Send to Resolve now", width=160, height=32, corner_radius=7,
+            btn_row, text="Send to Resolve now", width=160, height=32, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
             state="disabled", command=self._send_resolve)
         self.send_resolve_btn.pack(side="left", padx=(8, 0))

@@ -38,7 +38,7 @@ class HiddenTagsWindow(ctk.CTkToplevel):
                      justify="left").grid(row=0, column=0, sticky="ew",
                                           padx=16, pady=(14, 6))
         self.list = ctk.CTkScrollableFrame(
-            self, fg_color=T.SURFACE, corner_radius=12, border_width=1,
+            self, fg_color=T.SURFACE, corner_radius=T.R_LG, border_width=1,
             border_color=T.LINE, scrollbar_button_color=T.LINE,
             scrollbar_button_hover_color=T.FAINT)
         self.list.grid(row=1, column=0, sticky="nsew", padx=14)
@@ -48,7 +48,7 @@ class HiddenTagsWindow(ctk.CTkToplevel):
         footer.grid(row=2, column=0, sticky="ew", padx=14, pady=12)
         footer.grid_columnconfigure(0, weight=1)
         ctk.CTkButton(footer, text="Restore all", width=100, height=30,
-                      corner_radius=7, font=font(11), fg_color=T.BTN,
+                      corner_radius=T.R_SM, font=font(11), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.ACCENT,
                       command=self._restore_all).grid(row=0, column=1)
         self._fill()
@@ -67,7 +67,7 @@ class HiddenTagsWindow(ctk.CTkToplevel):
                          text_color=T.TEXT, anchor="w"
                          ).grid(row=row, column=0, sticky="ew", padx=(12, 4), pady=3)
             ctk.CTkButton(self.list, text="Restore", width=70, height=24,
-                          corner_radius=6, font=font(10), fg_color=T.BTN,
+                          corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
                           hover_color=T.BTN_HOV, text_color=T.OK,
                           command=lambda n=name: self._restore(n)
                           ).grid(row=row, column=1, padx=(0, 10), pady=3)
@@ -93,9 +93,10 @@ class HelpWindow(ctk.CTkToplevel):
          "Ctrl+Shift+R forces a full rebuild."),
         ("Fix missing / Verify", "Re-probes files with no duration or "
          "resolution, rebuilds absent thumbnails, then fetches tags for "
-         "every uncached post ID - the number on the button is what's "
-         "left. Right-click it for Verify library integrity, a slower "
-         "full decode pass that catches corrupt files a quick probe can't."),
+         "every uncached post ID - both are in the ⋯ menu at the end of the "
+         "search bar, and the Fix missing entry says how much is left. Check "
+         "for corrupt files is the slower full decode pass that catches "
+         "what a quick probe can't."),
         ("Fetch e621 tags", "Resolves post IDs (the filename numbers) into "
          "artist / character / species / rating. A small batch runs "
          "automatically when the tab opens and after every sync, so new "
@@ -175,7 +176,7 @@ class HelpWindow(ctk.CTkToplevel):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
         body = ctk.CTkScrollableFrame(
-            self, fg_color=T.SURFACE, corner_radius=12, border_width=1,
+            self, fg_color=T.SURFACE, corner_radius=T.R_LG, border_width=1,
             border_color=T.LINE, scrollbar_button_color=T.LINE,
             scrollbar_button_hover_color=T.FAINT)
         body.grid(row=0, column=0, sticky="nsew", padx=14, pady=14)
@@ -247,11 +248,11 @@ class FoldersWindow(ctk.CTkToplevel):
         self.root_entry.insert(0, self.cfg.effective_library_root())
         self.root_entry.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(rowf, text="Browse", width=76, height=32,
-                      corner_radius=7, font=font(10), fg_color=T.BTN,
+                      corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.DIM,
                       command=self._browse).grid(row=0, column=1, padx=(8, 0))
         ctk.CTkButton(rowf, text="Rescan", width=70, height=32,
-                      corner_radius=7, font=font(10), fg_color=T.BTN,
+                      corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.ACCENT2,
                       command=self._reload).grid(row=0, column=2, padx=(8, 0))
 
@@ -264,17 +265,17 @@ class FoldersWindow(ctk.CTkToplevel):
         head.grid(row=0, column=0, sticky="ew")
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="CATEGORIES TO INDEX", **label_style(), anchor="w").grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(head, text="All", width=44, height=22, corner_radius=6,
+        ctk.CTkButton(head, text="All", width=44, height=22, corner_radius=T.R_SM,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=lambda: self._set_all(True)
                       ).grid(row=0, column=1, padx=(0, 6))
-        ctk.CTkButton(head, text="None", width=52, height=22, corner_radius=6,
+        ctk.CTkButton(head, text="None", width=52, height=22, corner_radius=T.R_SM,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=lambda: self._set_all(False)
                       ).grid(row=0, column=2)
 
         self.list = ctk.CTkScrollableFrame(
-            body, fg_color=T.SURFACE, corner_radius=12, border_width=1,
+            body, fg_color=T.SURFACE, corner_radius=T.R_LG, border_width=1,
             border_color=T.LINE, scrollbar_button_color=T.LINE,
             scrollbar_button_hover_color=T.FAINT)
         self.list.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
@@ -297,11 +298,11 @@ class FoldersWindow(ctk.CTkToplevel):
         footer.grid(row=5, column=0, sticky="ew", padx=16, pady=14)
         footer.grid_columnconfigure(0, weight=1)
         ctk.CTkButton(footer, text="Cancel", width=90, height=32,
-                      corner_radius=7, font=font(11), fg_color=T.BTN,
+                      corner_radius=T.R_SM, font=font(11), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.DIM,
                       command=self.destroy).grid(row=0, column=1, padx=(0, 8))
         ctk.CTkButton(footer, text="Save folders", width=130, height=32,
-                      corner_radius=7, font=font(11, "bold"),
+                      corner_radius=T.R_SM, font=font(11, "bold"),
                       fg_color=T.ACCENT2_DEEP, hover_color=T.BTN_HOV,
                       text_color=T.ACCENT2, command=self._save
                       ).grid(row=0, column=2)
@@ -430,7 +431,7 @@ class VerifyWindow(ctk.CTkToplevel):
                                     text_color=T.DIM, anchor="w")
         self.status.grid(row=0, column=0, sticky="w")
         self.stop_btn = ctk.CTkButton(
-            head, text="Stop", width=70, height=28, corner_radius=7,
+            head, text="Stop", width=70, height=28, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.WARN, command=self._stop)
         self.stop_btn.grid(row=0, column=1, padx=(10, 0))
@@ -441,7 +442,7 @@ class VerifyWindow(ctk.CTkToplevel):
         self.progress.set(0)
 
         self.body = ctk.CTkScrollableFrame(
-            self, fg_color=T.SURFACE, corner_radius=12,
+            self, fg_color=T.SURFACE, corner_radius=T.R_LG,
             scrollbar_button_color=T.LINE, scrollbar_button_hover_color=T.FAINT)
         self.body.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 14))
         self.body.grid_columnconfigure(0, weight=1)
@@ -513,7 +514,7 @@ class VerifyWindow(ctk.CTkToplevel):
 
     def _add_broken(self, path: str, error: str) -> None:
         row = len(self.body.winfo_children())
-        card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=7)
+        card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=T.R_SM)
         card.grid(row=row, column=0, sticky="ew", padx=8, pady=4)
         card.grid_columnconfigure(0, weight=1)
 
@@ -524,11 +525,11 @@ class VerifyWindow(ctk.CTkToplevel):
                      text_color=T.DIM, anchor="w"
                      ).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
 
-        ctk.CTkButton(card, text="Show in folder", height=24, width=110, corner_radius=6,
+        ctk.CTkButton(card, text="Show in folder", height=24, width=110, corner_radius=T.R_SM,
                       font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=lambda p=path: open_in_explorer(p)
                       ).grid(row=0, column=1, rowspan=2, padx=(4, 4), pady=8)
-        ctk.CTkButton(card, text="Delete", height=24, width=70, corner_radius=6,
+        ctk.CTkButton(card, text="Delete", height=24, width=70, corner_radius=T.R_SM,
                       font=font(10), fg_color=T.BTN, hover_color=T.FAIL_DEEP,
                       text_color=T.DIM, command=lambda p=path, c=card: self._delete(p, c)
                       ).grid(row=0, column=2, rowspan=2, padx=(0, 10), pady=8)

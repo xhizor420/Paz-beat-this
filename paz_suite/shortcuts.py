@@ -105,7 +105,7 @@ class ShortcutsWindow(ctk.CTkToplevel):
         self.picker.grid(row=0, column=0, sticky="w", padx=14, pady=(14, 8))
 
         self.body = ctk.CTkScrollableFrame(
-            self, fg_color=T.SURFACE, corner_radius=12, border_width=1,
+            self, fg_color=T.SURFACE, corner_radius=T.R_LG, border_width=1,
             border_color=T.LINE, scrollbar_button_color=T.LINE,
             scrollbar_button_hover_color=T.FAINT)
         self.body.grid(row=1, column=0, sticky="nsew", padx=14)
@@ -115,7 +115,7 @@ class ShortcutsWindow(ctk.CTkToplevel):
         footer.grid(row=2, column=0, sticky="ew", padx=14, pady=10)
         if on_help is not None:
             ctk.CTkButton(footer, text="Full help", width=90, height=28,
-                          corner_radius=7, font=font(11), fg_color="transparent",
+                          corner_radius=T.R_SM, font=font(11), fg_color="transparent",
                           hover_color=T.BTN_HOV, text_color=T.DIM,
                           image=icons.icon("help", 14, T.DIM), compound="left",
                           command=self._help).pack(side="left")
@@ -173,7 +173,7 @@ def open_shortcuts(root, tab_name: str, on_help=None) -> ShortcutsWindow:
 def shortcuts_button(parent, tab_name: str, on_help=None) -> ctk.CTkButton:
     """A quiet keyboard icon that opens the sheet on `tab_name`."""
     button = ctk.CTkButton(
-        parent, text="", width=28, height=24, corner_radius=6,
+        parent, text="", width=28, height=24, corner_radius=T.R_SM,
         fg_color="transparent", hover_color=T.BTN_HOV,
         image=icons.icon("keyboard", 15, T.FAINT),
         command=lambda: open_shortcuts(parent.winfo_toplevel(), tab_name, on_help))

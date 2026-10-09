@@ -219,7 +219,7 @@ class TagCanvas(ctk.CTkFrame):
     INSET = 13
 
     def __init__(self, master, on_chip, on_menu, on_toggle, on_manage=None):
-        super().__init__(master, fg_color=T.SURFACE, corner_radius=12,
+        super().__init__(master, fg_color=T.SURFACE, corner_radius=T.R_LG,
                          border_width=1, border_color=self.BORDER)
         self.on_chip, self.on_menu = on_chip, on_menu
         self.on_toggle, self.on_manage = on_toggle, on_manage
@@ -428,6 +428,14 @@ class TagRail(TagCanvas):
     def _lay_out(self, width: int) -> tuple:
         return lay_out(self.sections, width, self.measure, self.hidden)
 
+    def _draw_extra(self) -> None:
+        if self.sections or self.hidden:
+            return
+        from .widgets import draw_empty
+        height = max(self.canvas.winfo_height(), px(120))
+        draw_empty(self.canvas, self._width // 2, height // 2, "tag",
+                   "The results' tags show here")
+
     def _plate_fill(self, box: Box, hovered: bool) -> str:
         if box.kind == "chip":
             return T.BTN_HOV if hovered else T.BTN
@@ -505,7 +513,7 @@ class TagList(TagRail):
     # Tighter than the rail: this box shares the column with the player,
     # and every pixel of padding is a line of tags it cannot show.
     INSET = 8
-    EMPTY = "No tags for this clip yet - press “Fix missing” up top."
+    EMPTY = "No tags for this clip yet  ·  Fix missing is in the ⋯ menu"
 
     def __init__(self, master, on_chip, on_menu, on_toggle):
         super().__init__(master, on_chip, on_menu, on_toggle)
@@ -517,9 +525,20 @@ class TagList(TagRail):
     def show(self, sections: list, hidden: int = 0, keep_scroll: bool = True,
              empty: bool = False) -> None:
         self.empty = empty and not sections
+        self.idle = not sections and not empty
         super().show(sections, hidden, keep_scroll)
 
+    idle = True                 # nothing has been shown yet: no clip selected
+
     def _draw_extra(self) -> None:
+        if self.idle:
+            # No clip selected: say what the box is for rather than
+            # leaving a blank panel that looks like it failed to load.
+            from .widgets import draw_empty
+            height = max(self.canvas.winfo_height(), px(120))
+            draw_empty(self.canvas, self._width // 2, height // 2, "tag",
+                       "A clip's tags show here")
+            return
         if not self.empty:
             return
         width = max(self._width - 2 * px(10), px(80))

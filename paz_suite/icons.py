@@ -59,6 +59,7 @@ GLYPHS = {
     "down": 0xE071,          # chevron-down
     "music": 0xE126,
     "info": 0xE0FE,
+    "tag": 0xE183,
 }
 
 OVERSAMPLE = 4

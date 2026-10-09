@@ -42,7 +42,7 @@ from .library_db import (
 )
 from .library_player import InlinePlayer
 from .library_windows import HelpWindow
-from .widgets import EMPTY_INK, PrimaryButton, popup_menu, menu_rule, tip
+from .widgets import EMPTY_INK, PrimaryButton, empty_overlay, popup_menu, menu_rule, tip
 from . import artwork, icons, uithread
 
 _SPLIT_RE = re.compile(r"[,\n\r\t;]+|\s+")
@@ -63,6 +63,8 @@ def split_terms(text: str) -> list:
 
 
 class VaultTab(ctk.CTkFrame):
+
+    PLAYER_ACCENT = T.ACCENT3
 
     def __init__(self, parent, app):
         super().__init__(parent, fg_color=T.BG, corner_radius=0)
@@ -136,7 +138,7 @@ class VaultTab(ctk.CTkFrame):
         ctk.CTkLabel(panel, text="PASTE POST IDS OR FILENAMES", **label_style(), anchor="w").grid(row=0, column=0, sticky="w", pady=(0, 4))
 
         self.paste_box = ctk.CTkTextbox(
-            panel, height=110, corner_radius=12, fg_color=T.SURFACE,
+            panel, height=110, corner_radius=T.R_LG, fg_color=T.SURFACE,
             border_width=1, border_color=T.ACCENT3_DEEP, text_color=T.TEXT,
             font=font(11, mono=True))
         self.paste_box.grid(row=1, column=0, sticky="ew")
@@ -145,13 +147,13 @@ class VaultTab(ctk.CTkFrame):
         row.grid(row=2, column=0, sticky="ew", pady=(8, 10))
         tip(self.paste_box, "One per line, or separated by commas or spaces")
         lookup = PrimaryButton(row, T.ACCENT3, text="Look up", width=100, height=32,
-                               corner_radius=7, command=self._run_lookup)
+                               corner_radius=T.R_SM, command=self._run_lookup)
         lookup.pack(side="left")
         tip(lookup, "Find the pasted clips in the library  ·  F5")
         for text, command, width in (("Clear", self._clear_lookup, 64),
                                      ("Select all", self._select_all, 84),
                                      ("Select none", self._select_none, 96)):
-            ctk.CTkButton(row, text=text, width=width, height=32, corner_radius=7,
+            ctk.CTkButton(row, text=text, width=width, height=32, corner_radius=T.R_SM,
                           command=command, **button_style("text")
                           ).pack(side="left", padx=(8, 0))
 
@@ -161,7 +163,7 @@ class VaultTab(ctk.CTkFrame):
         self.status_label.grid(row=2, column=0, sticky="e")
 
         self._build_style()
-        tree_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=12,
+        tree_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=T.R_LG,
                                  border_width=1, border_color=T.ACCENT3_DEEP)
         tree_wrap.grid(row=3, column=0, sticky="nsew")
         tree_wrap.grid_columnconfigure(0, weight=1)
@@ -170,6 +172,7 @@ class VaultTab(ctk.CTkFrame):
         columns = ("name", "artist", "res", "len", "used")
         self.tree = ttk.Treeview(tree_wrap, style="V.Treeview", columns=columns,
                                  show="headings", selectmode="extended")
+        empty_overlay(self.tree, "search", "Paste post IDs or filenames, then Look up")
         for key, title, width, anchor in (
                 ("name", "File", 220, "w"), ("artist", "Artist", 130, "w"),
                 ("res", "Resolution", 90, "w"), ("len", "Length", 64, "e"),
@@ -189,14 +192,14 @@ class VaultTab(ctk.CTkFrame):
         ctk.CTkLabel(mark_row, text="Project:", font=font(11), text_color=T.DIM
                      ).pack(side="left", padx=(0, 6))
         self.project_box = ctk.CTkComboBox(
-            mark_row, width=220, height=32, corner_radius=7, font=font(11),
+            mark_row, width=220, height=32, corner_radius=T.R_SM, font=font(11),
             fg_color=T.INPUT, border_color=T.ACCENT3_DEEP, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED, dropdown_hover_color=T.ACCENT3_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
             text_color=T.TEXT, values=[])
         self.project_box.pack(side="left")
         self.project_box.set("")
-        ctk.CTkButton(mark_row, text="Mark selected as used", height=32, corner_radius=7,
+        ctk.CTkButton(mark_row, text="Mark selected as used", height=32, corner_radius=T.R_SM,
                       command=self._mark_selected, **button_style("secondary")
                       ).pack(side="left", padx=(10, 0))
 
@@ -227,7 +230,7 @@ class VaultTab(ctk.CTkFrame):
         self._projects_box.grid_propagate(False)
         self._projects_box.pack_propagate(False)
         self.projects_list = ctk.CTkScrollableFrame(
-            self._projects_box, fg_color=T.SURFACE, corner_radius=12, border_width=1,
+            self._projects_box, fg_color=T.SURFACE, corner_radius=T.R_LG, border_width=1,
             border_color=T.ACCENT3_DEEP,
             scrollbar_button_color=T.LINE, scrollbar_button_hover_color=T.FAINT)
         self.projects_list.place(x=0, y=0, relwidth=1, relheight=1)
@@ -240,12 +243,12 @@ class VaultTab(ctk.CTkFrame):
                                           font=font(11, "bold"), text_color=T.FAINT, anchor="w")
         self.detail_header.grid(row=0, column=0, sticky="w")
         self.open_in_library_btn = ctk.CTkButton(
-            head, text="Open in Library →", width=130, height=24, corner_radius=6,
+            head, text="Open in Library →", width=130, height=24, corner_radius=T.R_SM,
             state="disabled", command=lambda: self._open_in_library(self._selected_project),
             **button_style("text"))
         self.open_in_library_btn.grid(row=0, column=1, sticky="e")
 
-        strip_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=12,
+        strip_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=T.R_LG,
                                   border_width=1, border_color=T.ACCENT3_DEEP)
         strip_wrap.grid(row=3, column=0, sticky="ew")
         strip_wrap.grid_columnconfigure(0, weight=1)
@@ -278,7 +281,7 @@ class VaultTab(ctk.CTkFrame):
         bottom.grid_rowconfigure(0, weight=1)
         bottom.grid_columnconfigure(0, weight=1)
 
-        list_wrap = ctk.CTkFrame(bottom, fg_color=T.SURFACE, corner_radius=12,
+        list_wrap = ctk.CTkFrame(bottom, fg_color=T.SURFACE, corner_radius=T.R_LG,
                                  border_width=1, border_color=T.ACCENT3_DEEP)
         list_wrap.grid(row=0, column=0, sticky="nsew")
         list_wrap.grid_columnconfigure(0, weight=1)
@@ -291,6 +294,7 @@ class VaultTab(ctk.CTkFrame):
         columns = ("name", "len")
         self.project_tree = ttk.Treeview(list_wrap, style="V.Treeview", columns=columns,
                                          show="headings", selectmode="browse")
+        empty_overlay(self.project_tree, "clip", "A project's clips list here")
         for key, title, width, anchor, stretch in (
                 ("name", "File", 150, "w", True),
                 ("len", "Len", 58, "e", False)):
@@ -314,7 +318,7 @@ class VaultTab(ctk.CTkFrame):
     PLAYER_W = 424
 
     def _build_player(self, parent) -> None:
-        card = ctk.CTkFrame(parent, fg_color=T.SURFACE, corner_radius=12,
+        card = ctk.CTkFrame(parent, fg_color=T.SURFACE, corner_radius=T.R_LG,
                             border_width=1, border_color=T.ACCENT3_DEEP)
         # "new", not "nsew": a 16:9 picture cannot use the height a tall
         # window gives this row, and a card stretched down to fill it is an
@@ -606,14 +610,14 @@ class VaultTab(ctk.CTkFrame):
             # One line: the box is sized to one project row, and a wrapped
             # second line was cut through the middle.
             ctk.CTkLabel(self.projects_list, text="No projects yet  ·  mark clips as used to start one",
-                         font=font(11), text_color=T.FAINT, anchor="w"
-                         ).grid(row=0, column=0, padx=10, pady=4, sticky="w")
+                         font=font(11), text_color=T.FAINT, anchor="w", height=20
+                         ).grid(row=0, column=0, padx=10, pady=(5, 0), sticky="w")
             return
 
         for row, (name, color, count, _created) in enumerate(projects):
             selected = name == self._selected_project
             line = ctk.CTkFrame(self.projects_list, fg_color=T.ELEVATED if selected else "transparent",
-                                corner_radius=6, height=28)
+                                corner_radius=T.R_SM, height=28)
             line.grid(row=row, column=0, sticky="ew", pady=1)
             line.grid_columnconfigure(1, weight=1)
             line.grid_propagate(False)
@@ -700,17 +704,16 @@ class VaultTab(ctk.CTkFrame):
     def _project_menu(self, event, name: str) -> None:
         menu = popup_menu(self.root, activebackground=T.ACCENT3_DEEP,
                           activeforeground=T.ACCENT3)
-        menu.add_command(label="Browse clips here", command=lambda: self._select_project(name))
+        menu.add_command(label="Browse clips", command=lambda: self._select_project(name))
         menu.add_command(label="Open in Library", command=lambda: self._open_in_library(name))
-        menu_rule(menu)
-        menu.add_command(label="Add all clips to Resolve",
+        menu.add_command(label="Add all to Resolve",
                          command=lambda: self._send_project_to_resolve(name))
         menu_rule(menu)
         has_cover = bool(self._covers.get(name, {}).get("path"))
-        menu.add_command(label=f"Cover picture…{'  ✓' if has_cover else ''}",
+        menu.add_command(label="Cover picture" + ("  ✓" if has_cover else "…"),
                          command=lambda: self._pick_cover(name))
         menu.add_command(label="Rename…", command=lambda: self._rename_project(name))
-        menu.add_command(label="Clear", command=lambda: self._clear_project(name))
+        menu.add_command(label="Clear project", command=lambda: self._clear_project(name))
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:

@@ -40,7 +40,8 @@ from .winsys import awake
 from .speedcheck import SpeedCheck
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
-from .widgets import MiniProgress, PrimaryButton, popup_menu, menu_rule, tip
+from .widgets import (EMPTY_INK, MiniProgress, PrimaryButton, draw_empty, popup_menu,
+                      menu_rule, tip)
 from .shortcuts import open_shortcuts
 
 
@@ -317,7 +318,7 @@ class LibraryTab(ctk.CTkFrame):
 
         # The search field rests small and takes the row when you use it -
         # see _search_focus. Column 1 is the slack it grows into.
-        box = ctk.CTkFrame(bar, fg_color=T.INPUT, corner_radius=12,
+        box = ctk.CTkFrame(bar, fg_color=T.INPUT, corner_radius=T.R_LG,
                            border_width=1, border_color=T.LINE,
                            height=self.SEARCH_H, width=self.SEARCH_REST)
         box.grid(row=0, column=0, sticky="w", padx=(18, 0), pady=5)
@@ -331,7 +332,7 @@ class LibraryTab(ctk.CTkFrame):
         def boxbtn(icon_name, cmd, hint):
             button = ctk.CTkButton(
                 box, text="", width=28, height=self.SEARCH_H - 12,
-                corner_radius=7, fg_color="transparent", hover_color=T.BTN_HOV,
+                corner_radius=T.R_SM, fg_color="transparent", hover_color=T.BTN_HOV,
                 image=icons.icon(icon_name, 15, T.DIM), command=cmd)
             button.pack(side="right", padx=(0, 5))
             tip(button, hint)
@@ -344,7 +345,7 @@ class LibraryTab(ctk.CTkFrame):
         self.search = ctk.CTkEntry(
             box, placeholder_text="Search",
             height=self.SEARCH_H - 8, font=font(13), corner_radius=0,
-            fg_color="transparent", border_width=0, text_color=T.TEXT,
+            fg_color=T.INPUT, bg_color=T.INPUT, border_width=0, text_color=T.TEXT,
             placeholder_text_color=T.FAINT)
         self.search.pack(side="left", fill="both", expand=True,
                          padx=(8, 4))
@@ -364,7 +365,7 @@ class LibraryTab(ctk.CTkFrame):
 
         self.sort_menu = ctk.CTkOptionMenu(
             right, values=list(SORTS), width=120, height=self.SEARCH_H,
-            font=font(12), corner_radius=7, fg_color=T.INPUT, button_color=T.LINE,
+            font=font(12), corner_radius=T.R_SM, fg_color=T.INPUT, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
             dropdown_hover_color=T.ACCENT2_DEEP,
             dropdown_text_color=T.TEXT, dropdown_font=font(11),
@@ -374,7 +375,7 @@ class LibraryTab(ctk.CTkFrame):
 
         self.more_btn = ctk.CTkButton(
             right, text="", width=40, height=self.SEARCH_H,
-            corner_radius=7, fg_color=T.BTN, hover_color=T.BTN_HOV,
+            corner_radius=T.R_SM, fg_color=T.BTN, hover_color=T.BTN_HOV,
             image=icons.icon("more", 18, T.ACCENT2), command=self._more_menu)
         self.more_btn.pack(side="left")
         tip(self.more_btn, "Sync, fix, fetch tags, random, folders, help")
@@ -383,7 +384,16 @@ class LibraryTab(ctk.CTkFrame):
 
     def _search_width(self, opening: bool) -> int:
         if not opening:
-            return px(self.SEARCH_REST)
+            # At rest it still has to show the search that is in force -
+            # the resting size cut used:"ENEMY AND REVENGE 2" mid-name.
+            text = self.search.get().strip() if hasattr(self, "search") else ""
+            if not text:
+                return px(self.SEARCH_REST)
+            try:
+                need = unscaled(text_width(self._search_font(), text)) + 170
+            except tk.TclError:
+                return px(self.SEARCH_REST)
+            return max(px(self.SEARCH_REST), min(need, self._search_width(True)))
         try:
             # The row is measured in real pixels; everything else here is
             # in CTk's units, which is what the field's width option takes.
@@ -392,6 +402,18 @@ class LibraryTab(ctk.CTkFrame):
             room = px(self.SEARCH_REST)
         reserved = px(self.SEARCH_REST) + px(240)
         return max(px(self.SEARCH_REST), min(room - reserved, px(1100)))
+
+    def _search_font(self):
+        if not hasattr(self, "_search_text_font"):
+            import tkinter.font as tkfont
+            self._search_text_font = tkfont.Font(family=T.UI, size=pt(13))
+        return self._search_text_font
+
+    def _fit_search_rest(self) -> None:
+        """A search set from outside the field - a tag clicked, a chip
+        removed, a saved search picked - resizes the resting field to it."""
+        if not getattr(self, "_search_open", True) and hasattr(self, "search_box"):
+            self._animate_search(self._search_width(False))
 
     def _search_focus(self, opening: bool) -> None:
         """Grow into the row while you are typing, shrink back when you are
@@ -517,7 +539,7 @@ class LibraryTab(ctk.CTkFrame):
         head.grid(row=0, column=0, sticky="ew", pady=(2, 4))
         head.grid_columnconfigure(1, weight=1)
         self.side_toggle = ctk.CTkButton(
-            head, text="", width=26, height=24, corner_radius=6,
+            head, text="", width=26, height=24, corner_radius=T.R_SM,
             fg_color=T.BTN, hover_color=T.BTN_HOV,
             image=icons.icon("collapse", 14, T.DIM), command=self.toggle_sidebar)
         self.side_toggle.grid(row=0, column=0, sticky="w", padx=(2, 6))
@@ -670,7 +692,7 @@ class LibraryTab(ctk.CTkFrame):
 
         def pbtn(icon_name, cmd, hint):
             button = ctk.CTkButton(pager, text="", width=34, height=24,
-                                   corner_radius=6, fg_color=T.BTN,
+                                   corner_radius=T.R_SM, fg_color=T.BTN,
                                    hover_color=T.BTN_HOV,
                                    image=icons.icon(icon_name, 14, T.DIM), command=cmd)
             tip(button, hint)
@@ -684,7 +706,7 @@ class LibraryTab(ctk.CTkFrame):
         pbtn("right", lambda: self.turn_page(1), "Next page  ·  PgDn"
              ).pack(side="left", padx=(4, 0))
 
-        shell = ctk.CTkFrame(center, fg_color=T.SURFACE, corner_radius=12,
+        shell = ctk.CTkFrame(center, fg_color=T.SURFACE, corner_radius=T.R_LG,
                              border_width=1, border_color=T.ACCENT2_DEEP)
         shell.grid(row=2, column=0, sticky="nsew")
         shell.grid_columnconfigure(0, weight=1)
@@ -1173,13 +1195,13 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_head = ctk.CTkLabel(head_row, text="SELECTED", **label_style(), anchor="w")
         self.detail_head.grid(row=0, column=0, sticky="w")
         self.theater_btn = ctk.CTkButton(
-            head_row, text="⛶ Theater", width=90, height=24, corner_radius=6,
+            head_row, text="⛶ Theater", width=90, height=24, corner_radius=T.R_SM,
             font=font(10), fg_color=T.ACCENT_DEEP if self.cfg.theater else T.BTN,
             hover_color=T.BTN_HOV, text_color=T.ACCENT if self.cfg.theater else T.DIM,
             command=self.toggle_theater)
         self.theater_btn.grid(row=0, column=1, sticky="e")
 
-        card = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=12,
+        card = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=T.R_LG,
                             border_width=1, border_color=T.ACCENT2_DEEP)
         card.grid(row=1, column=0, sticky="ew")
         card.grid_columnconfigure(0, weight=1)
@@ -1193,7 +1215,7 @@ class LibraryTab(ctk.CTkFrame):
         # otherwise move every button underneath by a row - and the
         # buttons are what the mouse is already on its way to.
         self.detail_name = ctk.CTkLabel(card, text="Nothing selected", font=font(15, "bold", display=True),
-                                         text_color=T.TEXT, anchor="w",
+                                         text_color=T.FAINT, anchor="w",
                                          wraplength=470, justify="left", height=24)
         self.detail_name.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 0))
         self.detail_meta = ctk.CTkLabel(card, text="", font=font(12, mono=True),
@@ -1214,7 +1236,7 @@ class LibraryTab(ctk.CTkFrame):
         # One primary - sending the clip to the edit is what this panel is
         # for - and the rest neutral. They used to wear five colours.
         def dbtn(text, cmd, width=58, kind="secondary", hint=""):
-            options = dict(text=text, width=width, height=27, corner_radius=7,
+            options = dict(text=text, width=width, height=27, corner_radius=T.R_SM,
                            command=cmd, state="disabled", font=font(11, "bold"))
             if kind == "primary":
                 b = PrimaryButton(buttons, T.ACCENT2, **options)
@@ -2255,6 +2277,7 @@ class LibraryTab(ctk.CTkFrame):
         self.page = 0
         self._remember_state()
         self._render_chips(query)
+        self._fit_search_rest()
         self.queue_tagpanel()
         self.render_page()
 
@@ -2807,13 +2830,17 @@ class LibraryTab(ctk.CTkFrame):
         self.IMG_H = int(self.CARD_W * 9 / 16)
         margin = self.GAP
 
-        if not self.records:
-            canvas.create_text(24, 28, text=self.F("empty_db"), fill=T.FAINT,
-                               font=(T.UI, pt(12)), anchor="nw", width=width - 60)
-            return
-        if not batch:
-            canvas.create_text(24, 28, text=self.F("no_results"), fill=T.FAINT,
-                               font=(T.UI, pt(12)), anchor="nw")
+        if not self.records or not batch:
+            cx = width // 2
+            cy = max(canvas.winfo_height(), px(240)) // 2 - px(20)
+            if not self.records:
+                draw_empty(canvas, cx, cy, "folder", "No library yet")
+                canvas.create_text(cx, cy + px(42), text=self.F("empty_db"),
+                                   fill=EMPTY_INK, font=(T.UI, pt(10)),
+                                   width=min(width - px(60), px(420)), justify="center",
+                                   anchor="n")
+            else:
+                draw_empty(canvas, cx, cy, "search", self.F("no_results"))
             return
 
         cell_h = self.IMG_H + self.CAP_H + self.GAP
@@ -4263,14 +4290,14 @@ class LibraryTab(ctk.CTkFrame):
         # to the clip - see clip_aspect().
         self._fit_panel()
         if not rec:
-            self.detail_name.configure(text="Nothing selected")
+            self.detail_name.configure(text="Nothing selected", text_color=T.FAINT)
             self.detail_meta.configure(text="")
             self._cancel_tag_list()
             self._tags_for = None
             self.detail_tags.show([], keep_scroll=False)
             return
 
-        self.detail_name.configure(text=rec.name)
+        self.detail_name.configure(text=rec.name, text_color=T.TEXT)
         self._render_meta_line(rec)
         self._queue_tag_list(rec)
 
@@ -4373,49 +4400,56 @@ class LibraryTab(ctk.CTkFrame):
         many = len(picked) > 1
         what = f"{len(picked)} clips" if many else rec.name
 
-        menu = popup_menu(self.root)
+        menu = popup_menu(self.root, activebackground=T.ACCENT2_DEEP,
+                          activeforeground=T.ACCENT2)
         if many:
-            menu.add_command(label=f"{len(picked)} clips selected", state="disabled")
+            menu.add_command(label=f"{len(picked)} selected", state="disabled")
             menu_rule(menu)
         menu.add_command(label="Play here", command=lambda: self._select_and_play(rec))
         menu.add_command(label="Open externally", command=lambda: open_file(rec.path))
         menu.add_command(label="Show in folder", command=lambda: open_in_explorer(rec.path))
         if rec.pid:
-            menu.add_command(label=f"Open e621 post #{rec.pid}",
+            menu.add_command(label=f"Open e621 #{rec.pid}",
                              command=lambda: self._open_url(rec))
         menu_rule(menu)
+
         page = self.page_recs()
+        tags_menu = popup_menu(menu, activebackground=T.ACCENT2_DEEP,
+                               activeforeground=T.ACCENT2)
         if many or rec.pid:
-            menu.add_command(
-                label=f"Fetch e621 tags for {what}",
-                command=lambda: self.fetch_for(picked, what))
+            tags_menu.add_command(label=what.capitalize() if many else "This clip",
+                                  command=lambda: self.fetch_for(picked, what))
         else:
-            menu.add_command(label="No post ID - nothing to fetch",
-                             state="disabled")
+            tags_menu.add_command(label="No post ID on this clip", state="disabled")
         untagged = [r for r in page if r.pid and not r.tags]
         if untagged and not many:
-            menu.add_command(
-                label=f"Fetch tags for the {len(untagged)} untagged here",
-                command=lambda: self.fetch_for(untagged,
-                                               f"{len(untagged)} untagged"))
+            tags_menu.add_command(
+                label=f"{len(untagged)} untagged on this page",
+                command=lambda: self.fetch_for(untagged, f"{len(untagged)} untagged"))
         if not many:
-            menu.add_command(label=f"Fetch tags for all {len(page)} results",
-                             command=lambda: self.fetch_for(page,
-                                                            f"{len(page)} results"))
-        menu_rule(menu)
-        menu.add_command(label=f"Add {what} to Resolve",
-                         command=lambda: self.send_to_resolve(picked))
+            tags_menu.add_command(
+                label=f"All {len(page)} on this page",
+                command=lambda: self.fetch_for(page, f"{len(page)} results"))
+        menu.add_cascade(label="Fetch tags", menu=tags_menu)
+
+        resolve_menu = popup_menu(menu, activebackground=T.ACCENT2_DEEP,
+                                  activeforeground=T.ACCENT2)
+        resolve_menu.add_command(label=what.capitalize() if many else "This clip",
+                                 command=lambda: self.send_to_resolve(picked))
         if not many:
-            menu.add_command(label=f"Add these {len(page)} results to Resolve",
-                             command=lambda: self.send_to_resolve(page))
+            resolve_menu.add_command(
+                label=f"All {len(page)} on this page",
+                command=lambda: self.send_to_resolve(page))
+        menu.add_cascade(label="Add to Resolve", menu=resolve_menu)
         menu_rule(menu)
-        menu.add_command(label="Select everything on this page",
-                         command=self.mark_all_on_page)
+
+        menu.add_command(label="Select this page", command=self.mark_all_on_page)
         if self.marked:
             menu.add_command(label="Clear selection", command=self.clear_marks)
         menu_rule(menu)
 
-        used_menu = popup_menu(menu)
+        used_menu = popup_menu(menu, activebackground=T.ACCENT2_DEEP,
+                               activeforeground=T.ACCENT2)
         conn = db_connect()
         try:
             projects = vault_projects_list(conn)
@@ -4428,27 +4462,33 @@ class LibraryTab(ctk.CTkFrame):
                                   command=lambda n=name: self._mark_used(picked, n))
         used_menu.add_command(label="New project…",
                               command=lambda: self._mark_used_new(picked))
-        menu.add_cascade(label=f"Mark {what} as used…", menu=used_menu)
-        for name in rec.used_projects:
-            menu.add_command(label=f"Remove from '{name}'",
-                             command=lambda n=name: self._unmark_used(rec, n))
+        if rec.used_projects:
+            menu_rule(used_menu)
+            for name in rec.used_projects:
+                used_menu.add_command(label=f"Remove from {name}",
+                                      command=lambda n=name: self._unmark_used(rec, n))
+        menu.add_cascade(label="Mark as used", menu=used_menu)
         menu_rule(menu)
-        copy_menu = popup_menu(menu)
+
+        copy_menu = popup_menu(menu, activebackground=T.ACCENT2_DEEP,
+                               activeforeground=T.ACCENT2)
         copy_menu.add_command(label="File name", command=lambda: self._copy(rec.name))
-        copy_menu.add_command(label="File name (no extension)",
+        copy_menu.add_command(label="Name without extension",
                               command=lambda: self._copy(os.path.splitext(rec.name)[0]))
         copy_menu.add_command(label="Full path", command=lambda: self._copy(rec.path))
-        copy_menu.add_command(label="Folder path",
+        copy_menu.add_command(label="Folder",
                               command=lambda: self._copy(os.path.dirname(rec.path)))
         if rec.pid:
-            copy_menu.add_command(label=f"Post ID ({rec.pid})", command=lambda: self._copy(rec.pid))
+            copy_menu.add_command(label=f"Post ID  {rec.pid}",
+                                  command=lambda: self._copy(rec.pid))
             copy_menu.add_command(label="e621 URL",
                                   command=lambda: self._copy(rec.url or E621_POST.format(pid=rec.pid)))
         if rec.tags:
             copy_menu.add_command(label="All tags",
                                   command=lambda: self._copy(" ".join(sorted(rec.tags))))
         if rec.artists:
-            copy_menu.add_command(label="Artist", command=lambda: self._copy(", ".join(rec.artists)))
+            copy_menu.add_command(label="Artist",
+                                  command=lambda: self._copy(", ".join(rec.artists)))
         menu.add_cascade(label="Copy", menu=copy_menu)
         try:
             menu.tk_popup(event.x_root, event.y_root)
