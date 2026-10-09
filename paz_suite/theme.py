@@ -849,7 +849,7 @@ CONVERT_LABELS = {
     "finished":   "Finished",
     "stopped":    "Stopped",
     "checkup":    "Checking upscales",
-    "no_selection": "Select a file to inspect it",
+    "no_selection": "Select a file to preview",
     "empty":      "Nothing queued",
     "nothing_msg": ("Nothing to convert. Everything here is already "
                      "converted, or the source folders are empty."),
@@ -878,12 +878,12 @@ LIBRARY_LABELS = {
 VAULT_LABELS = {
     "tagline":  "used-clip tracker",
     "idle":     "Ready",
-    "empty":    "Paste a list of post IDs or filenames above, then press Look up.",
+    "empty":    "Ready",
 }
 
 BEAT_LABELS = {
     "tagline":     "beat markers for Resolve",
-    "idle":        "Pick a song, then press Analyze",
+    "idle":        "",
     "loading":     "Loading model",
     "analyzing":   "Analyzing audio",
     "writing":     "Writing",

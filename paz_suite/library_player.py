@@ -26,7 +26,8 @@ from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback, joins_playback
 from .mpv_player import MpvPlayer, available as mpv_available
 from .vlc_player import VlcPlayer, available as vlc_available
 from .libmpv_player import LibMpvPlayer
-from . import uithread
+from . import icons, uithread
+from .widgets import draw_empty, tip
 
 
 class InlinePlayer:
@@ -118,19 +119,22 @@ class InlinePlayer:
         # row has to fit the inspector column at its NARROWEST, and at
         # 150% display scaling the generous version ran off the end -
         # taking the volume slider with it.
-        def cbtn(text, cmd, width=38, color=T.DIM):
+        def cbtn(text, cmd, width=38, color=T.DIM, image=None):
             b = ctk.CTkButton(controls, text=text, width=width, height=26,
                                corner_radius=6, font=font(10), fg_color=T.BTN,
                                hover_color=T.BTN_HOV, text_color=color,
-                               command=cmd)
+                               image=image, compound="left", command=cmd)
             b.pack(side="left", padx=(0, 4))
             return b
 
-        self.play_btn = cbtn("▶ Play", self.toggle, 58, T.ACCENT)
-        cbtn("-5s", lambda: self.nudge(-5), 36)
-        cbtn("+5s", lambda: self.nudge(5), 36)
-        self.loop_btn = cbtn("Loop", self.toggle_loop, 44,
-                              T.ACCENT if self.engine.loop else T.DIM)
+        self.play_btn = cbtn("", self.toggle, 38, image=icons.icon("play", 15, T.ACCENT))
+        self.back_btn = cbtn("5", lambda: self.nudge(-5), 40, image=icons.icon("back", 13, T.DIM))
+        self.fwd_btn = cbtn("5", lambda: self.nudge(5), 40, image=icons.icon("forward", 13, T.DIM))
+        tip(self.play_btn, "Play / pause  ·  Space")
+        tip(self.back_btn, "Back 5 seconds  ·  ←")
+        tip(self.fwd_btn, "Forward 5 seconds  ·  →")
+        self.loop_btn = cbtn("", self.toggle_loop, 34,
+                              image=self._loop_icon(self.engine.loop))
         self.quality_btn = cbtn("4K", self.toggle_quality, 38)
         self.quality_btn.configure(state="disabled")
         self.speed_menu = ctk.CTkOptionMenu(
@@ -159,13 +163,18 @@ class InlinePlayer:
         self.volume_slider.set(0 if self.engine.muted else self.engine.volume)
         self.volume_slider.pack(side="right", padx=(2, 6))
         self.mute_btn = ctk.CTkButton(
-            controls, text="🔇" if self.engine.muted else "🔊",
+            controls, text="", image=self._mute_icon(self.engine.muted),
             width=28, height=26, corner_radius=6, font=font(11),
             fg_color="transparent", hover_color=T.BTN_HOV,
             text_color=T.FAINT if self.engine.muted else T.TEXT,
             state="normal" if HAS_AUDIO else "disabled",
             command=self.toggle_mute)
         self.mute_btn.pack(side="right", padx=(4, 0))
+        tip(self.mute_btn, "Mute  ·  M")
+        tip(self.loop_btn, lambda: "Looping  ·  click to stop" if self.engine.loop
+            else "Loop the clip")
+        tip(self.quality_btn, "Play the 4K copy or the original")
+        tip(self.sync_btn, "The player in use  ·  A/V offset and playback report")
         if not HAS_AUDIO:
             self.volume_slider.configure(state="disabled")
 
@@ -679,15 +688,17 @@ class InlinePlayer:
             return
         prefer = self.tab.cfg.player_prefer_premium
         self.quality_btn.configure(
-            state="normal", text="4K ✓" if prefer else "Original",
+            state="normal", text="4K" if prefer else "Original",
             text_color=T.ACCENT if prefer else T.DIM)
+
+    IDLE_ICONS = {"Select a clip": "clip", "No thumbnail yet": "film"}
 
     def _show_idle_text(self, text: str):
         self._idle_text = text
         self._show_stage(False)
         self.canvas.delete("all")
-        self.canvas.create_text(self.engine.view_w // 2, self.engine.view_h // 2,
-                                text=text, fill=T.FAINT, font=(T.UI, pt(11)))
+        draw_empty(self.canvas, self.engine.view_w // 2, self.engine.view_h // 2,
+                   self.IDLE_ICONS.get(text, "clip"), text)
 
     def _show_thumb(self, rec, delay: int = 0):
         """Draw the resting still. `delay` coalesces a burst of these.
@@ -733,10 +744,15 @@ class InlinePlayer:
             self.canvas.create_image(self.engine.view_w // 2, self.engine.view_h // 2,
                                      image=photo, anchor="center")
             self.canvas.image = photo   # keep a reference
-            self.canvas.create_text(self.engine.view_w // 2, self.engine.view_h - 14,
-                                    text="▶ play", fill=T.TEXT, font=(T.UI, pt(9)))
+            # A play badge rather than the words "▶ play": the same glyph
+            # as the button under it, on a dark disc so it reads on any frame.
+            cx, cy, r = self.engine.view_w // 2, self.engine.view_h - px(22), px(14)
+            self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=T.BG,
+                                    outline=T.LINE)
+            self.canvas.create_image(cx + px(1), cy,
+                                     image=icons.photo("play", px(14), T.TEXT))
         except Exception:
-            self._show_idle_text("no thumbnail")
+            self._show_idle_text("No thumbnail yet")
 
     # Finished stills, kept per clip and size. Picking footage means
     # clicking through clips and coming back to the ones worth a second
@@ -897,7 +913,11 @@ class InlinePlayer:
     def toggle_loop(self) -> None:
         loop = self.engine.toggle_loop()
         self.tab.cfg.player_loop = loop
-        self.loop_btn.configure(text_color=T.ACCENT if loop else T.DIM)
+        self.loop_btn.configure(image=self._loop_icon(loop))
+
+    @staticmethod
+    def _loop_icon(loop: bool):
+        return icons.icon("repeat", 14, T.ACCENT if loop else T.DIM)
 
     def nudge(self, seconds: float) -> None:
         if self.rec:
@@ -946,14 +966,17 @@ class InlinePlayer:
         muted = self.engine.toggle_mute()
         self.tab.cfg.player_muted = muted
         self.tab.cfg.save_soon()
-        self.mute_btn.configure(text="🔇" if muted else "🔊",
-                                text_color=T.FAINT if muted else T.TEXT)
+        self.mute_btn.configure(image=self._mute_icon(muted))
         self.volume_slider.set(0 if muted else self.engine.volume)
+
+    @staticmethod
+    def _mute_icon(muted: bool):
+        return icons.icon("muted", 15, T.FAINT) if muted else icons.icon("volume", 15, T.TEXT)
 
     def _on_volume_drag(self, value):
         volume = max(0, min(int(round(float(value))), 100))
         if self.engine.muted and volume > 0:
-            self.mute_btn.configure(text="🔊", text_color=T.TEXT)
+            self.mute_btn.configure(image=self._mute_icon(False))
         if self._volume_job is not None:
             try:
                 self.canvas.after_cancel(self._volume_job)
@@ -1004,7 +1027,7 @@ class InlinePlayer:
         if playing:
             self._show_stage(True)
             self._watch_progress()
-        self.play_btn.configure(text="⏸ Pause" if playing else "▶ Play")
+        self.play_btn.configure(image=icons.icon("pause" if playing else "play", 15, T.ACCENT))
 
     def _on_tick(self, position: float) -> None:
         self._draw_bar()

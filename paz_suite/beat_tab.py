@@ -22,8 +22,8 @@ import customtkinter as ctk
 from .theme import T, font, pt, px, column_width, BEAT_LABELS, table_style, window_size
 from .format import fmt_clock, fmt_len
 from . import beat_engine as be
-from . import uithread
-from .widgets import Card, StatTile, JobPanel, LogView
+from . import icons, uithread
+from .widgets import Card, StatTile, JobPanel, LogView, draw_empty, tip
 from .media import probe
 
 
@@ -95,8 +95,7 @@ class BeatGrid(Card):
         scale_h = px(16)
         floor = h - scale_h - px(6)
         if self._times is None or not len(self._times) or self._duration <= 0:
-            c.create_text(w // 2, h // 2, text="Analyze a song to see its beats here",
-                          fill=T.FAINT, font=(T.UI, pt(11)))
+            draw_empty(c, w // 2, h // 2, "waveform", "No beats yet")
             return
         span = w - 2 * pad
         tall = floor - px(22)          # clear of the legend along the top
@@ -226,9 +225,11 @@ class BeatTab(ctk.CTkFrame):
                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                      text_color=T.DIM, command=self._open_settings
                      ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(right, text="?", width=30, height=30, corner_radius=7,
-                     font=font(12, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                     text_color=T.FAINT, command=self._open_help).pack(side="left")
+        help_btn = ctk.CTkButton(right, text="", width=30, height=30, corner_radius=7,
+                                 fg_color=T.BTN, hover_color=T.BTN_HOV,
+                                 image=icons.icon("help", 16, T.DIM), command=self._open_help)
+        help_btn.pack(side="left")
+        tip(help_btn, "How Beat This works, and exporting to Resolve  ·  F1")
 
     # ── left: song + run controls ────────────────────────────────────────
 
@@ -274,6 +275,7 @@ class BeatTab(ctk.CTkFrame):
             font=font(12, "bold"), fg_color=T.ACCENT4_DEEP, hover_color=T.BTN_HOV,
             text_color=T.ACCENT4, command=self._analyze)
         self.analyze_btn.pack(side="left")
+        tip(self.analyze_btn, "Find the beats in the chosen song  ·  F5")
         self.status_label = ctk.CTkLabel(run_row, text="", font=font(10),
                                          text_color=T.DIM, anchor="w", justify="left",
                                          wraplength=440)
@@ -590,17 +592,17 @@ class BeatTab(ctk.CTkFrame):
             state="disabled", command=self._send_resolve)
         self.send_resolve_btn.pack(side="left", padx=(8, 0))
 
-        ctk.CTkLabel(export, text=(
-            "EDL markers land at absolute record timecode, so 'Timeline starts "
-            "at' has to match your timeline's own start - Resolve uses "
-            "01:00:00:00 for a new one, which is why an EDL written from "
-            "00:00:00:00 imports and leaves you with nothing. Put the song at "
-            "the very start of the timeline, then Timeline > Import > Timeline "
-            "Markers from EDL. 'Send to Resolve now' needs none of that, but "
-            "does need Resolve open here with Preferences > System > General > "
-            "'External scripting using' set to Local."),
-            font=font(10), text_color=T.FAINT, wraplength=560, justify="left"
-            ).grid(row=3, column=0, sticky="w", padx=14, pady=(0, 12))
+        tip(self.start_tc_box, "Your timeline's own start timecode. Resolve starts "
+                               "new timelines at 01:00:00:00; an EDL written from "
+                               "the wrong base imports with no markers.")
+        tip(self.save_tsv_btn, "Plain time / beat-number text, as beat_this and "
+                               "Sonic Visualiser read it")
+        tip(self.save_edl_btn, "Put the song at the very start of the timeline, then "
+                               "Timeline > Import > Timeline Markers from EDL. "
+                               "Frame rate and start timecode have to match.")
+        tip(self.send_resolve_btn, "Adds markers to the timeline open in Resolve. Needs "
+                                   "Preferences > System > General > External "
+                                   "scripting using: Local.")
 
     def _build_style(self) -> None:
         table_style(self, "B.Treeview", 26)

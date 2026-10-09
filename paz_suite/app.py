@@ -26,6 +26,8 @@ from .library_tab import LibraryTab
 from .vault_tab import VaultTab
 from .beat_tab import BeatTab
 from .settings_window import SettingsWindow
+from .library_windows import HelpWindow
+from .shortcuts import open_shortcuts
 from .watchdog import Watchdog
 from . import watchdog
 from . import artwork, audio_out, heap, libmpv_player, uithread, vlc_player, winsys
@@ -809,6 +811,7 @@ class PazApp:
                 else None))
         root.bind("<Left>", self._left)
         root.bind("<Right>", self._right)
+        root.bind("<F1>", lambda e: self._shortcuts())
 
         # Convert-only
         root.bind("<Control-Return>", lambda e: self._only("Convert", self.convert.key_start))
@@ -859,6 +862,16 @@ class PazApp:
         root.bind("<Control-c>", lambda e: self._only_evt("Library", self.library.key_copy_name, e))
         root.bind("<Control-Shift-C>",
                   lambda e: self._only_evt("Library", self.library.key_copy_path, e))
+
+    def _shortcuts(self) -> None:
+        name = self._active()
+        tab = self._tab_object(name, build=False)
+        on_help = None
+        if name == "Library":
+            on_help = lambda: HelpWindow(self.root)
+        elif tab is not None:
+            on_help = getattr(tab, "_open_help", None)
+        open_shortcuts(self.root, name, on_help)
 
     def _only(self, tab_name: str, fn) -> None:
         if self._active() == tab_name:

@@ -12,7 +12,7 @@ from datetime import datetime
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, pt, px
+from .theme import T, font, mix, pt, px
 from .format import fmt_size
 
 
@@ -72,12 +72,169 @@ def menu_header(menu: tk.Menu, text: str) -> None:
     menu.add_command(label=text.upper(), state="disabled")
 
 
+# ── tooltips ────────────────────────────────────────────────────────────
+#
+# How-to text used to be printed in the layout ("click timeline · ←→ step
+# · Space play/pause") and sat there on every screen, for good, after the
+# first time it had been read. It lives on the control it describes now,
+# shown after a short hover, and the full list is the shortcuts sheet (F1).
+
+TIP_DELAY_MS = 450
+
+
+class _Tip:
+    """One borderless window per root, moved and relabelled per widget -
+    creating and destroying a toplevel per hover flickers on Windows."""
+
+    def __init__(self, root):
+        self.root = root
+        self.win = None
+        self.label = None
+        self.owner = None
+        self._show_job = None
+        self._hide_job = None
+
+    def _build(self):
+        win = tk.Toplevel(self.root)
+        win.withdraw()
+        win.overrideredirect(True)
+        try:
+            win.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        win.configure(bg=T.LINE)
+        self.label = tk.Label(win, bg=T.ELEVATED, fg=T.TEXT, font=(T.UI, pt(10)),
+                              justify="left", padx=px(9), pady=px(5),
+                              wraplength=px(320))
+        self.label.pack(padx=1, pady=1)
+        self.win = win
+
+    def enter(self, widget, text):
+        self._cancel("_hide_job")
+        if self.owner is widget and self.win is not None and self.win.winfo_viewable():
+            return
+        self._cancel("_show_job")
+        self.owner = widget
+        self._show_job = self.root.after(TIP_DELAY_MS, lambda: self._show(widget, text))
+
+    def leave(self, widget):
+        self._cancel("_show_job")
+        # Later rather than now: a CTk button is a canvas with a label on
+        # top, and crossing from one to the other is a Leave and an Enter.
+        self._cancel("_hide_job")
+        self._hide_job = self.root.after(60, self.hide)
+
+    def hide(self):
+        self._cancel("_show_job")
+        self._cancel("_hide_job")
+        self.owner = None
+        if self.win is not None:
+            try:
+                self.win.withdraw()
+            except tk.TclError:
+                pass
+
+    def _cancel(self, name):
+        job = getattr(self, name)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except (ValueError, tk.TclError):
+                pass
+            setattr(self, name, None)
+
+    def _show(self, widget, text):
+        self._show_job = None
+        try:
+            if not widget.winfo_viewable():
+                return
+            if self.win is None:
+                self._build()
+            self.label.configure(text=text() if callable(text) else text)
+            self.win.update_idletasks()
+            w, h = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
+            x = widget.winfo_rootx() + (widget.winfo_width() - w) // 2
+            y = widget.winfo_rooty() + widget.winfo_height() + px(6)
+            screen_w = widget.winfo_screenwidth()
+            x = max(4, min(x, screen_w - w - 4))
+            if y + h > widget.winfo_screenheight() - 4:
+                y = widget.winfo_rooty() - h - px(6)
+            self.win.geometry(f"+{x}+{y}")
+            self.win.deiconify()
+            self.win.lift()
+        except tk.TclError:
+            pass
+
+
+def _tip_for(widget) -> _Tip:
+    root = widget.winfo_toplevel()
+    tip_ = getattr(root, "_paz_tip", None)
+    if tip_ is None:
+        tip_ = _Tip(root)
+        root._paz_tip = tip_
+    return tip_
+
+
+def tip(widget, text) -> None:
+    """Show `text` (or the result of calling it) under `widget` on hover."""
+    def enter(_e=None):
+        _tip_for(widget).enter(widget, text)
+
+    def leave(_e=None):
+        _tip_for(widget).leave(widget)
+
+    def press(_e=None):
+        _tip_for(widget).hide()
+
+    for sequence, handler in (("<Enter>", enter), ("<Leave>", leave),
+                              ("<ButtonPress>", press)):
+        try:
+            widget.bind(sequence, handler, add="+")
+        except (TypeError, ValueError, NotImplementedError):
+            pass
+
+
+# ── empty states ────────────────────────────────────────────────────────
+#
+# "Select a clip" in body text in the middle of a dark panel read as
+# something that had failed to load. A faint icon over one short line
+# reads as a place waiting for something.
+
+EMPTY_INK = mix(T.FAINT, T.SURFACE, 0.45)   # quieter than the line under it
+
+def draw_empty(canvas, cx: int, cy: int, icon_name: str, text: str,
+               tag: str = "empty") -> None:
+    """An empty state drawn onto a raw canvas, centred on (cx, cy)."""
+    from . import icons
+    size = px(30)
+    canvas.create_image(cx, cy - px(12), image=icons.photo(icon_name, size, EMPTY_INK),
+                        tags=(tag,))
+    canvas.create_text(cx, cy + px(18), text=text, fill=T.FAINT,
+                       font=(T.UI, pt(10)), tags=(tag,))
+
+
+class EmptyState(ctk.CTkFrame):
+    """The same, as a widget for CTk containers."""
+
+    def __init__(self, parent, icon_name: str, text: str, **kw):
+        from . import icons
+        kw.setdefault("fg_color", "transparent")
+        super().__init__(parent, **kw)
+        self.icon = ctk.CTkLabel(self, text="", image=icons.icon(icon_name, 28, EMPTY_INK))
+        self.icon.pack(pady=(0, 6))
+        self.text = ctk.CTkLabel(self, text=text, font=font(10), text_color=T.FAINT)
+        self.text.pack()
+
+    def set_text(self, text: str) -> None:
+        self.text.configure(text=text)
+
+
 class Card(ctk.CTkFrame):
     """A panel with a hairline border, optionally titled."""
 
     def __init__(self, parent, title: str = "", **kw):
         kw.setdefault("fg_color", T.SURFACE)
-        kw.setdefault("corner_radius", 10)
+        kw.setdefault("corner_radius", 12)
         kw.setdefault("border_width", 1)
         kw.setdefault("border_color", T.LINE)
         super().__init__(parent, **kw)

@@ -41,8 +41,8 @@ from .library_db import (
 )
 from .library_player import InlinePlayer
 from .library_windows import HelpWindow
-from .widgets import popup_menu, menu_rule
-from . import artwork, uithread
+from .widgets import EMPTY_INK, popup_menu, menu_rule, tip
+from . import artwork, icons, uithread
 
 _SPLIT_RE = re.compile(r"[,\n\r\t;]+|\s+")
 
@@ -143,9 +143,11 @@ class VaultTab(ctk.CTkFrame):
                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                      text_color=T.DIM, command=self._open_settings
                      ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(right, text="?", width=30, height=30, corner_radius=7,
-                     font=font(12, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                     text_color=T.FAINT, command=self._open_help).pack(side="left")
+        help_btn = ctk.CTkButton(right, text="", width=30, height=30, corner_radius=7,
+                                 fg_color=T.BTN, hover_color=T.BTN_HOV,
+                                 image=icons.icon("help", 16, T.DIM), command=self._open_help)
+        help_btn.pack(side="left")
+        tip(help_btn, "Help and keyboard shortcuts  ·  F1")
 
     def _build_lookup(self):
         panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
@@ -164,9 +166,13 @@ class VaultTab(ctk.CTkFrame):
 
         row = ctk.CTkFrame(panel, fg_color="transparent")
         row.grid(row=2, column=0, sticky="ew", pady=(8, 10))
-        ctk.CTkButton(row, text="Look up", width=100, height=32, corner_radius=7,
-                      font=font(11, "bold"), fg_color=T.ACCENT3_DEEP, hover_color=T.BTN_HOV,
-                      text_color=T.ACCENT3, command=self._run_lookup).pack(side="left")
+        tip(self.paste_box, "One per line, or separated by commas or spaces")
+        lookup = ctk.CTkButton(row, text="Look up", width=100, height=32, corner_radius=7,
+                               font=font(11, "bold"), fg_color=T.ACCENT3_DEEP,
+                               hover_color=T.BTN_HOV, text_color=T.ACCENT3,
+                               command=self._run_lookup)
+        lookup.pack(side="left")
+        tip(lookup, "Find the pasted clips in the library  ·  F5")
         ctk.CTkButton(row, text="Clear", width=80, height=32, corner_radius=7,
                       font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
                       text_color=T.DIM, command=self._clear_lookup).pack(side="left", padx=(8, 0))
@@ -235,9 +241,10 @@ class VaultTab(ctk.CTkFrame):
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(5, weight=1)
 
-        ctk.CTkLabel(panel, text="PROJECTS · click a name to browse its clips",
-                     font=font(9, "bold"), text_color=T.FAINT, anchor="w"
-                     ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        projects_head = ctk.CTkLabel(panel, text="PROJECTS", font=font(9, "bold"),
+                                     text_color=T.FAINT, anchor="w")
+        projects_head.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        tip(projects_head, "Click a project to browse its clips  ·  right-click for more")
 
         # The list sits in a box whose height is set from the number of
         # projects (see _fit_projects_list) and is stretched to fill it.
@@ -920,7 +927,10 @@ class VaultTab(ctk.CTkFrame):
         self._strip_token += 1
         c = self.strip_canvas
         c.delete("all")
-        c.create_text(10, (self.STRIP_H + 8) // 2, text=text, fill=T.FAINT,
+        mid = (self.STRIP_H + 8) // 2
+        c.create_image(px(14), mid, anchor="w",
+                       image=icons.photo("inbox", px(22), EMPTY_INK))
+        c.create_text(px(46), mid, text=text, fill=T.FAINT,
                       font=(T.UI, pt(10)), anchor="w")
         c.configure(scrollregion=(0, 0, 0, self.STRIP_H + 8))
 

@@ -103,9 +103,9 @@ class HelpWindow(ctk.CTkToplevel):
          "runs a full pass instead, catching up every post that's due for "
          "a refresh, not just a small batch. Add an API key in Settings "
          "for fewer unavailable posts."),
-        ("Score, 4K ✓, Shape", "▲ is the e621 upvote score - sort by it or "
-         "use Highest scoring first. 4K ✓ means a 4K/60+ copy exists. Shape, "
-         "in the ⋯ menu next to Random clip, is a one-click Portrait / "
+        ("Score, 4K copy, Shape", "▲ is the e621 upvote score - sort by it or "
+         "use Highest scoring first. 4K copy means a 4K/60+ copy exists. Shape, "
+         "in the menu at the end of the search bar, is a one-click Portrait / "
          "Widescreen / Square filter, since aspect ratio isn't usually a "
          "tag."),
         ("Grid", "A contact sheet of twelve evenly-spaced frames from the "
@@ -122,7 +122,9 @@ class HelpWindow(ctk.CTkToplevel):
          "dragon*. is:untagged, is:noid, is:4k, is:portrait, is:widescreen, "
          "is:square are the useful specials; used:\"project name\" (quotes "
          "for names with spaces) finds clips marked used in the Vault tab. "
-         "Click a tag to add it; right-click for exclude/hide."),
+         "Click a tag to add it; right-click for exclude/hide. The star, "
+         "clock and x in the search box are saved searches, recent "
+         "searches and clear."),
         ("Vault", "A separate tab for the moment after you finish an edit: "
          "paste a list of post IDs or filenames, it finds them in the "
          "library, and you mark the ones you actually used under a project "
@@ -137,7 +139,7 @@ class HelpWindow(ctk.CTkToplevel):
          "about half the window and puts the tag list away. Playback uses "
          "the converted copy, which is far cheaper to decode; when a clip "
          "also has a 4K/60+ copy in the edit pool, the 4K button next to "
-         "Loop switches to it and remembers the choice."),
+         "the loop button switches to it and remembers the choice."),
         ("Sound", "It uses the best player installed - VLC, then mpv, then "
          "its own - and all three keep picture locked to sound. The sync "
          "button says which one is running, and Copy playback report there "

@@ -35,12 +35,13 @@ from .library_db import (
 )
 from .library_player import InlinePlayer
 from .tag_rail import Chip as RailChip, Section as RailSection, TagList, TagRail
-from . import artwork, backups, heap, prefetch, uithread
+from . import artwork, backups, heap, icons, prefetch, uithread
 from .winsys import awake
 from .speedcheck import SpeedCheck
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
-from .widgets import MiniProgress, popup_menu, menu_rule
+from .widgets import MiniProgress, popup_menu, menu_rule, tip
+from .shortcuts import open_shortcuts
 
 
 
@@ -327,17 +328,18 @@ class LibraryTab(ctk.CTkFrame):
         tk.Label(box, image=self._lens, bg=T.INPUT, bd=0
                  ).pack(side="left", padx=(px(13), 0))
 
-        def boxbtn(text, cmd, size=13):
+        def boxbtn(icon_name, cmd, hint):
             button = ctk.CTkButton(
-                box, text=text, width=28, height=self.SEARCH_H - 12,
-                corner_radius=7, font=font(size), fg_color="transparent",
-                hover_color=T.BTN_HOV, text_color=T.DIM, command=cmd)
+                box, text="", width=28, height=self.SEARCH_H - 12,
+                corner_radius=7, fg_color="transparent", hover_color=T.BTN_HOV,
+                image=icons.icon(icon_name, 15, T.DIM), command=cmd)
             button.pack(side="right", padx=(0, 5))
+            tip(button, hint)
             return button
 
-        self.clear_btn = boxbtn("✕", self._clear_search, 12)
-        self.history_btn = boxbtn("↺", self._show_history)
-        self.saved_btn = boxbtn("★", self._saved_menu, 12)
+        self.clear_btn = boxbtn("x", self._clear_search, "Clear the search  ·  Esc")
+        self.history_btn = boxbtn("history", self._show_history, "Recent searches  ·  ↑ ↓")
+        self.saved_btn = boxbtn("star", self._saved_menu, "Saved searches")
 
         self.search = ctk.CTkEntry(
             box, placeholder_text="Search",
@@ -371,10 +373,11 @@ class LibraryTab(ctk.CTkFrame):
         self.sort_menu.pack(side="left", padx=(0, 8))
 
         self.more_btn = ctk.CTkButton(
-            right, text="⋯", width=40, height=self.SEARCH_H,
-            corner_radius=7, font=font(15, "bold"), fg_color=T.BTN,
-            hover_color=T.BTN_HOV, text_color=T.ACCENT2, command=self._more_menu)
+            right, text="", width=40, height=self.SEARCH_H,
+            corner_radius=7, fg_color=T.BTN, hover_color=T.BTN_HOV,
+            image=icons.icon("more", 18, T.ACCENT2), command=self._more_menu)
         self.more_btn.pack(side="left")
+        tip(self.more_btn, "Sync, fix, fetch tags, random, folders, help")
 
     # ── the search field's two sizes ────────────────────────────────────
 
@@ -467,8 +470,10 @@ class LibraryTab(ctk.CTkFrame):
         menu_rule(menu)
         menu.add_command(label="Change folders…", command=self._open_folders)
         menu.add_command(label="Settings…", command=self._open_settings)
-        menu.add_command(label="Keyboard shortcuts…",
-                         command=lambda: HelpWindow(self.root))
+        menu.add_command(label="Help…", command=lambda: HelpWindow(self.root))
+        menu.add_command(label="Keyboard shortcuts…", accelerator="F1",
+                         command=lambda: open_shortcuts(
+                             self.root, "Library", lambda: HelpWindow(self.root)))
         menu.add_command(label="Speed check…", command=self._speed_check,
                          state="disabled" if self.busy or not self.records else "normal")
         try:
@@ -512,16 +517,15 @@ class LibraryTab(ctk.CTkFrame):
         head.grid(row=0, column=0, sticky="ew", pady=(2, 4))
         head.grid_columnconfigure(1, weight=1)
         self.side_toggle = ctk.CTkButton(
-            head, text="◀", width=26, height=24, corner_radius=6,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, command=self.toggle_sidebar)
+            head, text="", width=26, height=24, corner_radius=6,
+            fg_color=T.BTN, hover_color=T.BTN_HOV,
+            image=icons.icon("collapse", 14, T.DIM), command=self.toggle_sidebar)
         self.side_toggle.grid(row=0, column=0, sticky="w", padx=(2, 6))
+        tip(self.side_toggle, "Show or hide tags  ·  Ctrl+L")
         self.side_title = ctk.CTkLabel(head, text="TAGS IN RESULTS", font=font(10, "bold"),
                                         text_color=T.FAINT, anchor="w")
         self.side_title.grid(row=0, column=1, sticky="w")
-        self.side_hint = ctk.CTkLabel(head, text="click adds · right-click for more",
-                                       font=font(9), text_color=T.FAINT, anchor="w")
-        self.side_hint.grid(row=1, column=1, sticky="w")
+        tip(self.side_title, "Click a tag to add it to the search  ·  right-click for more")
 
         # One canvas, not five hundred widgets - see tag_rail.
         self.tagpanel = TagRail(
@@ -542,14 +546,12 @@ class LibraryTab(ctk.CTkFrame):
             self.side.configure(width=self.SIDEBAR_W)
             self.tagpanel.grid()
             self.side_title.grid()
-            self.side_hint.grid()
-            self.side_toggle.configure(text="◀")
+            self.side_toggle.configure(image=icons.icon("collapse", 14, T.DIM))
         else:
             self.tagpanel.grid_remove()
             self.side_title.grid_remove()
-            self.side_hint.grid_remove()
             self.side.configure(width=34)
-            self.side_toggle.configure(text="▶")
+            self.side_toggle.configure(image=icons.icon("expand", 14, T.DIM))
         if opening and self._rail_dirty:
             # It has been skipping its rebuild while shut - see
             # queue_tagpanel. Only when something did change: shut and
@@ -644,7 +646,7 @@ class LibraryTab(ctk.CTkFrame):
                 ("unused", "Never used", "is:unused"),
                 ("untagged", "Untagged", "is:untagged"),
                 ("noid", "No post ID", "is:noid"),
-                ("4k", "4K ✓", "is:4k"),
+                ("4k", "4K copy", "is:4k"),
                 ("no4k", "Non-4K", "is:no4k")):
             chip = ctk.CTkButton(self._quick_row, text=text, height=22, width=92,
                                  corner_radius=11, font=font(10),
@@ -658,27 +660,30 @@ class LibraryTab(ctk.CTkFrame):
         # _fit_quick_chips. A chip sliced in half by the edge of the panel
         # is not a filter, it is a rendering fault.
         self._quick_more = ctk.CTkButton(
-            self._quick_row, text="⋯", height=22, width=34,
-            corner_radius=11, font=font(10), fg_color=T.BTN,
-            hover_color=T.BTN_HOV, text_color=T.FAINT,
-            command=self._quick_menu)
+            self._quick_row, text="", height=22, width=34,
+            corner_radius=11, fg_color=T.BTN, hover_color=T.BTN_HOV,
+            image=icons.icon("more", 14, T.FAINT), command=self._quick_menu)
 
         pager = ctk.CTkFrame(info, fg_color="transparent")
         pager.grid(row=0, column=2, sticky="e", padx=(14, 0))
         self._info_pager = pager
         info.bind("<Configure>", self._fit_info_row)
 
-        def pbtn(text, cmd):
-            return ctk.CTkButton(pager, text=text, width=34, height=24,
-                                 corner_radius=6, font=font(11),
-                                 fg_color=T.BTN, hover_color=T.BTN_HOV,
-                                 text_color=T.DIM, command=cmd)
+        def pbtn(icon_name, cmd, hint):
+            button = ctk.CTkButton(pager, text="", width=34, height=24,
+                                   corner_radius=6, fg_color=T.BTN,
+                                   hover_color=T.BTN_HOV,
+                                   image=icons.icon(icon_name, 14, T.DIM), command=cmd)
+            tip(button, hint)
+            return button
 
-        pbtn("◀", lambda: self.turn_page(-1)).pack(side="left", padx=(0, 4))
+        pbtn("left", lambda: self.turn_page(-1), "Previous page  ·  PgUp"
+             ).pack(side="left", padx=(0, 4))
         self.page_label = ctk.CTkLabel(pager, text="", font=font(10, mono=True),
                                         text_color=T.FAINT)
         self.page_label.pack(side="left", padx=4)
-        pbtn("▶", lambda: self.turn_page(1)).pack(side="left", padx=(4, 0))
+        pbtn("right", lambda: self.turn_page(1), "Next page  ·  PgDn"
+             ).pack(side="left", padx=(4, 0))
 
         shell = ctk.CTkFrame(center, fg_color=T.SURFACE, corner_radius=12,
                              border_width=1, border_color=T.ACCENT2_DEEP)
@@ -1231,9 +1236,9 @@ class LibraryTab(ctk.CTkFrame):
         self._build_tag_grip(panel)
 
         self.detail_tags_head = ctk.CTkLabel(
-            panel, text="TAGS · click to search · right-click for more",
-            font=font(11, "bold"), text_color=T.FAINT, anchor="w")
+            panel, text="TAGS", font=font(10, "bold"), text_color=T.FAINT, anchor="w")
         self.detail_tags_head.grid(row=3, column=0, sticky="ew", padx=6, pady=(4, 4))
+        tip(self.detail_tags_head, "Click a tag to search for it  ·  right-click for more")
 
         # One canvas, not a CTkButton per tag - see tag_rail.
         self.detail_tags = TagList(panel, on_chip=self.add_token,
@@ -2058,10 +2063,11 @@ class LibraryTab(ctk.CTkFrame):
             # Yours, not counted: the accent tells them apart from the
             # chips that are just reporting what's in the results.
             chip = ctk.CTkButton(
-                row, text=f"★ {name}", height=22, corner_radius=11,
+                row, text=name, height=22, corner_radius=11,
                 font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                text_color=T.ACCENT2,
-                width=unscaled(self._text_w("quick", f"★ {name}") + px(26)),
+                text_color=T.ACCENT2, image=icons.icon("star", 12, T.ACCENT2),
+                compound="left",
+                width=unscaled(self._text_w("quick", name) + px(42)),
                 command=lambda n=name: self.apply_saved(n))
             chip.pack(side="left", padx=(0, 6))
             chip.bind("<Button-3>", lambda e, n=name: self._saved_chip_menu(n))
@@ -2299,7 +2305,7 @@ class LibraryTab(ctk.CTkFrame):
                         "the library carries counts for nothing.", T.ACCENT2)
 
     def _render_chips(self, query: str):
-        """The tokens of the current query, each with an ✕.
+        """The tokens of the current query, each with an x to remove it.
 
         Pooled, like the sidebar's chips and the inspector's tag list, and
         for the same reason: this runs on every search, a search runs a
@@ -2317,7 +2323,8 @@ class LibraryTab(ctk.CTkFrame):
             else:
                 chip = ctk.CTkButton(
                     self.chips, text="", height=22, corner_radius=11,
-                    font=font(9), width=10, hover_color=T.BTN_HOV)
+                    font=font(9), width=10, hover_color=T.BTN_HOV,
+                    compound="right")
                 pool.append(chip)
                 # Bound once - the chip outlives any one token, so the
                 # handler reads the token off it. Rebinding a pooled
@@ -2328,9 +2335,10 @@ class LibraryTab(ctk.CTkFrame):
             chip.paz_token = token
             # The quotes are how the box knows a term has spaces in it; on
             # a chip, which is already one term, they are just noise.
-            restyle(chip, text=f"{token.replace(chr(34), '')}  ✕",
+            ink = T.FAIL if negative else T.ACCENT
+            restyle(chip, text=token.replace(chr(34), ''),
                     fg_color=T.FAIL_DEEP if negative else T.ACCENT_DEEP,
-                    text_color=T.FAIL if negative else T.ACCENT)
+                    text_color=ink, image=icons.icon("x", 11, ink))
         # How many are packed is counted rather than asked, because
         # winfo_ismapped() answers for the whole chain - a chip on a tab
         # that is not showing reads as unmapped however it is packed, and

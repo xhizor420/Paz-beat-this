@@ -81,6 +81,6 @@ def test_the_grid_builds_draws_and_clears():
         assert picked and 40 < picked[0] < 80
         grid.clear()
         root.update()
-        assert len(grid.canvas.find_all()) == 1      # just the empty-state line
+        assert len(grid.canvas.find_all()) == 2      # just the empty state: icon and line
     finally:
         root.destroy()

@@ -18,10 +18,10 @@ from .theme import T, font, px, pt, column_width, table_style, window_size
 from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
-from .widgets import PeekWindow, popup_menu
+from .widgets import PeekWindow, draw_empty, popup_menu, tip
 from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback, joins_playback
 from .libmpv_player import LibMpvPlayer
-from . import libmpv_player, uithread
+from . import icons, libmpv_player, uithread
 
 STATE_COLOURS = {
     "queued":    T.FAINT,
@@ -510,32 +510,36 @@ class ScrubPreview(ctk.CTkFrame):
         transport = ctk.CTkFrame(footer, fg_color="transparent")
         transport.grid(row=0, column=0, sticky="w", rowspan=2, padx=(0, 12))
 
-        def tbtn(text, command, width=34):
-            return ctk.CTkButton(
+        def tbtn(text, command, width=34, image=None, hint=""):
+            button = ctk.CTkButton(
                 transport, text=text, width=width, height=26, corner_radius=6,
-                font=font(12), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                text_color=T.DIM, command=command)
+                font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                text_color=T.DIM, image=image, compound="left", command=command)
+            button.pack(side="left", padx=(0, 4))
+            if hint:
+                tip(button, hint)
+            return button
 
-        self.play_btn = ctk.CTkButton(
-            transport, text="▶ Play", width=68, height=26, corner_radius=6,
-            font=font(12), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT, command=self.toggle_play)
-        self.play_btn.pack(side="left", padx=(0, 4))
-        tbtn("◀", lambda: self.step(-1)).pack(side="left", padx=(0, 4))
-        tbtn("▶", lambda: self.step(1)).pack(side="left", padx=(0, 4))
-        tbtn("Grid", lambda: self.on_grid() if self.on_grid else None,
-             width=48).pack(side="left", padx=(0, 4))
+        self.play_btn = tbtn("", self.toggle_play, 38,
+                             image=icons.icon("play", 15, T.ACCENT),
+                             hint="Play / pause  ·  Space")
+        tbtn("", lambda: self.step(-1), image=icons.icon("left", 15, T.DIM),
+             hint="Back a second  ·  ←")
+        tbtn("", lambda: self.step(1), image=icons.icon("right", 15, T.DIM),
+             hint="Forward a second  ·  →")
+        tbtn("Grid", lambda: self.on_grid() if self.on_grid else None, width=48,
+             hint="Contact sheet of the whole clip  ·  G")
 
         volume_box = ctk.CTkFrame(transport, fg_color="transparent")
         volume_box.pack(side="left", padx=(8, 0))
         self.mute_btn = ctk.CTkButton(
-            volume_box, text="🔇" if self.player_engine.muted else "🔊",
+            volume_box, text="", image=self._mute_icon(self.player_engine.muted),
             width=28, height=26, corner_radius=6, font=font(11),
             fg_color="transparent", hover_color=T.BTN_HOV,
-            text_color=T.FAINT if self.player_engine.muted else T.TEXT,
             state="normal" if HAS_AUDIO else "disabled",
             command=self._toggle_mute)
         self.mute_btn.pack(side="left")
+        tip(self.mute_btn, "Mute")
         self.volume_slider = ctk.CTkSlider(
             volume_box, from_=0, to=100, number_of_steps=100, width=64,
             height=14, button_color=T.ACCENT, button_hover_color=T.ACCENT_HOV,
@@ -565,7 +569,7 @@ class ScrubPreview(ctk.CTkFrame):
         self.switch.grid(row=0, column=3, sticky="e")
         self.switch.set("Source")
 
-        self.clear("Select a file to inspect it")
+        self.clear("Select a file to preview")
 
     def _show_stage(self, up: bool) -> None:
         """mpv's picture over the canvas, or the canvas over it. Only when
@@ -740,16 +744,19 @@ class ScrubPreview(ctk.CTkFrame):
 
     def _toggle_mute(self) -> None:
         muted = self.player_engine.toggle_mute()
-        self.mute_btn.configure(text="🔇" if muted else "🔊",
-                                text_color=T.FAINT if muted else T.TEXT)
+        self.mute_btn.configure(image=self._mute_icon(muted))
         self.volume_slider.set(0 if muted else self.player_engine.volume)
         self.cfg.player_muted = muted
         self.cfg.save_soon()
 
+    @staticmethod
+    def _mute_icon(muted: bool):
+        return icons.icon("muted", 15, T.FAINT) if muted else icons.icon("volume", 15, T.TEXT)
+
     def _on_volume_drag(self, value) -> None:
         volume = max(0, min(int(round(float(value))), 100))
         if self.player_engine.muted and volume > 0:
-            self.mute_btn.configure(text="🔊", text_color=T.TEXT)
+            self.mute_btn.configure(image=self._mute_icon(False))
         if self._volume_job is not None:
             try:
                 self.after_cancel(self._volume_job)
@@ -766,9 +773,8 @@ class ScrubPreview(ctk.CTkFrame):
 
     def _on_play_state(self, playing: bool) -> None:
         self.play_btn.configure(
-            text="⏸ Pause" if playing else "▶ Play",
-            fg_color=T.ACCENT_DEEP if playing else T.BTN,
-            text_color=T.ACCENT)
+            image=icons.icon("pause" if playing else "play", 15, T.ACCENT),
+            fg_color=T.ACCENT_DEEP if playing else T.BTN)
 
     def _on_play_tick(self, position: float) -> None:
         # mpv reports position when paused too (each seek lands). During
@@ -821,8 +827,17 @@ class ScrubPreview(ctk.CTkFrame):
         self.view.delete("all")
         w = max(self.view.winfo_width(), 40)
         h = max(self.view.winfo_height(), 40)
-        self.view.create_text(w // 2, h // 2, text=getattr(self, "_placeholder", ""),
-                               fill=T.FAINT, font=(T.UI, pt(11)), width=w - 40)
+        text = getattr(self, "_placeholder", "")
+        icon_name = self.EMPTY_ICONS.get(text)
+        if icon_name:
+            draw_empty(self.view, w // 2, h // 2, icon_name, text)
+        else:
+            self.view.create_text(w // 2, h // 2, text=text, fill=T.FAINT,
+                                  font=(T.UI, pt(11)), width=w - 40)
+
+    # Resting messages get the empty-state treatment; passing ones
+    # ("Reading file") and problems stay plain text.
+    EMPTY_ICONS = {"Select a file to preview": "video-file", "Nothing loaded": "video-file"}
 
     def _show_message(self, text: str) -> None:
         self._image_ref = None
@@ -930,8 +945,6 @@ class ScrubPreview(ctk.CTkFrame):
                       capstyle="round")
 
         if duration <= 0:
-            c.create_text(w // 2, px(5), text="no timeline", fill=T.FAINT,
-                           font=(T.MONO, pt(8)), anchor="n")
             return
 
         frac = self._pos / duration

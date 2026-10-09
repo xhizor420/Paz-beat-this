@@ -31,7 +31,8 @@ from .convert_widgets import (
     QueueTable, STATE_LABELS, ScrubPreview, ContactSheet, DuplicateWindow,
 )
 from .widgets import (Card, Bar, StatTile, JobPanel, LogView, LibraryBar,
-                      menu_rule, popup_menu)
+                      menu_rule, popup_menu, tip)
+from .shortcuts import shortcuts_button
 from . import uithread
 from .winsys import awake
 
@@ -426,11 +427,12 @@ class ConvertTab(ctk.CTkFrame):
                                             font=font(10, "bold"),
                                             text_color=T.FAINT)
         self.inspector_head.grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(head, text="click timeline · ←→ step · Space play/pause · G grid",
-                     font=font(10), text_color=T.FAINT
-                     ).grid(row=0, column=1, sticky="e")
+        # The how-to line that used to sit here is on the controls as
+        # tooltips now, and in full on the shortcuts sheet behind this.
+        shortcuts_button(head, "Convert").grid(row=0, column=1, sticky="e")
 
         self.preview = ScrubPreview(panel, self.cache, self.cfg)
+        tip(self.preview.timeline, "Click or drag to scrub")
         self.preview.configure(border_color=T.ACCENT_DEEP)
         self.preview.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 10))
 
@@ -484,8 +486,7 @@ class ConvertTab(ctk.CTkFrame):
 
     def _check_environment(self):
         self.logview.write("PAZ Suite — Convert", "head")
-        self.logview.write("Keys: Space play/pause · ←→ step · G grid · "
-                           "H hover peek · Ctrl+Enter start · Esc stop", "info")
+        self.logview.write("F1 lists the keyboard shortcuts", "info")
         missing = check_dependencies()
         if missing:
             self.logview.write(f"Missing on PATH: {', '.join(missing)}. "

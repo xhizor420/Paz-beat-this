@@ -242,7 +242,10 @@ paz_suite/
   theme.py, format.py       palette/fonts, human-readable formatting
   fonts/                    Space Grotesk, Bricolage Grotesque, JetBrains Mono
                             (SIL OFL, licences beside them) - loaded for the
-                            app only at startup, nothing is installed
+                            app only at startup, nothing is installed; Lucide.ttf
+                            is the icon set (ISC licence beside it)
+  icons.py                  Lucide glyphs drawn to images for buttons and canvases
+  shortcuts.py              the keyboard-shortcuts sheet (F1), per tab
   uithread.py               safe hand-off from worker threads to the UI
   files.py                  proxy-folder filtering, post-ID parsing, open/reveal
   e621.py                   e621 tag lookup + cache (~/.video_tool/e621_meta.sqlite3,
