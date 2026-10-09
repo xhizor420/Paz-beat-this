@@ -31,6 +31,10 @@ python main.py
 Double-click **`PAZ Suite.pyw`** to start it with no console window.
 Anything that would have gone to the console - including the details of
 an error - is written to `%USERPROFILE%\.video_tool\paz_suite.log`.
+Double-clicking `main.py` works too: it hands over to `PAZ Suite.pyw` and
+the console it briefly opened closes. Run from a cmd or PowerShell prompt
+(`python main.py`), it keeps printing there, for debugging; set
+`PAZ_CONSOLE=1` to keep a console in any case.
 Once it is running, right-click its taskbar button and **Pin to taskbar**:
 it has its own taskbar identity, so the pin starts PAZ Suite, not Python.
 
