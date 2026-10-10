@@ -7,6 +7,8 @@ reuse from the duplicate finder and gap sweep.
 from __future__ import annotations
 
 import collections
+import dataclasses
+import os
 import queue
 import re
 import shutil
@@ -16,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 
 from .config import AppConfig
-from .files import NO_WINDOW
+from .files import NO_WINDOW, in_ignored_path
 from . import winsys
 from .format import fmt_time
 from .media import MediaInfo, available_encoders
@@ -90,6 +92,96 @@ def classify(cfg: AppConfig, width: int, height: int, fps: float) -> tuple:
     if fast:
         return cfg.upscale_root, "Needs resolution"
     return cfg.upscale_root, "Needs both"
+
+
+_NEED = {
+    "Needs frames": "60 fps",
+    "Needs resolution": "4K",
+    "Needs both": "4K and 60",
+}
+
+
+@dataclass(frozen=True)
+class GapClip:
+    """A converted clip with no 4K 60 copy yet."""
+    folder: str
+    name: str
+    path: str
+    size: int = 0
+    width: int = 0
+    height: int = 0
+    fps: float = 0.0
+    duration: float = 0.0
+    need: str = ""
+
+
+def measured(cfg, clip: GapClip, width, height, fps, duration) -> GapClip | None:
+    """`clip` with its picture filled in, or None when that picture is
+    already 4K 60 - a clip for Promote, not Topaz.
+
+    Nothing measured (all zeros) is not a reason to call a clip short of
+    4K, so its label stays blank."""
+    width, height = int(width or 0), int(height or 0)
+    fps, duration = float(fps or 0), float(duration or 0)
+    need = ""
+    if width or height or fps:
+        _root, label = classify(cfg, width, height, fps)
+        if label == "Edit pool":
+            return None
+        need = _NEED.get(label, "")
+    return dataclasses.replace(clip, width=width, height=height, fps=fps,
+                               duration=duration or clip.duration, need=need)
+
+
+def clips_needing_upscale(cfg, details: dict | None = None) -> dict[str, list[GapClip]]:
+    """Each category's converted clips that are not already 4K 60.
+
+    A clip is out once a file with the same name sits in the 4K folder.
+    When the library already knows the picture, a clip that is itself
+    already 4K 60 is left out too — that one wants Promote, not Topaz.
+    `details` maps a normalised path to (width, height, fps, duration).
+    """
+    details = details or {}
+    found = {folder: [] for folder in cfg.subfolders}
+    for folder in cfg.subfolders:
+        source_dir = os.path.join(cfg.output_root, folder)
+        premium_dir = os.path.join(cfg.premium_root, folder)
+        if not os.path.isdir(source_dir):
+            continue
+        try:
+            with os.scandir(premium_dir) as entries:
+                have = {os.path.splitext(entry.name)[0].lower()
+                        for entry in entries
+                        if entry.is_file()
+                        and os.path.splitext(entry.name)[1].lower() == ".mp4"
+                        and not in_ignored_path(entry.path)}
+        except OSError:
+            have = set()
+        try:
+            with os.scandir(source_dir) as entries:
+                files = [entry for entry in entries if entry.is_file()]
+        except OSError:
+            continue
+        clips = []
+        for entry in files:
+            ext = os.path.splitext(entry.name)[1].lower()
+            if ext != ".mp4" or in_ignored_path(entry.path):
+                continue
+            if os.path.splitext(entry.name)[0].lower() in have:
+                continue
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                size = 0
+            clip = GapClip(folder=folder, name=entry.name, path=entry.path, size=size)
+            known = details.get(os.path.normcase(entry.path))
+            if known:
+                clip = measured(cfg, clip, *known)
+                if clip is None:
+                    continue
+            clips.append(clip)
+        found[folder] = sorted(clips, key=lambda clip: clip.name.lower())
+    return found
 
 
 GPU_ENCODERS = {"h264": "h264_nvenc", "hevc": "hevc_nvenc", "av1": "av1_nvenc"}

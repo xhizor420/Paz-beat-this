@@ -81,6 +81,21 @@ def building(flag: bool) -> None:
         _building.clear()
 
 
+# Set while the UI thread is inside a loop that is not Tk's but is still
+# the user at work - a file drag, which Windows runs modally until the
+# button comes up. Held for as long as the drag, it is not a freeze.
+_modal = threading.Event()
+
+
+def modal(flag: bool) -> None:
+    """Announce (or end) a stretch where the UI thread is in someone
+    else's event loop on the user's behalf."""
+    if flag:
+        _modal.set()
+    else:
+        _modal.clear()
+
+
 class Watchdog:
     def __init__(self, root, log_path: str):
         self.root = root
@@ -168,6 +183,9 @@ class Watchdog:
 
     def _watch(self) -> None:
         while not self._stop.wait(0.05):
+            if _modal.is_set():
+                self._beat = time.monotonic()
+                continue
             quiet = time.monotonic() - self._beat
             if quiet < STUTTER_AFTER:
                 continue
