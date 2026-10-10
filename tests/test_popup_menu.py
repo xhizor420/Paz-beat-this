@@ -12,13 +12,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from paz_suite.widgets import PopupMenu, menu_rule, popup_menu  # noqa: E402
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def root():
+    # One root for the module, made the way conftest says: a new Tk per
+    # test was what came up "no display" partway through a run.
     import tkinter as tk
-    try:
-        win = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display")
+    from conftest import make_root
+    win = make_root(tk.Tk)
     win.withdraw()
     yield win
     try:

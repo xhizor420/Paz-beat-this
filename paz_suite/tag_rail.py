@@ -43,12 +43,12 @@ from dataclasses import dataclass, field
 
 import customtkinter as ctk
 
-from .theme import T, px, text_width
+from .theme import T, px, round_pts, text_width
 
 # Design pixels, as the CTk version drew them. Everything goes through
 # px() on the way to the screen.
 CHIP_H = 24
-CHIP_R = 6
+CHIP_R = 10
 CHIP_PAD = 18          # text-to-border padding plus the border, both sides
 CHIP_GAP = 4           # between chips on a line
 LINE_GAP = 2           # between wrapped lines
@@ -56,7 +56,7 @@ SWATCH = 10            # extra width a project chip's colour dot takes
 LEFT = 5               # chips start this far in
 RIGHT = 3              # and stop this far short of the edge
 HEAD_H = 22
-HEAD_R = 5
+HEAD_R = 8
 HEAD_X = 6             # heading hover plate inset
 HEAD_TEXT_X = 6        # heading text inside its plate
 HEAD_ABOVE_FIRST = 4
@@ -197,12 +197,8 @@ def fit_text(text: str, room: int, measure) -> str:
 
 
 def rounded(x0, y0, x1, y1, r) -> list:
-    """Points for a smoothed polygon that reads as a rounded rectangle."""
-    r = max(min(r, (x1 - x0) / 2, (y1 - y0) / 2), 0)
-    return [x0 + r, y0, x0 + r, y0, x1 - r, y0, x1 - r, y0,
-            x1, y0, x1, y0 + r, x1, y0 + r, x1, y1 - r, x1, y1 - r,
-            x1, y1, x1 - r, y1, x1 - r, y1, x0 + r, y1, x0 + r, y1,
-            x0, y1, x0, y1 - r, x0, y1 - r, x0, y0 + r, x0, y0 + r, x0, y0]
+    """Points for a polygon that reads as a rounded rectangle."""
+    return round_pts(x0, y0, x1, y1, r)
 
 
 class TagCanvas(ctk.CTkFrame):

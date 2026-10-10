@@ -66,6 +66,9 @@ class FakeCanvas:
     def create_line(self, *a, **kw):
         return 1
 
+    def create_polygon(self, *a, **kw):
+        return 1
+
     def create_text(self, *a, **kw):
         self.texts.append(kw.get("text", ""))
         return 1

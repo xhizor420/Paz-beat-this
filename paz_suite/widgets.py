@@ -12,7 +12,7 @@ from datetime import datetime
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, button_style, font, label_style, mix, pt, px
+from .theme import T, button_style, font, label_style, mix, pt, px, round_pts
 from .format import fmt_size
 
 
@@ -330,9 +330,7 @@ class PopupMenu:
 
 
 def _round_pts(x0, y0, x1, y1, r):
-    r = min(r, (x1 - x0) / 2, (y1 - y0) / 2)
-    return (x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
-            x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0)
+    return round_pts(x0, y0, x1, y1, r)
 
 
 def popup_menu(parent, **kw) -> PopupMenu:
@@ -376,15 +374,23 @@ class _Tip:
         win = tk.Toplevel(self.root)
         win.withdraw()
         win.overrideredirect(True)
+        self._keyed = False
         try:
             win.attributes("-topmost", True)
+            win.attributes("-transparentcolor", _MENU_KEY)
+            self._keyed = True
         except tk.TclError:
-            pass
-        win.configure(bg=T.LINE)
-        self.label = tk.Label(win, bg=T.ELEVATED, fg=T.TEXT, font=(T.UI, pt(10)),
-                              justify="left", padx=px(9), pady=px(5),
-                              wraplength=px(320))
-        self.label.pack(padx=1, pady=1)
+            try:
+                win.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+        hole = _MENU_KEY if self._keyed else T.ELEVATED
+        win.configure(bg=hole)
+        self.canvas = tk.Canvas(win, bg=hole, highlightthickness=0, bd=0)
+        self.canvas.pack()
+        self.label = tk.Label(self.canvas, bg=T.ELEVATED, fg=T.TEXT,
+                              font=(T.UI, pt(10)), justify="left",
+                              wraplength=px(300))
         self.win = win
 
     def enter(self, widget, text):
@@ -429,15 +435,28 @@ class _Tip:
             if self.win is None:
                 self._build()
             self.label.configure(text=text() if callable(text) else text)
-            self.win.update_idletasks()
-            w, h = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
+            self.label.update_idletasks()
+            pad = px(10)
+            lw, lh = self.label.winfo_reqwidth(), self.label.winfo_reqheight()
+            w, h = lw + pad * 2, lh + pad * 2
+            hole = _MENU_KEY if self._keyed else T.ELEVATED
+            self.canvas.configure(width=w, height=h, bg=hole)
+            self.canvas.delete("card")
+            radius = px(T.R_LG)
+            self.canvas.create_polygon(
+                _round_pts(1, 1, w - 2, h - 2, radius),
+                smooth=True, fill=T.LINE, tags="card")
+            self.canvas.create_polygon(
+                _round_pts(2, 2, w - 3, h - 3, max(radius - 1, 1)),
+                smooth=True, fill=T.ELEVATED, tags="card")
+            self.canvas.create_window(w // 2, h // 2, window=self.label, tags="card")
             x = widget.winfo_rootx() + (widget.winfo_width() - w) // 2
             y = widget.winfo_rooty() + widget.winfo_height() + px(6)
             screen_w = widget.winfo_screenwidth()
             x = max(4, min(x, screen_w - w - 4))
             if y + h > widget.winfo_screenheight() - 4:
                 y = widget.winfo_rooty() - h - px(6)
-            self.win.geometry(f"+{x}+{y}")
+            self.win.geometry(f"{w}x{h}+{x}+{y}")
             self.win.deiconify()
             self.win.lift()
         except tk.TclError:
@@ -470,6 +489,72 @@ def tip(widget, text) -> None:
             widget.bind(sequence, handler, add="+")
         except (TypeError, ValueError, NotImplementedError):
             pass
+
+
+def ask_yes(parent, title: str, message: str, *, yes: str = "Yes",
+            no: str = "Cancel", danger: bool = False) -> bool:
+    """A confirm in the app's own window, instead of the system box.
+
+    `danger` fills the yes button with the fail colour. Deletes use it.
+    """
+    from .theme import window_size
+    answer = {"ok": False}
+    host = parent.winfo_toplevel()
+    win = ctk.CTkToplevel(host)
+    win.title(title)
+    win.configure(fg_color=T.BG)
+    win.transient(host)
+    win.resizable(False, False)
+    # Tall enough for the wrapped message. A fixed height clipped the
+    # longer confirms (verify, quit-while-encoding) under the buttons.
+    lines = 0
+    for para in message.split("\n"):
+        lines += max(1, (len(para) + 47) // 48)
+    win.geometry(window_size(win, 460, min(150 + lines * 20, 520)))
+
+    ctk.CTkLabel(win, text=title, font=font(15, "bold", display=True),
+                 text_color=T.TEXT, anchor="w").pack(
+                     fill="x", padx=18, pady=(16, 6))
+    ctk.CTkLabel(win, text=message, font=font(11), text_color=T.DIM,
+                 justify="left", anchor="w", wraplength=px(410)).pack(
+                     fill="x", padx=18)
+
+    row = ctk.CTkFrame(win, fg_color="transparent")
+    row.pack(fill="x", padx=18, pady=16)
+
+    def accept(_event=None):
+        answer["ok"] = True
+        win.destroy()
+
+    if danger:
+        yes_btn = ctk.CTkButton(
+            row, text=yes, width=120, height=32, corner_radius=T.R_SM,
+            fg_color=T.FAIL, hover_color=mix(T.FAIL, "#FFFFFF", 0.18),
+            text_color=T.BG, font=font(12, "bold"), command=accept)
+    else:
+        yes_btn = PrimaryButton(row, text=yes, width=120, height=32,
+                                corner_radius=T.R_SM, command=accept)
+    yes_btn.pack(side="right")
+    if no:
+        ctk.CTkButton(row, text=no, width=90, height=32, corner_radius=T.R_SM,
+                      command=win.destroy, **button_style("text")).pack(
+                          side="right", padx=(0, 8))
+
+    win.protocol("WM_DELETE_WINDOW", win.destroy)
+    win.bind("<Escape>", lambda e: win.destroy())
+    win.bind("<Return>", accept)
+    try:
+        win.grab_set()
+    except tk.TclError:
+        pass
+    win.after(60, win.lift)
+    win.wait_window()
+    return answer["ok"]
+
+
+def tell(parent, title: str, message: str) -> None:
+    """An error or notice, one button, same window as ask_yes."""
+    ask_yes(parent, title, message, yes="OK", no="")
 
 
 class PrimaryButton(ctk.CTkButton):
@@ -548,6 +633,38 @@ def empty_overlay(tree, icon_name: str, text: str) -> None:
         tree.after(400, check)
 
     check()
+
+
+# How far in a rounded well (radius T.R_SM) its square content sits, so
+# the content's corners fall inside the curve - r * (1 - 1/sqrt 2) is the
+# least that clears it.
+WELL_INSET = 4
+
+
+def rounded_well(widget, bg: str = "", **grid) -> ctk.CTkFrame:
+    """Sit a square raw-Tk widget - a ttk table, a Text - in a rounded
+    frame of its own colour, so its corners stop showing as hard ones
+    inside a rounded card. `grid` is where the widget itself would have
+    gone; the well takes that cell and the widget fills the well.
+
+    The well is the widget's sibling and the widget is managed `in_` it,
+    so nothing that holds the widget or its parent has to change."""
+    if not bg:
+        try:
+            bg = str(widget.cget("bg"))
+        except tk.TclError:
+            from tkinter import ttk
+            style = str(widget.cget("style") or "Treeview")
+            bg = ttk.Style().lookup(style, "fieldbackground") or T.ROW
+    well = ctk.CTkFrame(widget.master, fg_color=bg, corner_radius=T.R_SM,
+                        border_width=0)
+    well.grid(**grid)
+    well.grid_rowconfigure(0, weight=1)
+    well.grid_columnconfigure(0, weight=1)
+    widget.grid(in_=well, row=0, column=0, sticky="nsew",
+                padx=WELL_INSET, pady=WELL_INSET)
+    tk.Misc.lift(widget)
+    return well
 
 
 class EmptyState(ctk.CTkFrame):
@@ -985,15 +1102,14 @@ class LogView(ctk.CTkFrame):
         self.header_label = ctk.CTkLabel(head, text="LOG", **label_style())
         self.header_label.grid(row=0, column=0, sticky="w")
 
+        # Minor actions, so the text kind - see theme.button_style.
         self.filter_btn = ctk.CTkButton(
             head, text="Errors only", width=84, height=22, corner_radius=T.R_SM,
-            font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, command=self.toggle_filter)
+            command=self.toggle_filter, **button_style("text"))
         self.filter_btn.grid(row=0, column=1, padx=(0, 6))
 
         ctk.CTkButton(head, text="Clear", width=52, height=22, corner_radius=T.R_SM,
-                      font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                      text_color=T.DIM, command=self.clear).grid(row=0, column=2)
+                      command=self.clear, **button_style("text")).grid(row=0, column=2)
 
         self.text = tk.Text(
             self, wrap=tk.WORD, font=(T.MONO, pt(10)), bg=T.INPUT, fg=T.DIM,
@@ -1003,7 +1119,8 @@ class LogView(ctk.CTkFrame):
             insertbackground=T.DIM, selectbackground=T.ACCENT_DEEP,
             selectforeground=T.TEXT, state="disabled", height=8,
         )
-        self.text.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=(0, 10))
+        rounded_well(self.text, T.INPUT, row=1, column=0, sticky="nsew",
+                     padx=(10, 0), pady=(0, 10))
         for name, colour in self.LEVELS.items():
             self.text.tag_configure(name, foreground=colour)
         self.text.tag_configure("stamp", foreground=T.FAINT)
@@ -1030,7 +1147,7 @@ class LogView(ctk.CTkFrame):
     def toggle_filter(self) -> None:
         self._errors_only = not self._errors_only
         self.filter_btn.configure(
-            fg_color=T.ACCENT_DEEP if self._errors_only else T.BTN,
+            fg_color=T.ACCENT_DEEP if self._errors_only else "transparent",
             text_color=T.ACCENT if self._errors_only else T.DIM)
         self._rerender()
 
@@ -1086,12 +1203,23 @@ class LibraryBar(ctk.CTkFrame):
         width = c.winfo_width()
         total = sum(n for n, _ in self._parts)
         if width < 20 or not total:
-            c.create_rectangle(0, 2, width, 5, fill=T.LINE_SOFT, outline="")
+            c.create_line(3, 3, width - 3, 3, fill=T.LINE_SOFT, width=3,
+                          capstyle="round")
             return
+        # Round ends on the bar as a whole, square joins between parts.
+        h = 7
+        r = h / 2
+        parts = [(n, colour) for n, colour in self._parts if n]
         x = 0
-        for n, colour in self._parts:
-            if not n:
-                continue
+        for i, (n, colour) in enumerate(parts):
             w = max(int(width * n / total), 2)
-            c.create_rectangle(x, 0, x + w, 7, fill=colour, outline="")
-            x += w + 1
+            x1 = width if i == len(parts) - 1 else min(x + w, width)
+            left = x + (r if i == 0 else 0)
+            right = x1 - (r if i == len(parts) - 1 else 0)
+            if right > left:
+                c.create_rectangle(left, 0, right, h, fill=colour, outline="")
+            if i == 0:
+                c.create_oval(x, 0, x + h, h, fill=colour, outline="")
+            if i == len(parts) - 1:
+                c.create_oval(x1 - h, 0, x1, h, fill=colour, outline="")
+            x = x1 + 1

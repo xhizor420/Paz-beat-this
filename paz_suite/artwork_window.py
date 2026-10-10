@@ -17,7 +17,8 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from . import artwork
-from .theme import T, font, label_style, px, pt, window_size
+from .theme import T, button_style, font, label_style, px, pt, window_size
+from .widgets import PrimaryButton
 
 # The source preview, which the crop rectangle is dragged around on.
 VIEW_W, VIEW_H = 520, 300
@@ -126,9 +127,8 @@ class ArtworkWindow(ctk.CTkToplevel):
         self.zoom_slider.set(self.zoom)
         self.zoom_slider.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(zoom_row, text="Reset", width=px(56), height=px(24),
-                      corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.DIM,
-                      command=self._reset_crop).pack(side="left", padx=(px(8), 0))
+                      corner_radius=T.R_SM, command=self._reset_crop,
+                      **button_style("text")).pack(side="left", padx=(px(8), 0))
 
         # All three controls together, above the preview they change.
         # Blur and dim used to sit underneath it, which split the controls
@@ -149,18 +149,13 @@ class ArtworkWindow(ctk.CTkToplevel):
         foot = ctk.CTkFrame(self, fg_color="transparent")
         foot.grid(row=2, column=0, sticky="ew", padx=px(16), pady=(0, px(14)))
         ctk.CTkButton(foot, text="Choose picture…", height=px(30),
-                      corner_radius=T.R_SM, font=font(11), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.TEXT,
-                      command=self._choose).pack(side="left")
+                      corner_radius=T.R_SM, command=self._choose,
+                      **button_style("secondary")).pack(side="left")
         ctk.CTkButton(foot, text="Remove", height=px(30), width=px(80),
-                      corner_radius=T.R_SM, font=font(11), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.FAINT,
-                      command=self._remove).pack(side="left", padx=(px(8), 0))
-        ctk.CTkButton(foot, text="Use it", height=px(30), width=px(96),
-                      corner_radius=T.R_SM, font=font(11, "bold"),
-                      fg_color=T.ACCENT2_DEEP, hover_color=T.BTN_HOV,
-                      text_color=T.ACCENT2,
-                      command=self._save).pack(side="right")
+                      corner_radius=T.R_SM, command=self._remove,
+                      **button_style("text")).pack(side="left", padx=(px(8), 0))
+        PrimaryButton(foot, T.ACCENT2, text="Use it", height=px(30), width=px(96),
+                      corner_radius=T.R_SM, command=self._save).pack(side="right")
 
     def _soften_row(self, body, row: int) -> None:
         """Blur and dim. A backdrop is the only slot with these, because

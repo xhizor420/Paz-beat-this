@@ -147,7 +147,7 @@ class T:
     # Two corner radii, on the 8 px grid. Everything else was a 7 or an
     # 11 that sat one pixel off a pill or a control. Pills still take
     # half their own height, which is a different kind of round.
-    R_SM = 6                 # buttons, fields, chips that aren't pills
+    R_SM = 8                 # buttons, fields, chips that aren't pills
     R_LG = 12                # cards, panels, menus, the search box
 
 
@@ -332,10 +332,14 @@ def table_style(widget, name: str, row_height: int) -> None:
     style.configure(name, background=T.ROW, fieldbackground=T.ROW,
                     foreground=T.TEXT, rowheight=px(row_height), borderwidth=0,
                     font=(T.UI, pt(10)))
-    style.configure(f"{name}.Heading", background=T.ELEVATED, foreground=T.FAINT,
+    # The heading row in the table's own colour: every table sits in a
+    # rounded well (widgets.rounded_well), and a band of another colour
+    # across its top would bring the square corners straight back.
+    style.configure(f"{name}.Heading", background=T.ROW, foreground=T.FAINT,
                     relief="flat", borderwidth=0, font=(T.UI, pt(9), "bold"),
                     padding=(px(8), px(7)))
-    style.map(f"{name}.Heading", background=[("active", T.BTN_HOV)])
+    style.map(f"{name}.Heading", background=[("active", T.ROW)],
+              foreground=[("active", T.TEXT)])
     style.map(name, background=[("selected", T.ROW_SEL)],
               foreground=[("selected", T.TEXT)])
 
@@ -891,3 +895,23 @@ BEAT_LABELS = {
     "resolve_ok":   "{msg}",
     "resolve_fail": "{msg}",
 }
+
+
+def round_pts(x0, y0, x1, y1, r, steps: int = 6) -> list:
+    """A rounded rectangle as canvas polygon points, with real arcs at
+    the corners.
+
+    The old way - the corner points fed to create_polygon(smooth=True) -
+    lets Tk's spline cut the corner, and it came out at about half the
+    radius asked for: a 12px menu read as 6, a 6px chip as square. These
+    points are on the arc itself, so the radius is the radius. smooth=True
+    on top of them is harmless."""
+    import math
+    r = max(min(r, (x1 - x0) / 2, (y1 - y0) / 2), 0)
+    pts = []
+    for cx, cy, start in ((x1 - r, y0 + r, -90), (x1 - r, y1 - r, 0),
+                          (x0 + r, y1 - r, 90), (x0 + r, y0 + r, 180)):
+        for i in range(steps + 1):
+            a = math.radians(start + 90 * i / steps)
+            pts += (cx + r * math.cos(a), cy + r * math.sin(a))
+    return pts
