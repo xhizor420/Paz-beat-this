@@ -147,7 +147,12 @@ class AppConfig:
 
     # ── Library: display ─────────────────────────────────────────────────
     page_size: int = 48
-    thumb_width: int = 480
+    # Wide enough that a gallery card on a 4K screen (150–200%) is a
+    # downscale of the stored picture, not an enlargement of it. 240 and
+    # 480 were earlier defaults and look soft at that size; see
+    # _upgrade_thumb_width.
+    thumb_width: int = 720
+    thumb_width_upgraded: bool = False
     thumb_fit: str = "contain"
     card_width: int = 264              # gallery tile width in px (Settings)
     sidebar_open: bool = True
@@ -192,7 +197,9 @@ class AppConfig:
     e621_enabled: bool = True
     e621_user: str = ""
     e621_key: str = ""
-    e621_fetch_delay: float = 0.6      # e621 allows ~2/sec; this stays under
+    # No longer read: e621 pacing is automatic (e621._pace). Kept so an
+    # old config with it in still loads.
+    e621_fetch_delay: float = 0.6
     library_autofetch: bool = True     # fill in missing tags right after a sync
     # Every regular tag fetch also folds in up to this many "due for
     # refresh" posts (see E621Meta.is_stale) alongside the genuinely
@@ -307,6 +314,7 @@ class AppConfig:
             changed = cfg._upgrade_banner_slot() or changed
             changed = cfg._upgrade_layout_sizes() or changed
             changed = cfg._upgrade_fetch_budget() or changed
+            changed = cfg._upgrade_thumb_width() or changed
             if changed:
                 cfg.save()
             return cfg
@@ -404,6 +412,25 @@ class AppConfig:
         if self.library_stale_refresh_budget == self.OLD_REFRESH_BUDGET:
             self.library_stale_refresh_budget = \
                 AppConfig.library_stale_refresh_budget
+        return True
+
+    # Widths that mean "nobody picked this" — the two defaults this
+    # setting has shipped with. A number in between was typed.
+    OLD_THUMB_WIDTHS = (240, 480)
+
+    def _upgrade_thumb_width(self) -> bool:
+        """Raise a leftover thumbnail width so a 4K gallery isn't enlarging it.
+
+        The cards on a 150% 4K screen are around 500px wide. A 240px
+        JPEG blown up to that is what made the wall look soft. Only the
+        old defaults move; a width someone typed stays, and this runs
+        once so a later change in Settings is left alone.
+        """
+        if self.thumb_width_upgraded:
+            return False
+        self.thumb_width_upgraded = True
+        if int(self.thumb_width) in self.OLD_THUMB_WIDTHS:
+            self.thumb_width = AppConfig.thumb_width
         return True
 
     def _read(self, path: str) -> None:

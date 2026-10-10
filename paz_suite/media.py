@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -326,7 +327,8 @@ PREVIEW_SLOTS = threading.Semaphore(max(2, (os.cpu_count() or 4) // 3))
 
 
 def tile_image(data: bytes, width: int, height: int, fit: str,
-               radius: int = 9, backing: str | None = None):
+               radius: int = 9, backing: str | None = None,
+               clear: bool = False):
     """JPEG bytes -> a picture sized and rounded for a gallery tile.
 
     Decoding, scaling and rounding a 320px thumbnail costs a couple of
@@ -337,7 +339,25 @@ def tile_image(data: bytes, width: int, height: int, fit: str,
     """
     image = Image.open(io.BytesIO(data))
     image = fit_frame(image, width, height, fit)
+    if clear:
+        return clear_corners(image, radius)
     return round_corners(image, radius, backing) if backing else image
+
+
+def clear_corners(image, radius: int):
+    """Rounded corners that are see-through rather than painted.
+
+    For a picture whose corners sit over something that is not one flat
+    colour - a gallery card over the backdrop. The edge is hard (each
+    pixel fully in or fully out): Tk draws a photo like that through a
+    mask, and only blends, much more slowly, when a pixel is partly
+    transparent."""
+    mask = Image.new("L", image.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, image.width - 1, image.height - 1), radius=radius, fill=255)
+    out = image.convert("RGBA")
+    out.putalpha(mask)
+    return out
 
 
 def round_corners(image, radius: int, bg: str = ""):
@@ -397,11 +417,15 @@ class ThumbCache:
     # the row of individual thumbnails under Convert's timeline - this is
     # a separate, invisible sprite sheet purely for instant hover preview.
     # Cell width has to be at least as wide as the preview bubble it feeds
-    # (PeekWindow.W = 380): a cell narrower than the bubble can only ever
-    # be shown small, since fitting an image to a box never enlarges it.
+    # (380 at 100%, about 570 at 150%): a cell narrower than the bubble
+    # can only ever be shown small, since fitting an image to a box never
+    # enlarges it.
     BOARD_COLS = 6
     BOARD_ROWS = 5
-    BOARD_CELL_W = 384
+    # Wide enough that a hover frame on a 4K card (about 500px at 150%)
+    # is a downscale. 384 was the bubble's old 100% size, so every scrub
+    # on this screen was enlarging it.
+    BOARD_CELL_W = 640
 
     def __init__(self, limit: int = 30000, subdir: str = "paz_frames"):
         self.root = os.path.join(tempfile.gettempdir(), subdir)
@@ -475,8 +499,8 @@ class ThumbCache:
             "ffmpeg", "-nostdin", "-v", "error",
             "-ss", f"{start:.3f}", "-i", path, "-t", f"{span:.3f}",
             "-an", "-sn",
-            "-vf", f"fps={fps},scale={int(width)}:-2:flags=fast_bilinear",
-            "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "6", "-",
+            "-vf", f"fps={fps},{_scale_filter(width)}",
+            "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3", "-",
         ]
         try:
             with PREVIEW_SLOTS:
@@ -517,8 +541,8 @@ class ThumbCache:
             "ffmpeg", "-nostdin", "-v", "error",
             "-ss", f"{start:.3f}", "-i", path, "-t", f"{span:.3f}",
             "-an", "-sn",
-            "-vf", f"fps={fps},scale={int(width)}:-2:flags=fast_bilinear",
-            "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "6", "-",
+            "-vf", f"fps={fps},{_scale_filter(width)}",
+            "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3", "-",
         ]
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
@@ -594,8 +618,8 @@ class ThumbCache:
             for head in attempts:
                 cmd = head + [
                     "-frames:v", "1",
-                    "-vf", f"scale={width}:-2:flags=bicubic",
-                    "-q:v", "3", "-f", "image2", tmp_path,
+                    "-vf", _scale_filter(width, sharpen=True),
+                    "-q:v", "2", "-f", "image2", tmp_path,
                 ]
                 try:
                     with PREVIEW_SLOTS:
@@ -705,7 +729,7 @@ class ThumbCache:
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
         os.close(tmp_fd)
         try:
-            vf = (f"fps=1/{interval:.4f},scale={cell_w}:-2:flags=bilinear,"
+            vf = (f"fps=1/{interval:.4f},{_scale_filter(cell_w, sharpen=True)},"
                   f"tile={cols}x{rows}")
             # -skip_frame nokey decodes only keyframes. Without it this is
             # a full decode of the entire file just to sample 30 frames,
@@ -718,7 +742,7 @@ class ThumbCache:
             cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                    "-skip_frame", "nokey", "-i", path,
                    "-an", "-sn", "-frames:v", "1",
-                   "-vf", vf, "-q:v", "4", tmp_path]
+                   "-vf", vf, "-q:v", "2", tmp_path]
             try:
                 with PREVIEW_SLOTS:
                     subprocess.run(cmd, stdout=subprocess.DEVNULL,
@@ -734,8 +758,10 @@ class ThumbCache:
             except Exception:
                 return None
             if cached:
+                # Keep ffmpeg's JPEG. Saving it again from PIL is a second
+                # compression, and that second pass is what softens a sheet.
                 try:
-                    image.save(cached, "JPEG", quality=82)
+                    shutil.copyfile(tmp_path, cached)
                 except OSError:
                     pass
         finally:
@@ -874,6 +900,21 @@ _THUMB_KEYS: dict = {}
 THUMB_KEY_CACHE = 40000
 
 
+def _scale_filter(width: int, *, sharpen: bool = False) -> str:
+    """ffmpeg scale for a picture someone will look at, not a proxy.
+
+    Lanczos holds detail when a 1080p or 4K frame is reduced to a card.
+    `sharpen` is a light unsharp for a still that sits on screen — a
+    gallery thumbnail, a scrub sheet — and is left off for a reel, where
+    the same kick on every frame reads as a halo.
+    """
+    width = max(int(width), 2)
+    filt = f"scale={width}:-2:flags=lanczos"
+    if sharpen:
+        filt += ",unsharp=5:5:0.35:5:5:0.0"
+    return filt
+
+
 def thumb_key(path: str) -> str:
     key = _THUMB_KEYS.get(path)
     if key is None:
@@ -899,6 +940,19 @@ def _looks_blank(path: str) -> bool:
         return False
 
 
+def thumb_pixel_width(path: str) -> int:
+    """Width of the stored gallery thumbnail, or 0 if there isn't one.
+
+    The JPEG header carries the size, so this does not decode the picture.
+    """
+    dest = os.path.join(THUMB_DIR, thumb_key(path))
+    try:
+        with Image.open(dest) as image:
+            return int(image.size[0])
+    except Exception:
+        return 0
+
+
 def make_thumb(path: str, duration: float, width: int) -> bool:
     """
     Write a representative gallery thumbnail into the persistent thumb dir.
@@ -907,38 +961,66 @@ def make_thumb(path: str, duration: float, width: int) -> bool:
     tiles. Candidate positions are tried in turn and a frame that is
     basically one flat colour is rejected, so the grid shows the actual
     content rather than the intro.
+
+    The new picture is written beside the old one and moved into place
+    only when it is worth keeping. A rebuild that fails, or that is still
+    encoding, leaves the thumbnail the gallery is already showing.
     """
     try:
         os.makedirs(THUMB_DIR, exist_ok=True)
     except OSError:
         return False
     dest = os.path.join(THUMB_DIR, thumb_key(path))
-
+    # One name per caller. The gallery, the sharpen pass and the upscale
+    # window can all be making the same clip's thumbnail at once, and a
+    # shared ".part" let one of them move or delete a file another's
+    # ffmpeg was still writing.
+    pending = f"{dest}.{os.getpid()}-{threading.get_ident()}.part"
     spots = [duration * f for f in (0.35, 0.55, 0.20, 0.72, 0.05)] if duration > 1 else [0.0]
+    vf = _scale_filter(width, sharpen=True)
 
-    fallback_written = False
-    for index, pos in enumerate(spots):
-        heads = []
-        if pos > 0.05:
-            heads.append(["ffmpeg", "-y", "-ss", f"{pos:.3f}", "-i", path])
-        heads.append(["ffmpeg", "-y", "-i", path])
-        for head in heads:
-            cmd = head + ["-frames:v", "1",
-                          "-vf", f"scale={width}:-2:flags=bicubic",
-                          "-q:v", "3", "-f", "image2", dest]
-            try:
-                with PREVIEW_SLOTS:
-                    subprocess.run(cmd, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=25,
-                                   creationflags=PREVIEW_FLAGS)
-            except (OSError, subprocess.SubprocessError):
-                continue
-            if os.path.exists(dest) and os.path.getsize(dest) > 0:
-                fallback_written = True
-                if index == len(spots) - 1 or not _looks_blank(dest):
-                    return True
+    wrote = False
+    try:
+        for index, pos in enumerate(spots):
+            heads = []
+            if pos > 0.05:
+                heads.append(["ffmpeg", "-y", "-ss", f"{pos:.3f}", "-i", path])
+            heads.append(["ffmpeg", "-y", "-i", path])
+            for head in heads:
+                cmd = head + ["-frames:v", "1", "-vf", vf,
+                              "-q:v", "2", "-f", "image2", pending]
+                try:
+                    with PREVIEW_SLOTS:
+                        subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, timeout=25,
+                                       creationflags=PREVIEW_FLAGS)
+                except (OSError, subprocess.SubprocessError):
+                    continue
+                if not (os.path.exists(pending) and os.path.getsize(pending) > 0):
+                    continue
+                wrote = True
+                if index == len(spots) - 1 or not _looks_blank(pending):
+                    return _install_thumb(pending, dest)
                 break
-    return fallback_written
+        return _install_thumb(pending, dest) if wrote else False
+    finally:
+        if os.path.exists(pending):
+            try:
+                os.remove(pending)
+            except OSError:
+                pass
+
+
+def _install_thumb(pending: str, dest: str) -> bool:
+    """Move a finished thumbnail into place. Retries: the gallery may be
+    reading the current file at the same moment."""
+    for _ in range(5):
+        try:
+            os.replace(pending, dest)
+            return True
+        except OSError:
+            time.sleep(0.05)
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────
