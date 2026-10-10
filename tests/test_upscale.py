@@ -122,3 +122,52 @@ def test_a_released_drag_object_is_forgotten_only_by_the_sweep(tmp_path):
     assert key in filedrag._live
     filedrag._sweep()
     assert key not in filedrag._live
+
+
+def test_a_portrait_clip_groups_by_its_short_side():
+    from paz_suite.convert_engine import GapClip
+    from paz_suite.upscale_window import grouped
+    clips = [
+        GapClip("F", "tall.mp4", "t", width=1294, height=2770, fps=30.0),
+        GapClip("F", "wide.mp4", "w", width=3840, height=2160, fps=24.0),
+        GapClip("F", "hd.mp4", "h", width=1920, height=1080, fps=60.0),
+    ]
+    groups = grouped(clips)
+    # 1294 is its short side, so it is in the 1080p band, not "2770p".
+    assert [height for height, _ in groups] == [2160, 1080]
+    assert [c.name for c in groups[1][1]] == ["hd.mp4", "tall.mp4"]
+
+
+def test_odd_sizes_share_a_band_instead_of_a_group_each():
+    from paz_suite.convert_engine import GapClip
+    from paz_suite.upscale_window import grouped, _height_label
+    clips = [GapClip("F", f"{h}.mp4", str(h), width=h * 16 // 9, height=h, fps=30.0)
+             for h in (1072, 1080, 1088, 1200, 714, 720, 360)]
+    groups = grouped(clips)
+    # 1072 is a cropped 1080 and 714 a cropped 720, not the band below.
+    assert [_height_label(h) for h, _ in groups] == ["1080p", "720p", "Under 480p"]
+    assert [len(m) for _, m in groups] == [4, 2, 1]
+
+
+def test_a_drag_with_nothing_to_drag_says_so():
+    assert filedrag.drag_files([]) == ""
+    assert filedrag.drag_files(["Z:/no/such/file.mp4"]) == ""
+
+
+def test_clips_split_by_what_topaz_has_to_do_then_resolution():
+    from paz_suite.convert_engine import GapClip
+    from paz_suite.upscale_window import sections
+    clips = [
+        GapClip("F", "both.mp4", "a", width=1920, height=1080, fps=30.0, need="4K and 60"),
+        GapClip("F", "res.mp4", "b", width=1920, height=1080, fps=60.0, need="4K"),
+        GapClip("F", "fps4k.mp4", "c", width=3840, height=2160, fps=24.0, need="60 fps"),
+        GapClip("F", "fps4k30.mp4", "d", width=3840, height=2160, fps=30.0, need="60 fps"),
+        GapClip("F", "unknown.mp4", "e"),
+        GapClip("F", "both720.mp4", "f", width=1280, height=720, fps=24.0, need="4K and 60"),
+    ]
+    out = sections(clips)
+    assert [need for need, _ in out] == ["60 fps", "4K", "4K and 60", ""]
+    fps_only = out[0][1]
+    assert [c.name for c in fps_only[0][1]] == ["fps4k30.mp4", "fps4k.mp4"]
+    both = out[2][1]
+    assert [h for h, _ in both] == [1080, 720]

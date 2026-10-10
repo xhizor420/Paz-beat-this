@@ -372,14 +372,16 @@ def _sweep() -> None:
             _live.pop(key, None)
 
 
-def drag_files(paths: list[str]) -> bool:
-    """Start a file drag. False when there is nothing to drag or it
-    could not start. The call returns when the drag ends."""
+def drag_files(paths: list[str]) -> str:
+    """Start a file drag; returns when it ends. "dropped" when the files
+    landed somewhere, "cancelled" when the drag was let go of nowhere or
+    escaped, "" when there was nothing to drag or it could not start -
+    so a plain truth test still reads as "it worked"."""
     if sys.platform != "win32":
-        return False
+        return ""
     paths = [path for path in paths if path and os.path.isfile(path)]
     if not paths:
-        return False
+        return ""
     ole = ctypes.windll.ole32
     ole.OleInitialize.argtypes = [c_void_p]
     ole.OleInitialize.restype = c_long
@@ -387,7 +389,7 @@ def drag_files(paths: list[str]) -> bool:
     ole.DoDragDrop.restype = c_long
     started = ole.OleInitialize(None)
     if started < 0 and (started & 0xFFFFFFFF) != RPC_E_CHANGED_MODE:
-        return False
+        return ""
     _sweep()
     data = _Data(paths)
     source = _Source()
@@ -398,7 +400,7 @@ def drag_files(paths: list[str]) -> bool:
             ctypes.addressof(data.block), ctypes.addressof(source.block),
             DROPEFFECT_COPY, byref(effect))
     except Exception:
-        return False
+        return ""
     finally:
         # Our own reference to each. Whatever the drop target still holds
         # keeps its count above zero, and so keeps it in _live.
@@ -409,7 +411,13 @@ def drag_files(paths: list[str]) -> bool:
         # needs its own uninitialise to balance.
         if started >= 0:
             ole.OleUninitialize()
-    return hr >= 0
+    if hr < 0:
+        return ""
+    # Let go over a program that said no is a drop with no effect: the
+    # files went nowhere, so it counts as cancelled.
+    if hr == DRAGDROP_S_DROP and effect.value:
+        return "dropped"
+    return "cancelled"
 
 
 def _clipboard_payload(paths: list[str]) -> list:

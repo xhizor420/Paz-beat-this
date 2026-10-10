@@ -1,9 +1,13 @@
-"""The clips that still need a 4K 60 pass, per folder, ready to drag or copy.
+"""The clips that still need a 4K 60 pass, per folder, ready to send to Topaz.
 
-The right side is a browser of fairly large thumbnails, grouped by height
-and, inside a height, ordered by frame rate - the two things Topaz is set
-up for. Each card gives the picture (width x height, fps) and then length
-and size, because those decide how long the upscale will take.
+The right side is a browser of thumbnails in three sections - needs 60
+fps, needs 4K, needs both - because that is what decides Topaz's
+settings: one batch of interpolation, one of upscaling, one of both.
+Inside a section, groups by resolution (the shorter side, so a portrait
+1080x1920 sits with 1080p), highest frame rate first. Every heading's
+"Select all" takes that whole batch in one click; Copy (Ctrl+C) or a
+drag hands the files to Topaz. Nothing here tracks what was sent:
+Topaz itself refuses a clip it already has.
 """
 
 from __future__ import annotations
@@ -23,21 +27,24 @@ from .filedrag import copy_files, drag_files
 from .files import open_in_explorer
 from .format import fmt_len, fmt_size
 from .tag_rail import fit_text
-from .theme import T, button_style, font, label_style, pt, px, window_size
-from .widgets import menu_rule, popup_menu, tell, tip
+from .theme import T, font, label_style, pt, px, window_size
+from .widgets import PrimaryButton, menu_rule, popup_menu, tell, tip
 
 # Card measured at 100%. px() grows it with the rest of the window.
-_CARD_W = 300
-_IMG_H = 168
+_CARD_W = 236
+_IMG_H = 133
 _TEXT_H = 76
-_GAP = 14
+_GAP = 12
 _PAD = 12
 _INSET = 8
-_HEAD_H = 34
+_HEAD_H = 36
 
-_HINT = ("Highlight clips, then drag them onto Topaz or Ctrl+C and paste. "
-         "Double-click shows one in its folder.")
+_HINT = ("Select all on a group, or click and Shift-click clips - then Copy "
+         "and paste into Topaz, or drag them onto it. Double-click shows a "
+         "clip in its folder.")
 
+
+# ── words ────────────────────────────────────────────────────────────────
 
 def _stats(clip) -> str:
     """Length and size, the two numbers that say how long an upscale takes."""
@@ -69,22 +76,77 @@ def _spec(clip, measuring: bool = False) -> str:
     return "Measuring…" if measuring else "Size unknown"
 
 
+def resolution(clip) -> int:
+    """The short side - what "1080p" means for a portrait clip as much as
+    a landscape one, and what Sorting's Minimum short side measures."""
+    width, height = int(clip.width or 0), int(clip.height or 0)
+    if width and height:
+        return min(width, height)
+    return height
+
+
+# The bands a group is one of. Exact sizes made twenty groups of a clip
+# or two each - 1080, 1072, 1088 - and a group's Select all was no use.
+# A band starts a little under its number, since a 1072 or 2152 is a
+# cropped 1080 or 4K (1072, 2152), not the size below. Only a little:
+# a 2000x2000 is not 4K, and must not sit under a 4K heading.
+BANDS = (2160, 1440, 1080, 720, 480)
+BAND_SLACK = 0.97
+
+
+def band(clip) -> int:
+    """The band a clip's short side falls in: 2160, 1440, 1080, 720, 480,
+    1 for anything smaller, 0 when not measured yet."""
+    side = resolution(clip)
+    if not side:
+        return 0
+    return next((b for b in BANDS if side >= b * BAND_SLACK), 1)
+
+
 def _height_label(height: int) -> str:
-    return f"{height}p" if height else "Not measured"
+    if not height:
+        return "Not measured"
+    if height == 1:
+        return "Under 480p"
+    return "4K" if height == 2160 else f"{height}p"
 
 
 def grouped(clips: list) -> list[tuple[int, list]]:
-    """(height, clips) groups, tallest first, each by frame rate, highest
-    first, then name. Clips with no height yet come last."""
+    """(band, clips) groups, highest first; in each, highest frame rate
+    first, then the larger picture, then name. Not measured comes last."""
     groups: dict[int, list] = {}
     for clip in clips:
-        groups.setdefault(int(clip.height or 0), []).append(clip)
+        groups.setdefault(band(clip), []).append(clip)
     out = []
     for height in sorted(groups, key=lambda h: (h == 0, -h)):
         members = sorted(groups[height],
-                         key=lambda c: (-float(c.fps or 0), c.name.lower()))
+                         key=lambda c: (-float(c.fps or 0), -resolution(c),
+                                        c.name.lower()))
         out.append((height, members))
     return out
+
+
+# What Topaz has to do, in the order the sections come: interpolation
+# only, upscaling only, both. The values are GapClip.need.
+NEEDS = ("60 fps", "4K", "4K and 60")
+
+
+def need_title(need: str) -> str:
+    return f"Needs {need}" if need else "Not measured yet"
+
+
+def sections(clips: list) -> list[tuple[str, list]]:
+    """[(need, [(band, clips), ...]), ...] - a section per kind of Topaz
+    job, each grouped by resolution (see grouped). Clips not measured
+    yet, whose need is unknown, come last."""
+    by_need: dict[str, list] = {}
+    for clip in clips:
+        by_need.setdefault(clip.need or "", []).append(clip)
+    order = [need for need in NEEDS if need in by_need]
+    order += sorted(need for need in by_need if need and need not in NEEDS)
+    if "" in by_need:
+        order.append("")
+    return [(need, grouped(by_need[need])) for need in order]
 
 
 def _library_details(tab) -> dict:
@@ -105,18 +167,13 @@ def _library_details(tab) -> dict:
 
 
 class UpscaleWindow(ctk.CTkToplevel):
-    """The four folders, and the clips in each that are not 4K 60 yet.
-
-    Highlight cards and drag them onto Topaz, or copy them (Ctrl+C) and
-    paste. Either way Topaz gets the files themselves; nothing is copied
-    into the needs-work folder.
-    """
+    """The four folders, and the clips in each that are not 4K 60 yet."""
 
     def __init__(self, parent, tab):
         super().__init__(parent)
         self.tab = tab
         self.title("Needs 4K 60")
-        self.geometry(window_size(self, 1120, 760))
+        self.geometry(window_size(self, 1280, 840))
         self.configure(fg_color=T.BG)
         self.minsize(860, 520)
         self.transient(parent)
@@ -136,19 +193,23 @@ class UpscaleWindow(ctk.CTkToplevel):
         self._anchor = ""
         self._order: list[str] = []
         self._slots: dict = {}
+        self._links: list = []          # (box, paths) per group heading
         self._photos: dict = {}
         self._blank = None
         self._blank_size = (0, 0)
         self._thumb_gen = 0
         self._canvas_w = 0
         self._filter_job = None
+        self._copied_job = None
         self._measuring: set[str] = set()
         self._alive = True
         self._name_font = tkfont.Font(family=T.UI, size=pt(11))
         self._spec_font = tkfont.Font(family=T.UI, size=pt(12), weight="bold")
         self._stat_font = tkfont.Font(family=T.UI, size=pt(11))
         self._need_font = tkfont.Font(family=T.UI, size=pt(10))
+        self._section_font = tkfont.Font(family=T.UI, size=pt(14), weight="bold")
         self._head_font = tkfont.Font(family=T.UI, size=pt(12), weight="bold")
+        self._link_font = tkfont.Font(family=T.UI, size=pt(11))
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -162,7 +223,8 @@ class UpscaleWindow(ctk.CTkToplevel):
                                   font=font(11), text_color=T.FAINT, anchor="e")
         self.count.grid(row=0, column=1, sticky="e")
         ctk.CTkLabel(
-            head, text="Grouped by height, highest frame rate first in each.",
+            head, text="By what Topaz has to do, then resolution - highest "
+                       "frame rate first. Each heading selects its whole batch.",
             font=font(11), text_color=T.DIM, anchor="w",
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
@@ -187,19 +249,21 @@ class UpscaleWindow(ctk.CTkToplevel):
         self.folder_title = ctk.CTkLabel(
             bar, text="", font=font(13), text_color=T.TEXT, anchor="w")
         self.folder_title.grid(row=0, column=0, sticky="w")
-        self.copy_btn = ctk.CTkButton(
-            bar, text="Copy", width=110, height=28, corner_radius=T.R_SM,
-            command=self._copy, state="disabled", **button_style("secondary"))
-        self.copy_btn.grid(row=0, column=1, sticky="e", padx=(0, 8))
-        tip(self.copy_btn,
-            "Puts the highlighted clips on the clipboard, like Copy in "
-            "Explorer. Paste them into Topaz or a folder. (Ctrl+C)")
         self.filter = ctk.CTkEntry(
-            bar, placeholder_text="Filter", width=180, height=28,
+            bar, placeholder_text="Filter", width=170, height=30,
             font=font(11), corner_radius=T.R_SM, fg_color=T.INPUT,
             border_color=T.LINE, border_width=1, text_color=T.TEXT)
-        self.filter.grid(row=0, column=2, sticky="e")
+        self.filter.grid(row=0, column=1, sticky="e", padx=(0, 8))
         self.filter.bind("<KeyRelease>", self._filter_soon)
+        # The window's one main action, so the filled button - in the
+        # window's own orange.
+        self.copy_btn = PrimaryButton(
+            bar, T.WARN, text="Copy", width=140, height=30, corner_radius=T.R_SM,
+            command=self._copy, state="disabled")
+        self.copy_btn.grid(row=0, column=2, sticky="e")
+        tip(self.copy_btn,
+            "Puts the selected clips on the clipboard, like Copy in Explorer. "
+            "Paste them into Topaz with Ctrl+V. (Ctrl+C)")
 
         self.canvas = tk.Canvas(
             card, bg=T.SURFACE, highlightthickness=0, bd=0, takefocus=1)
@@ -215,6 +279,7 @@ class UpscaleWindow(ctk.CTkToplevel):
         self.canvas.bind("<Double-1>", self._open)
         self.canvas.bind("<Button-3>", self._menu)
         self.canvas.bind("<MouseWheel>", self._wheel)
+        self.canvas.bind("<Motion>", self._hover)
         # On the window, so they work wherever focus is - except in the
         # filter box, where Ctrl+A and Ctrl+C belong to the text.
         for key in ("<Control-a>", "<Control-A>"):
@@ -336,10 +401,7 @@ class UpscaleWindow(ctk.CTkToplevel):
         if touched:
             # Regrouped in place: the scroll position and the selection
             # stay where they are, and thumbnails already made are reused.
-            self._order = [clip.path for clip in self._visible()]
-            self._selected &= set(self._order)
-            self._layout()
-            self._selection_changed()
+            self._refresh()
 
     def _update_counts(self) -> None:
         found = self._clips
@@ -350,9 +412,16 @@ class UpscaleWindow(ctk.CTkToplevel):
         if self._measuring:
             text += f"  ·  measuring {len(self._measuring)}"
         self.count.configure(text=text)
-        if self._folder:
-            n = len(found.get(self._folder) or [])
-            self.folder_title.configure(text=f"{self._folder}  ·  {n}")
+        self._update_title()
+
+    def _update_title(self) -> None:
+        if not self._folder:
+            return
+        if not self._clips:
+            self.folder_title.configure(text=self._folder)
+            return
+        n = len(self._clips.get(self._folder) or [])
+        self.folder_title.configure(text=f"{self._folder}  ·  {n}")
 
     # ── what is on screen ────────────────────────────────────────────────
 
@@ -363,9 +432,7 @@ class UpscaleWindow(ctk.CTkToplevel):
     def _show(self, folder: str) -> None:
         self._folder = folder
         self._mark_folder(folder)
-        n = len(self._clips.get(folder) or [])
-        self.folder_title.configure(
-            text=folder if not self._clips else f"{folder}  ·  {n}")
+        self._update_title()
         self.canvas.yview_moveto(0)
         self._fill()
 
@@ -375,7 +442,8 @@ class UpscaleWindow(ctk.CTkToplevel):
         query = self.filter.get().strip().lower()
         if query:
             clips = [clip for clip in clips if query in clip.name.lower()]
-        return [clip for _height, members in grouped(clips) for clip in members]
+        return [clip for _need, groups in sections(clips)
+                for _height, members in groups for clip in members]
 
     def _filter_soon(self, _event=None) -> None:
         """Refill once typing pauses, not on every key."""
@@ -398,6 +466,13 @@ class UpscaleWindow(ctk.CTkToplevel):
         self._selection_changed()
         self._start_thumbs(clips)
 
+    def _refresh(self) -> None:
+        """Lay out again where the view is, keeping selection and pictures."""
+        self._order = [clip.path for clip in self._visible()]
+        self._selected &= set(self._order)
+        self._layout()
+        self._selection_changed()
+
     def _card_box(self) -> tuple[int, int, int, int]:
         card_w = px(_CARD_W)
         img_h = px(_IMG_H)
@@ -414,6 +489,7 @@ class UpscaleWindow(ctk.CTkToplevel):
         clips = self._visible()
         self.canvas.delete("all")
         self._slots.clear()
+        self._links = []
         width = max(self.canvas.winfo_width(), self._canvas_w, 1)
         if not clips:
             self.canvas.create_text(
@@ -425,31 +501,71 @@ class UpscaleWindow(ctk.CTkToplevel):
         gap = px(_GAP)
         pad = px(_PAD)
         head_h = px(_HEAD_H)
-        cols = max(1, (width - pad) // (card_w + gap))
+        # As many whole columns as fit, with an even gap, and the block
+        # of them centred. Sharing the spare width out between the columns
+        # opened a hole in the middle of a two-column row; packing them
+        # left left a strip down the right with the headings' "Select
+        # all" stranded out in it.
+        cols = max(1, (width - pad * 2 + gap) // (card_w + gap))
+        gap_x = gap
+        grid_w = cols * card_w + (cols - 1) * gap
+        left = max(pad, (width - grid_w) // 2)
         img_w = card_w - inset * 2
         text_w = card_w - inset * 2
         index = 0
         y = pad
-        for height, members in grouped(clips):
-            # A heading for each height: "1080p  ·  12 clips", ruled across.
-            label = f"{_height_label(height)}  ·  {len(members)} clip{'' if len(members) == 1 else 's'}"
-            self.canvas.create_text(pad, y + head_h // 2, anchor="w", text=label,
-                                    fill=T.TEXT, font=self._head_font)
-            rule_x = pad + self._head_font.measure(label) + px(12)
-            if rule_x < width - pad:
-                self.canvas.create_line(rule_x, y + head_h // 2, width - pad,
-                                        y + head_h // 2, fill=T.LINE)
-            y += head_h
-            for n, clip in enumerate(members):
-                col, row = n % cols, n // cols
-                x = pad + col * (card_w + gap)
-                top = y + row * (card_h + gap)
-                self._draw_card(clip, index, x, top, card_w, card_h,
-                                img_w, img_h, inset, text_w)
-                index += 1
-            rows = (len(members) + cols - 1) // cols
-            y += rows * (card_h + gap) + px(6)
+        section_h = px(_HEAD_H + 10)
+        for number, (need, groups) in enumerate(sections(clips)):
+            if number:
+                y += px(14)             # air between one Topaz job and the next
+            everything = [clip.path for _h, members in groups for clip in members]
+            n = len(everything)
+            self._draw_heading(
+                f"{need_title(need)}  ·  {n} clip{'' if n == 1 else 's'}",
+                everything, y, left, left + grid_w, section_h, section=True)
+            y += section_h
+            for height, members in groups:
+                paths = [clip.path for clip in members]
+                m = len(paths)
+                self._draw_heading(
+                    f"{_height_label(height)}  ·  {m} clip{'' if m == 1 else 's'}",
+                    paths, y, left, left + grid_w, head_h)
+                y += head_h
+                for k, clip in enumerate(members):
+                    col, row = k % cols, k // cols
+                    x = left + col * (card_w + gap_x)
+                    top = y + row * (card_h + gap)
+                    self._draw_card(clip, index, x, top, card_w, card_h,
+                                    img_w, img_h, inset, text_w)
+                    index += 1
+                rows = (len(members) + cols - 1) // cols
+                y += rows * (card_h + gap) + px(8)
         self.canvas.configure(scrollregion=(0, 0, width, y + pad))
+
+    def _draw_heading(self, label: str, paths: list, y: int, left: int,
+                      right: int, head_h: int, section: bool = False) -> None:
+        """ "1080p · 12 clips" on the left, ruled across to "Select all 12"
+        on the right - the whole group, one Topaz batch, in one click. A
+        section heading ("Needs 60 fps · 120 clips") is the same, larger,
+        in the window's orange, with a solid rule."""
+        mid = y + head_h // 2
+        n = len(paths)
+        title_font = self._section_font if section else self._head_font
+        self.canvas.create_text(left, mid, anchor="w", text=label,
+                                fill=T.WARN if section else T.TEXT, font=title_font)
+        everything = all(path in self._selected for path in paths)
+        link = "Clear" if everything else (f"Select all {n}" if n > 1 else "Select")
+        link_item = self.canvas.create_text(
+            right, mid, anchor="e", text=link, fill=T.WARN,
+            font=self._link_font, tags=("link",))
+        x0, y0, x1, y1 = self.canvas.bbox(link_item)
+        self._links.append(((x0 - px(6), y0 - px(4), x1 + px(6), y1 + px(4)), paths))
+        rule_x0 = left + title_font.measure(label) + px(12)
+        rule_x1 = x0 - px(12)
+        if rule_x1 > rule_x0:
+            self.canvas.create_line(rule_x0, mid, rule_x1, mid,
+                                    fill=T.WARN_DEEP if section else T.LINE,
+                                    width=2 if section else 1)
 
     def _draw_card(self, clip, index, x, y, card_w, card_h, img_w, img_h,
                    inset, text_w) -> None:
@@ -465,17 +581,11 @@ class UpscaleWindow(ctk.CTkToplevel):
         text_top = y + inset + img_h
 
         # Line one: the picture, the thing the groups are built from.
-        need = f"Needs {clip.need}" if clip.need else ""
-        need_w = self._need_font.measure(need) + px(12) if need else 0
         self.canvas.create_text(
             x + inset, text_top + px(16), anchor="w",
             text=fit_text(_spec(clip, clip.path in self._measuring),
-                          max(text_w - need_w, px(48)), self._spec_font.measure),
+                          text_w, self._spec_font.measure),
             fill=T.TEXT, font=self._spec_font)
-        if need:
-            self.canvas.create_text(
-                x + card_w - inset, text_top + px(16), anchor="e",
-                text=need, fill=T.WARN, font=self._need_font)
         # Line two: the name. Line three: length and size.
         self.canvas.create_text(
             x + inset, text_top + px(38), anchor="w",
@@ -585,7 +695,7 @@ class UpscaleWindow(ctk.CTkToplevel):
                 if old not in keep:
                     self._photos.pop(old, None)
 
-    # ── selecting, dragging, copying ─────────────────────────────────────
+    # ── selecting ────────────────────────────────────────────────────────
 
     def _hit(self, event) -> str:
         x = self.canvas.canvasx(event.x)
@@ -596,12 +706,28 @@ class UpscaleWindow(ctk.CTkToplevel):
                 return path
         return ""
 
+    def _link_hit(self, event):
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        for (x0, y0, x1, y1), paths in self._links:
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                return paths
+        return None
+
+    def _hover(self, event) -> None:
+        cursor = "hand2" if self._link_hit(event) is not None else ""
+        if str(self.canvas.cget("cursor")) != cursor:
+            self.canvas.configure(cursor=cursor)
+
     def _selection_changed(self) -> None:
         n = len(self._selected)
+        if self._copied_job is not None:
+            return                      # "Copied" is still showing
         if n:
             self.hint.configure(
-                text=f"{n} selected. Drag onto Topaz, or Ctrl+C and paste.")
-            self.copy_btn.configure(state="normal", text=f"Copy {n}")
+                text=f"{n} selected. Copy and paste into Topaz, or drag them onto it.")
+            self.copy_btn.configure(state="normal",
+                                    text=f"Copy {n} clip{'' if n == 1 else 's'}")
         else:
             self.hint.configure(text=_HINT)
             self.copy_btn.configure(state="disabled", text="Copy")
@@ -609,21 +735,43 @@ class UpscaleWindow(ctk.CTkToplevel):
     def _selected_paths(self) -> list[str]:
         return [path for path in self._order if path in self._selected]
 
+    def _select_group(self, paths: list, add: bool) -> None:
+        """A group heading's link: the whole group, or clear it if it is
+        all selected already. Ctrl adds it to what is selected."""
+        if all(path in self._selected for path in paths):
+            self._selected -= set(paths)
+        elif add:
+            self._selected |= set(paths)
+        else:
+            self._selected = set(paths)
+        if paths:
+            self._anchor = paths[0]
+        self._layout()                  # the links say Clear / Select all
+        self._selection_changed()
+
     def _drag_press(self, event) -> None:
         # Focus follows a click, not the pointer: taking it on hover pulled
         # it out of the filter box mid-word.
         self.canvas.focus_set()
         self._did_drag = False
+        shift = bool(event.state & 0x0001)
+        ctrl = bool(event.state & 0x0004)
+        group = self._link_hit(event)
+        if group is not None:
+            self._drag_at = None
+            self._drag_ok = False
+            self._pressed = ""
+            self._select_group(group, add=ctrl or shift)
+            return
         path = self._hit(event)
         self._drag_at = (event.x, event.y)
         self._pressed = path
         self._drag_ok = bool(path)
-        shift = bool(event.state & 0x0001)
-        ctrl = bool(event.state & 0x0004)
         if not path:
             if not ctrl:
                 self._selected.clear()
                 self._paint_selection()
+                self._repaint_links()
                 self._selection_changed()
             return
         if shift and self._anchor in self._order and path in self._order:
@@ -641,7 +789,42 @@ class UpscaleWindow(ctk.CTkToplevel):
             self._selected = {path}
             self._anchor = path
         self._paint_selection()
+        self._repaint_links()
         self._selection_changed()
+
+    def _repaint_links(self) -> None:
+        """Clear / Select all on each heading, after a click on a card."""
+        for item, ((_box), paths) in zip(self.canvas.find_withtag("link"), self._links):
+            n = len(paths)
+            everything = all(path in self._selected for path in paths)
+            text = "Clear" if everything else (f"Select all {n}" if n > 1 else "Select")
+            self.canvas.itemconfigure(item, text=text)
+
+    def _drag_release(self, event) -> None:
+        if self._did_drag or self._dragging:
+            return
+        path = self._pressed
+        shift = bool(event.state & 0x0001)
+        ctrl = bool(event.state & 0x0004)
+        if path and not shift and not ctrl and len(self._selected) > 1 and path in self._selected:
+            self._selected = {path}
+            self._anchor = path
+            self._paint_selection()
+            self._repaint_links()
+            self._selection_changed()
+
+    def _select_all(self, _event=None):
+        if self._in_filter():
+            return None
+        self._selected = set(self._order)
+        if self._order:
+            self._anchor = self._order[0]
+        self._paint_selection()
+        self._repaint_links()
+        self._selection_changed()
+        return "break"
+
+    # ── handing over ─────────────────────────────────────────────────────
 
     def _drag_motion(self, event) -> None:
         if self._dragging or not self._drag_at or not self._drag_ok:
@@ -659,25 +842,15 @@ class UpscaleWindow(ctk.CTkToplevel):
         # the watchdog would log that as the window freezing.
         watchdog.modal(True)
         try:
-            ok = drag_files(paths)
+            result = drag_files(paths)
         finally:
             watchdog.modal(False)
             self._dragging = False
-        if not ok:
+        if result == "dropped":
+            self._flash(f"Sent {len(paths)} clip{'' if len(paths) == 1 else 's'} to Topaz")
+        elif not result:
             tell(self, "Needs 4K 60",
-                 "Couldn't drag those files. Ctrl+C and paste works too.")
-
-    def _drag_release(self, event) -> None:
-        if self._did_drag or self._dragging:
-            return
-        path = self._pressed
-        shift = bool(event.state & 0x0001)
-        ctrl = bool(event.state & 0x0004)
-        if path and not shift and not ctrl and len(self._selected) > 1 and path in self._selected:
-            self._selected = {path}
-            self._anchor = path
-            self._paint_selection()
-            self._selection_changed()
+                 "Couldn't drag those files. Copy and paste works too.")
 
     def _copy(self) -> None:
         paths = self._selected_paths()
@@ -685,13 +858,31 @@ class UpscaleWindow(ctk.CTkToplevel):
             return
         if copy_files(paths):
             n = len(paths)
-            self.hint.configure(
-                text=f"Copied {n} clip{'' if n == 1 else 's'}. Paste into "
-                     "Topaz, or into a folder, with Ctrl+V.")
+            self._flash(f"Copied {n} clip{'' if n == 1 else 's'}. Paste into "
+                        "Topaz with Ctrl+V.", button="Copied ✓")
         else:
             tell(self, "Needs 4K 60",
                  "Couldn't put those files on the clipboard. Another program "
                  "may be holding it; try again.")
+
+    def _flash(self, text: str, button: str = "") -> None:
+        """Say it happened - in the hint, and on the button for a moment."""
+        if self._copied_job is not None:
+            try:
+                self.after_cancel(self._copied_job)
+            except ValueError:
+                pass
+        self.hint.configure(text=text, text_color=T.OK)
+        if button:
+            self.copy_btn.configure(text=button)
+        self._copied_job = self.after(2200, self._flash_done)
+
+    def _flash_done(self) -> None:
+        self._copied_job = None
+        if not self._alive:
+            return
+        self.hint.configure(text_color=T.FAINT)
+        self._selection_changed()
 
     def _copy_key(self, _event=None):
         if self._in_filter():
@@ -705,7 +896,7 @@ class UpscaleWindow(ctk.CTkToplevel):
             return
         self.clipboard_clear()
         self.clipboard_append("\n".join(paths))
-        self.hint.configure(text=f"Copied {len(paths)} path{'' if len(paths) == 1 else 's'} as text.")
+        self._flash(f"Copied {len(paths)} path{'' if len(paths) == 1 else 's'} as text.")
 
     def _menu(self, event) -> None:
         path = self._hit(event)
@@ -715,8 +906,10 @@ class UpscaleWindow(ctk.CTkToplevel):
             self._selected = {path}
             self._anchor = path
             self._paint_selection()
+            self._repaint_links()
             self._selection_changed()
-        n = len(self._selected)
+        paths = self._selected_paths()
+        n = len(paths)
         menu = popup_menu(self)
         menu.add_command(label=f"Copy {n} clip{'' if n == 1 else 's'}      Ctrl+C",
                          command=self._copy)
@@ -733,16 +926,6 @@ class UpscaleWindow(ctk.CTkToplevel):
         path = self._hit(event)
         if path:
             open_in_explorer(path)
-
-    def _select_all(self, _event=None):
-        if self._in_filter():
-            return None
-        self._selected = set(self._order)
-        if self._order:
-            self._anchor = self._order[0]
-        self._paint_selection()
-        self._selection_changed()
-        return "break"
 
     def _wheel(self, event) -> None:
         self.canvas.yview_scroll(int(-event.delta / 120) or (-1 if event.delta > 0 else 1), "units")
