@@ -35,6 +35,43 @@ E621_UA = f"{APP_NAME}/{APP_VERSION} (personal library tagger)"
 # the URL well under any limit and is a hundred times fewer requests
 # than asking one post at a time, at the same one request per second.
 E621_SEARCH = "https://e621.net/posts.json"
+
+# ── pacing ───────────────────────────────────────────────────────────────
+#
+# e621 allows about two requests a second. Paced here, once, for every
+# caller together: each fetcher used to sleep a delay of its own, so the
+# Library's background fetch and Convert's Fetch running at the same time
+# asked twice as fast as either meant to. A 429 (too many) or 503 (busy)
+# widens the gap, up to PACE_MAX; each answer that comes back fine
+# narrows it again. Nothing to set - it was a setting, and the only right
+# value was the one it already had.
+
+PACE = 0.55
+PACE_MAX = 8.0
+_pace_lock = threading.Lock()
+_pace_next = 0.0
+_pace_gap = PACE
+
+
+def _pace() -> None:
+    """Wait for this request's turn."""
+    global _pace_next
+    with _pace_lock:
+        now = time.monotonic()
+        start = max(now, _pace_next)
+        _pace_next = start + _pace_gap
+    if start > now:
+        time.sleep(start - now)
+
+
+def _answered(status: int = 200) -> None:
+    """Widen the gap after a rate-limit answer, narrow it after a good one."""
+    global _pace_gap
+    with _pace_lock:
+        if status in (429, 503):
+            _pace_gap = min(_pace_gap * 2, PACE_MAX)
+        elif status < 400:
+            _pace_gap = max(PACE, _pace_gap * 0.8)
 BATCH_SIZE = 100
 
 # The only answers that mean "this post is not coming back": it does not
@@ -344,10 +381,13 @@ class E621Meta:
             url += ("?login=" + urllib.parse.quote(user) +
                     "&api_key=" + urllib.parse.quote(key))
         request = urllib.request.Request(url, headers={"User-Agent": E621_UA})
+        _pace()
         try:
             with urllib.request.urlopen(request, timeout=20) as resp:
                 payload = json.load(resp)
+            _answered()
         except urllib.error.HTTPError as exc:
+            _answered(exc.code)
             if exc.code not in GONE_FOR_GOOD:
                 # Everything else is about the request, not the post. A
                 # 429 is the rate limit, a 503 is e621 or its front end
@@ -402,10 +442,13 @@ class E621Meta:
             params["api_key"] = key
         url = E621_SEARCH + "?" + urllib.parse.urlencode(params)
         request = urllib.request.Request(url, headers={"User-Agent": E621_UA})
+        _pace()
         try:
             with urllib.request.urlopen(request, timeout=30) as resp:
                 payload = json.load(resp)
+            _answered()
         except urllib.error.HTTPError as exc:
+            _answered(exc.code)
             # A 4xx other than the rate limit is e621 refusing the search
             # itself; asking again will not change its mind.
             refused = 400 <= exc.code < 500 and exc.code != 429

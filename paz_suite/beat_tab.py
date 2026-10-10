@@ -25,7 +25,7 @@ from .format import fmt_clock, fmt_len
 from . import beat_engine as be
 from . import uithread
 from .widgets import (Card, StatTile, JobPanel, LogView, PrimaryButton, draw_empty,
-                      empty_overlay, tip)
+                      empty_overlay, rounded_well, tip)
 from .media import probe
 
 
@@ -235,8 +235,7 @@ class BeatTab(ctk.CTkFrame):
                                        placeholder_text="No song chosen")
         self.file_entry.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(row, text="Browse…", width=90, height=32, corner_radius=T.R_SM,
-                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                     text_color=T.DIM, command=self._browse_audio
+                     **button_style("secondary"), command=self._browse_audio
                      ).grid(row=0, column=1, padx=(8, 0))
 
         # No model picker here on purpose. There is one right answer -
@@ -245,7 +244,7 @@ class BeatTab(ctk.CTkFrame):
         # random seed or a smaller, less accurate one. Making that a
         # decision on the way to pressing Analyze only invites picking
         # something worse. The overrides still exist for anyone who wants
-        # them, in Settings > e621 & App > Beat This.
+        # them, in Settings > App > Beat This.
 
         run_row = ctk.CTkFrame(panel, fg_color="transparent")
         run_row.grid(row=3, column=0, sticky="ew", pady=(0, 10))
@@ -294,12 +293,11 @@ class BeatTab(ctk.CTkFrame):
         self.install_btn.pack(side="left")
         self.download_btn = ctk.CTkButton(
             row, text="Download model", width=130, height=30, corner_radius=T.R_SM,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
+            **button_style("secondary"),
             command=self._download_checkpoint)
         self.download_btn.pack(side="left", padx=(8, 0))
         ctk.CTkButton(row, text="Re-check", width=90, height=30, corner_radius=T.R_SM,
-                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                     text_color=T.DIM, command=self._refresh_setup
+                     **button_style("secondary"), command=self._refresh_setup
                      ).pack(side="left", padx=(8, 0))
 
     def _refresh_setup(self) -> None:
@@ -467,7 +465,7 @@ class BeatTab(ctk.CTkFrame):
             self.tree.column(key, width=column_width(title, width),
                              minwidth=px(40), anchor=anchor)
             self.tree.heading(key, text=title, anchor=anchor)
-        self.tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        rounded_well(self.tree, row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         scroll = ctk.CTkScrollbar(tree_wrap, command=self.tree.yview, width=12,
                                   button_color=T.LINE, button_hover_color=T.FAINT)
         scroll.grid(row=0, column=1, sticky="ns", padx=(2, 6), pady=8)
@@ -502,8 +500,7 @@ class BeatTab(ctk.CTkFrame):
         # export - markers drift a little further from the beat with every
         # bar. Reading it off the footage removes the guess.
         ctk.CTkButton(fps_row, text="From video…", width=88, height=30,
-                      corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.DIM,
+                      corner_radius=T.R_SM, **button_style("secondary"),
                       command=self._fps_from_video
                       ).pack(side="left", padx=(6, 8))
 
@@ -558,7 +555,7 @@ class BeatTab(ctk.CTkFrame):
         btn_row.grid(row=2, column=0, sticky="ew", padx=14, pady=(6, 12))
         self.save_tsv_btn = ctk.CTkButton(
             btn_row, text="Save .beats", width=110, height=32, corner_radius=T.R_SM,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
+            **button_style("secondary"),
             state="disabled", command=self._save_tsv)
         self.save_tsv_btn.pack(side="left")
         self.save_edl_btn = PrimaryButton(
@@ -567,7 +564,7 @@ class BeatTab(ctk.CTkFrame):
         self.save_edl_btn.pack(side="left", padx=(8, 0))
         self.send_resolve_btn = ctk.CTkButton(
             btn_row, text="Send to Resolve now", width=160, height=32, corner_radius=T.R_SM,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
+            **button_style("secondary"),
             state="disabled", command=self._send_resolve)
         self.send_resolve_btn.pack(side="left", padx=(8, 0))
 
@@ -592,7 +589,7 @@ class BeatTab(ctk.CTkFrame):
         self.status_label.configure(text=text, text_color=colour)
 
     def _open_settings(self) -> None:
-        self.app.open_settings(initial_tab="e621 & App")
+        self.app.open_settings(initial_tab="App")
 
     def _open_help(self) -> None:
         win = ctk.CTkToplevel(self.root)
@@ -960,7 +957,7 @@ tracker can give. Press "Download model" once in Setup to fetch all three \
 ahead of time; otherwise the first analysis stops to download them.
 
 If you ever do need something else - a slow machine where the small model \
-is worth the accuracy, or a GPU to avoid - Settings > e621 & App > Beat \
+is worth the accuracy, or a GPU to avoid - Settings > App > Beat \
 This has the overrides. DBN postprocessing lives there too, and should \
 stay off: the paper this tracker comes from is called "Accurate Beat \
 Tracking Without DBN Postprocessing", so the DBN is there for comparison, \

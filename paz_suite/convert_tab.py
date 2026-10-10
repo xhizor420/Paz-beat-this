@@ -14,7 +14,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 import customtkinter as ctk
 
@@ -22,7 +22,7 @@ from .theme import T, button_style, font, label_style, text_width, CONVERT_LABEL
 from .format import fmt_time, fmt_clock, fmt_size
 from .files import is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer
 from .media import check_dependencies, available_encoders, probe
-from .e621 import GIVE_UP_AFTER
+from .e621 import GIVE_UP_AFTER, PACE
 from .convert_engine import (
     Task, GPU_ENCODERS, classify, plan_recipe, convert, transfer,
     Cancelled, _discard,
@@ -30,10 +30,11 @@ from .convert_engine import (
 from .convert_widgets import (
     QueueTable, STATE_LABELS, ScrubPreview, ContactSheet, DuplicateWindow,
 )
+from .upscale_window import UpscaleWindow
 from .widgets import (Card, Bar, StatTile, JobPanel, LogView, LibraryBar,
-                      PrimaryButton, menu_rule, popup_menu, tip)
+                      PrimaryButton, ask_yes, menu_rule, popup_menu, tell, tip)
 from .shortcuts import shortcuts_button
-from . import uithread
+from . import grabber, prefetch, uithread
 from .winsys import awake
 
 
@@ -180,6 +181,7 @@ class ConvertTab(ctk.CTkFrame):
         self._build_topbar()
         self._build_left()
         self._build_right()
+        self._build_grab_bar()
 
     def _build_topbar(self):
         # The run state and the queue readout live in the app's header,
@@ -241,22 +243,27 @@ class ConvertTab(ctk.CTkFrame):
         buttons = ctk.CTkFrame(controls, fg_color="transparent")
         buttons.grid(row=0, column=3, sticky="e", padx=(0, 14), pady=13)
 
+        self.grab_btn = ctk.CTkButton(
+            buttons, text="Grab new", width=110, height=38, corner_radius=T.R_SM,
+            command=self._grab_new, **button_style("secondary"))
+        self.grab_btn.pack(side="left", padx=(0, 8))
+        tip(self.grab_btn,
+            "Download new e621 favorites with Grabber. It sorts them into "
+            "your folders and skips any file you already have.")
+
         self.scan_btn = ctk.CTkButton(
             buttons, text="Scan folders", width=110, height=38, corner_radius=T.R_SM,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, command=self._scan)
+            **button_style("secondary"), command=self._scan)
         self.scan_btn.pack(side="left", padx=(0, 8))
 
         self.pause_btn = ctk.CTkButton(
             buttons, text="Pause", width=84, height=38, corner_radius=T.R_SM,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, state="disabled", command=self._toggle_pause)
+            **button_style("secondary"), state="disabled", command=self._toggle_pause)
         self.pause_btn.pack(side="left", padx=(0, 8))
 
         self.stop_btn = ctk.CTkButton(
             buttons, text="Stop", width=84, height=38, corner_radius=T.R_SM,
-            font=font(11, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, state="disabled", command=self._stop)
+            **button_style("secondary"), state="disabled", command=self._stop)
         self.stop_btn.pack(side="left", padx=(0, 8))
 
         self.start_btn = PrimaryButton(
@@ -339,8 +346,7 @@ class ConvertTab(ctk.CTkFrame):
         for text, command in (("Play file", self._play),
                               ("Show in folder", self._reveal)):
             button = ctk.CTkButton(
-                row_cluster, text=text, height=30, corner_radius=T.R_SM, font=font(11),
-                fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
+                row_cluster, text=text, height=30, corner_radius=T.R_SM, **button_style("secondary"),
                 width=110, command=command, state="disabled")
             button.pack(side="left", padx=(0, 7))
             self.row_buttons.append(button)
@@ -358,8 +364,7 @@ class ConvertTab(ctk.CTkFrame):
         # for the sake of things reached for once a week.
         self.more_btn = ctk.CTkButton(
             maintenance, text="More ▾", height=30, corner_radius=T.R_SM,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, width=78, command=self._more_menu)
+            **button_style("secondary"), width=78, command=self._more_menu)
         self.more_btn.pack(side="left")
 
         self.promote_btn = ctk.CTkButton(
@@ -371,8 +376,10 @@ class ConvertTab(ctk.CTkFrame):
         self.gaps_btn = ctk.CTkButton(
             tools, text="Find upscale gaps", height=30, corner_radius=T.R_SM,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.WARN, width=150, command=self._find_gaps)
+            text_color=T.WARN, width=150, command=self._open_upscale)
         self.gaps_btn.pack(side="right", padx=(7, 0))
+        tip(self.gaps_btn,
+            "Clips that still need 4K 60. Drag the ones you want onto Topaz.")
         self.gaps_btn.bind("<Button-3>", lambda e: self._list_gaps())
 
     def _build_right(self):
@@ -399,6 +406,119 @@ class ConvertTab(ctk.CTkFrame):
 
         self.logview = LogView(panel)
         self.logview.grid(row=3, column=0, sticky="nsew", padx=14, pady=(0, 14))
+
+    def _build_grab_bar(self):
+        """A strip under both panels. Hidden until Grab new is running."""
+        strip = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=T.R_SM,
+                             border_width=1, border_color=T.LINE)
+        strip.grid(row=2, column=0, columnspan=2, sticky="ew",
+                   padx=14, pady=(0, 12))
+        strip.grid_columnconfigure(0, weight=1)
+        self._grab_strip = strip
+
+        self._grab_title = ctk.CTkLabel(
+            strip, text="Pulling new videos", font=font(12), text_color=T.TEXT,
+            anchor="w")
+        self._grab_title.grid(row=0, column=0, sticky="w",
+                              padx=(14, 8), pady=(10, 0))
+        self._grab_count = ctk.CTkLabel(
+            strip, text="0 grabbed", font=font(12), text_color=T.TEXT,
+            anchor="e")
+        self._grab_count.grid(row=0, column=1, sticky="e",
+                              padx=(8, 8), pady=(10, 0))
+        # Stop while it runs, Hide once it is done - one button, so the
+        # strip never has an action that does nothing.
+        self._grab_action = ctk.CTkButton(
+            strip, text="Stop", width=64, height=24, corner_radius=T.R_SM,
+            command=self._grab_action_click, **button_style("text"))
+        self._grab_action.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=(8, 0))
+
+        self._grab_bar = Bar(strip, height=4, color=T.ACCENT)
+        # The shared track colour disappears on a surface card.
+        self._grab_bar._track.configure(fg_color=T.LINE)
+        self._grab_bar.grid(row=1, column=0, columnspan=3, sticky="ew",
+                            padx=14, pady=(8, 0))
+
+        self._grab_detail = ctk.CTkLabel(
+            strip, text="", font=font(10), text_color=T.FAINT, anchor="w")
+        self._grab_detail.grid(row=2, column=0, columnspan=3, sticky="w",
+                               padx=14, pady=(6, 10))
+        strip.grid_remove()
+
+    # How long a finished grab stays up before the strip tucks itself
+    # away. The log keeps the whole story, file by file.
+    GRAB_HIDE_MS = 12000
+    # Files listed one by one in the log; past this it is a count.
+    GRAB_LOG_FILES = 40
+
+    def _grab_show(self, event: dict) -> None:
+        if not self.winfo_exists():
+            return
+        self._grab_cancel_hide()
+        view = grabber.status_text(event)
+        self._grab_strip.grid()
+        title_color = T.OK if view["color"] == "ok" else T.TEXT
+        bar_color = {"ok": T.OK, "dim": T.FAINT, "accent": T.ACCENT}[view["color"]]
+        self._grab_title.configure(text=view["title"], text_color=title_color)
+        self._grab_detail.configure(text=view["detail"])
+        self._grab_count.configure(text=f"{view['count']} grabbed",
+                                   text_color=title_color)
+        self._grab_bar.set(view["fraction"], bar_color)
+        done = bool(event.get("done"))
+        self._grab_action.configure(text="Hide" if done else "Stop", state="normal")
+        if done:
+            self.grab_btn.configure(state="normal", text="Grab new")
+            self._grab_log(event, view)
+            # An unknown count may well be new files: look, as for a known one.
+            if int(event.get("new") or 0) > 0 or event.get("logged") is False:
+                self._rescan_after_grab()
+            # A failure stays until it is read; anything else goes by itself.
+            if not (event.get("failed") and not event.get("stopped")):
+                self._grab_hide_job = self.after(self.GRAB_HIDE_MS, self._grab_auto_hide)
+
+    def _grab_log(self, event: dict, view: dict) -> None:
+        """The summary, then where each new file went: "6767467.mp4 → MLP Futa"."""
+        self.log(f"{view['title'].replace('  ·  ', ' · ')}. {view['detail']}.",
+                 "ok" if view["color"] == "ok" else "info")
+        saved = list(event.get("saved") or [])
+        for name, folder in saved[:self.GRAB_LOG_FILES]:
+            self.log(f"  {name or '?'} → {folder or '?'}", "info")
+        if len(saved) > self.GRAB_LOG_FILES:
+            self.log(f"  …and {len(saved) - self.GRAB_LOG_FILES} more", "info")
+
+    def _grab_auto_hide(self) -> None:
+        """Tuck the finished strip away - unless the pointer is on it,
+        which means someone is reading it. Then look again shortly."""
+        self._grab_hide_job = None
+        if grabber.running():
+            return
+        try:
+            x, y = self.winfo_pointerxy()
+            under = self.winfo_containing(x, y)
+        except (KeyError, tk.TclError):
+            under = None
+        if under is not None and str(under).startswith(str(self._grab_strip)):
+            self._grab_hide_job = self.after(3000, self._grab_auto_hide)
+            return
+        self._grab_strip.grid_remove()
+
+    def _grab_cancel_hide(self) -> None:
+        job = getattr(self, "_grab_hide_job", None)
+        self._grab_hide_job = None
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except ValueError:
+                pass
+
+    def _grab_action_click(self) -> None:
+        if grabber.running():
+            self._grab_action.configure(state="disabled", text="Stopping")
+            threading.Thread(target=grabber.stop, daemon=True,
+                             name="grabber-stop").start()
+        else:
+            self._grab_cancel_hide()
+            self._grab_strip.grid_remove()
 
     # ── keyboard handlers (dispatched centrally by the app) ────────────────
 
@@ -616,9 +736,9 @@ class ConvertTab(ctk.CTkFrame):
         self.busy_tool = True
         self.e621_btn.configure(state="disabled")
         self._set_status(self.F("fetching"), T.ACCENT2)
-        delay = max(float(self.cfg.e621_fetch_delay), 0.5)
+        # Paced inside e621.fetch, for every fetcher at once.
         self.log(f"{self.F('fetching')} · {len(todo)} posts "
-                 f"(~{fmt_time(len(todo) * (delay + 0.1))})", "head")
+                 f"(~{fmt_time(len(todo) * (PACE + 0.1))})", "head")
 
         def work():
             hits = miss = 0
@@ -651,8 +771,6 @@ class ConvertTab(ctk.CTkFrame):
                                 f"{self.F('fetching')} {index + 1}/{len(todo)}", T.ACCENT2)
                     if index % 10 == 9:
                         self.emeta.checkpoint()
-                    if index + 1 < len(todo):
-                        time.sleep(delay)
             finally:
                 self.emeta.save()
                 self.busy_tool = False
@@ -873,7 +991,7 @@ class ConvertTab(ctk.CTkFrame):
                                     fg_color=T.WARN_DEEP, text_color=T.WARN)
         else:
             self.gaps_btn.configure(text=self.F("gaps"), width=150,
-                                    fg_color=T.BTN, text_color=T.FAINT)
+                                    fg_color=T.BTN, text_color=T.TEXT)
 
     def _list_gaps(self):
         if self.busy_tool:
@@ -979,6 +1097,19 @@ class ConvertTab(ctk.CTkFrame):
                          f"{self.cfg.upscale_root}", "ok")
                 self.ui(self.toaster.show, f"{stats['copied']} clips need upscaling", "accent")
 
+    def _open_upscale(self):
+        """The four folders, and the clips in each that still need 4K 60."""
+        window = getattr(self, "_upscale_window", None)
+        if window is not None:
+            try:
+                if window.winfo_exists():
+                    window.lift()
+                    window.focus()
+                    return
+            except tk.TclError:
+                pass
+        self._upscale_window = UpscaleWindow(self.winfo_toplevel(), self)
+
     def _find_gaps(self):
         if self.processing or self.busy_tool:
             return
@@ -1083,6 +1214,43 @@ class ConvertTab(ctk.CTkFrame):
         picked = list(self.cfg.subfolders) if choice == "All categories" else [choice]
         self._active_folders = picked
         return picked
+
+    def _grab_new(self) -> None:
+        """Ask Grabber to fetch favorites it does not already have."""
+        error = grabber.start(lambda event: self.ui(self._grab_show, event))
+        if error:
+            tell(self, "Grabber", error)
+            return
+        tags, _source, page, per_page = grabber.saved_search()
+        self.grab_btn.configure(state="disabled", text="Grabbing…")
+        self._grab_show({
+            "new": 0, "skipped": 0, "total": per_page,
+            "name": "", "recent": [], "saved": [], "done": False,
+        })
+        self.log(
+            f"Grabber is downloading page {page} of {tags} ({per_page} posts). "
+            "Files already saved are skipped.",
+            "ok")
+
+    def _rescan_after_grab(self) -> None:
+        """Pick up files Grabber just saved.
+
+        A scan rebuilds the table, so it only runs on its own when that
+        loses nothing: not during an encode, and not over the results of
+        one (done and failed rows someone may still be reading). Then the
+        new files wait for Scan folders, and the log says so."""
+        if self.processing:
+            self._scan_after_grab = True
+            return
+        self._scan_after_grab = False
+        if any(task.state in ("done", "failed") for task in self.tasks.values()):
+            self.log("Grabber's new files are in the folders. Scan folders "
+                     "adds them; it clears this run's results.", "info")
+            self.toaster.show("New files from Grabber. Scan folders adds them.",
+                              "accent")
+            return
+        self.log("Scanning the new files in.", "ok")
+        self._scan()
 
     def _scan(self, then=None):
         """Find what is waiting to be converted. `then` runs once the
@@ -1221,10 +1389,9 @@ class ConvertTab(ctk.CTkFrame):
             return
         missing = check_dependencies()
         if missing:
-            messagebox.showerror(
-                "FFmpeg not found",
-                f"Cannot find {', '.join(missing)} on your PATH.\n\n"
-                "Install FFmpeg and reopen the app.", parent=self)
+            tell(self, "FFmpeg not found",
+                 f"Cannot find {', '.join(missing)} on your PATH.\n\n"
+                 "Install FFmpeg and reopen the app.")
             return
 
         pending = [t for t in self.tasks.values() if t.state == "queued"]
@@ -1283,7 +1450,7 @@ class ConvertTab(ctk.CTkFrame):
             return
         if self.pause.is_set():
             self.pause.clear()
-            self.pause_btn.configure(text=self.F("pause"), fg_color=T.BTN, text_color=T.DIM)
+            self.pause_btn.configure(text=self.F("pause"), fg_color=T.BTN, text_color=T.TEXT)
             self._set_status(self.F("encoding"), T.ACCENT)
         else:
             self.pause.set()
@@ -1505,9 +1672,9 @@ class ConvertTab(ctk.CTkFrame):
         self.jobs.clear()
         self.start_btn.configure(state="normal")
         self.scan_btn.configure(state="normal")
-        self.stop_btn.configure(state="disabled", fg_color=T.BTN, text_color=T.DIM)
+        self.stop_btn.configure(state="disabled", fg_color=T.BTN, text_color=T.TEXT)
         self.pause_btn.configure(state="disabled", text=self.F("pause"),
-                                 fg_color=T.BTN, text_color=T.DIM)
+                                 fg_color=T.BTN, text_color=T.TEXT)
         stopped = self.cancel.is_set()
         if self.watch_flag.is_set():
             self._set_status(self.F("watching"), T.ACCENT)
@@ -1522,6 +1689,8 @@ class ConvertTab(ctk.CTkFrame):
         if stopped:
             summary = "Stopped early · " + summary
         self.toaster.show(summary, "warn" if (stopped or self.counts["failed"]) else "ok")
+        if getattr(self, "_scan_after_grab", False):
+            self._rescan_after_grab()
 
     def overall_fraction(self) -> float:
         total = len(self.tasks) or 1
@@ -1560,7 +1729,11 @@ class ConvertTab(ctk.CTkFrame):
             state="normal" if has_output or os.path.exists(task.source) else "disabled")
         self.row_buttons[1].configure(state="normal")
         prefer = "Output" if has_output else "Source"
-        self.preview.load(task.source, task.target if has_output else None, prefer=prefer)
+        # A click or an arrow plays it, like the Library; a right-click is
+        # only for the menu.
+        self.preview.load(task.source, task.target if has_output else None,
+                          prefer=prefer, autoplay=not self.table.from_menu)
+        self._prefetch_near(iid)
         if task.error:
             self.preview.set_note(task.error.splitlines()[0])
             return
@@ -1580,6 +1753,31 @@ class ConvertTab(ctk.CTkFrame):
                             "s": "Safe"}.get(rating, rating.upper()))
             bits.append(f"e621 #{task.pid}")
             self.preview.set_note("  ·  ".join(bits), T.ACCENT2)
+
+    def _prefetch_near(self, iid: str) -> None:
+        """Read the rows either side into memory, Down's two first, so
+        arrowing through the queue starts each clip off RAM - see
+        prefetch. The output once this run has made one, else the source -
+        decided from the task, not by asking the drive, which is the slow
+        thing this is here to avoid."""
+        tree = self.table.tree
+        near, after, before = [iid], iid, iid
+        try:
+            for _ in range(2):
+                after = tree.next(after) if after else ""
+                if after:
+                    near.append(after)
+            before = tree.prev(before)
+            if before:
+                near.append(before)
+        except tk.TclError:
+            pass
+        paths = []
+        for row in near:
+            task = self.tasks.get(row)
+            if task:
+                paths.append(task.target if task.state == "done" else task.source)
+        prefetch.want(paths)
 
     def _on_activate(self, iid: str):
         task = self.tasks.get(iid)
@@ -1637,8 +1835,9 @@ class ConvertTab(ctk.CTkFrame):
         self.clipboard_append(text)
 
     def _delete_output(self, task: Task):
-        if not messagebox.askyesno("Delete file",
-                                   f"Delete the converted copy of {task.name}?", parent=self):
+        if not ask_yes(self, "Delete file",
+                       f"Delete the converted copy of {task.name}?",
+                       yes="Delete", danger=True):
             return
         _discard(task.target)
         task.state = "queued"
@@ -1711,11 +1910,32 @@ class ConvertTab(ctk.CTkFrame):
         except OSError as exc:
             self.logview.write(f"Could not save the report: {exc}", "fail")
 
+    def on_hidden(self) -> None:
+        """Another tab is in front now. The inspector's clip, left
+        playing, is sound from a page nobody can see to stop - Library
+        and Vault already stand down the same way."""
+        engine = getattr(getattr(self, "preview", None), "player_engine", None)
+        try:
+            if engine is not None and engine.playing:
+                engine.pause()
+        except Exception:
+            pass
+        self._peek_hide()
+
     def on_app_close(self) -> bool:
         """Return True if it is safe to close (called by the app shell)."""
+        if grabber.running():
+            # It has no window of its own, so leaving it would mean a
+            # download nobody can see or stop.
+            if not ask_yes(self, "Quit",
+                           "Grabber is still downloading. Stop it and quit?",
+                           yes="Stop and quit", danger=True):
+                return False
+            grabber.stop()
         if self.processing:
-            if not messagebox.askyesno(
-                    "Quit", "Encoding is still running. Stop and quit?", parent=self):
+            if not ask_yes(self, "Quit",
+                           "Encoding is still running. Stop and quit?",
+                           yes="Stop and quit", danger=True):
                 return False
             self.cancel.set()
             time.sleep(0.3)

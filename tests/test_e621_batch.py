@@ -34,6 +34,15 @@ def post(pid, artist="kenket"):
             "created_at": "2024-01-01T00:00:00Z"}
 
 
+@pytest.fixture(autouse=True)
+def no_pacing(monkeypatch):
+    """About what is asked and kept, not timing - see test_e621_pace."""
+    monkeypatch.setattr(e621, "_pace", lambda: None)
+    yield
+    e621._pace_gap = e621.PACE
+    e621._pace_next = 0.0
+
+
 @pytest.fixture
 def meta(tmp_path, monkeypatch):
     monkeypatch.setattr(e621, "CONFIG_DIR", str(tmp_path))
@@ -270,7 +279,9 @@ def test_a_backlog_goes_a_hundred_at_a_time(instant):
     assert meta.single_calls == []
     assert tab.done["hits"] == 250
     assert tab.done["pids"] == pids(250)
-    assert tab._fetch_stop.waits == 2, "one pause between requests, not per post"
+    # The wait between requests is e621's own now (e621._pace, one per
+    # HTTP call, so one per batch); the fetcher adds none of its own.
+    assert tab._fetch_stop.waits == 0
 
 
 def test_what_the_search_leaves_out_is_looked_up_on_its_own(instant):

@@ -134,7 +134,9 @@ def test_picking_nothing_empties_the_vault_player():
     vault = FakeVault()
     vault._show_in_player(None)
     assert vault.player.shown == [None]
-    assert "Pick a clip" in vault.player_caption.text
+    # The picture says "Select a clip"; the caption under it stays empty
+    # rather than saying it again.
+    assert vault.player_caption.text == ""
 
 
 def test_leaving_the_vault_stops_its_player():

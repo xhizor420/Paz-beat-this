@@ -105,7 +105,10 @@ def test_laying_out_early_leaves_the_showing_tab_on_top(root):
         root.update()
         order = stacking(shell.tabview)
         assert shell.tabview.get() == "Library"
-        assert not shell.tabview.tab("Vault").winfo_ismapped()
+        # Laid out and left in the cell, beneath the tab showing - the
+        # switch to it later is a raise (PazApp._select_tab).
+        assert order.index(str(shell.tabview.tab("Library"))) > \
+            order.index(str(shell.tabview.tab("Vault")))
         assert order.index(str(shell.tabview.tab("Library"))) > \
             order.index(str(shell.tabview._canvas))
     finally:
@@ -150,7 +153,11 @@ def test_a_quick_second_switch_is_not_undone_by_the_first(root):
         assert shell.tabview.get() == "Vault"
         assert shell.tabview.tab("Vault").winfo_ismapped(), "Vault was hidden"
         assert above_the_background(shell, "Vault")
+        # The others may still be laid out in the cell (they are stacked,
+        # not taken away), but beneath the one asked for.
+        order = stacking(shell.tabview)
         for other in ("Convert", "Library", "Beat This"):
-            assert not shell.tabview.tab(other).winfo_ismapped()
+            assert order.index(str(shell.tabview.tab("Vault"))) > \
+                order.index(str(shell.tabview.tab(other)))
     finally:
         shell.tabview.destroy()

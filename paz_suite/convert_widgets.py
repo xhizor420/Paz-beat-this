@@ -9,16 +9,17 @@ import os
 import threading
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, px, pt, column_width, table_style, window_size
+from .theme import (T, button_style, font, px, pt, column_width, table_style,
+                    window_size)
 from .format import fmt_clock, fmt_size
 from .files import open_in_explorer
-from .media import MediaInfo, ThumbCache, probe, dhash, hamming
-from .widgets import PeekWindow, draw_empty, empty_overlay, popup_menu, tip
+from .media import MediaInfo, ThumbCache, probe, dhash, hamming, round_corners
+from .widgets import PeekWindow, ask_yes, draw_empty, empty_overlay, popup_menu, rounded_well, tip
 from .player_engine import ClipPlayer, HAS_AUDIO, claim_playback, joins_playback
 from .libmpv_player import LibMpvPlayer
 from . import icons, libmpv_player, uithread
@@ -71,6 +72,8 @@ class QueueTable(ctk.CTkFrame):
         super().__init__(parent, fg_color=T.SURFACE, corner_radius=T.R_LG,
                           border_width=1, **kw)
         self.on_select = on_select
+        self.from_menu = False
+        self._menu_pending = False
         self.on_activate = on_activate
         self._rows: dict = {}
         self._order: list = []
@@ -113,7 +116,8 @@ class QueueTable(ctk.CTkFrame):
         self.tree = ttk.Treeview(
             self, style="Q.Treeview", columns=[c[0] for c in self.COLUMNS],
             show="tree headings", selectmode="browse")
-        self.tree.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=(0, 10))
+        rounded_well(self.tree, row=1, column=0, sticky="nsew",
+                     padx=(10, 0), pady=(0, 10))
         empty_overlay(self.tree, "check", "Nothing to convert  ·  Scan folders looks again")
 
         self._configure_tags()
@@ -385,6 +389,7 @@ class QueueTable(ctk.CTkFrame):
             self.on_peek_hide()
 
     def _on_select(self, _event=None) -> None:
+        self.from_menu, self._menu_pending = self._menu_pending, False
         if self.on_select and self.selected:
             self.on_select(self.selected)
 
@@ -396,6 +401,12 @@ class QueueTable(ctk.CTkFrame):
         iid = self.tree.identify_row(event.y)
         if not iid:
             return
+        # A right-click selects the row for its menu, but is not a request
+        # to watch it - the tab reads this and leaves the player alone.
+        # The select event is queued, not sent, so the flag is read and
+        # cleared where it lands. A row already selected sends none.
+        if iid not in self.tree.selection():
+            self._menu_pending = True
         self.tree.selection_set(iid)
         if self.menu.index("end") is not None:
             self.menu.delete(0, "end")
@@ -447,6 +458,7 @@ class ScrubPreview(ctk.CTkFrame):
         # Whether the clip was playing when a scrub began, so releasing the
         # scrubber can carry on from where it was dropped.
         self._resume_on_release = False
+        self._autoplay = False
 
         self.view = tk.Canvas(self, bg=T.INPUT, highlightthickness=0, borderwidth=0,
                                height=340)
@@ -511,10 +523,12 @@ class ScrubPreview(ctk.CTkFrame):
         transport = ctk.CTkFrame(footer, fg_color="transparent")
         transport.grid(row=0, column=0, sticky="w", padx=(0, 12))
 
+        # The same small control as the Library player's (library_player
+        # cbtn): one size of transport button across the app.
         def tbtn(text, command, width=34, image=None, hint=""):
             button = ctk.CTkButton(
                 transport, text=text, width=width, height=26, corner_radius=T.R_SM,
-                font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
                 text_color=T.DIM, image=image, compound="left", command=command)
             button.pack(side="left", padx=(0, 4))
             if hint:
@@ -605,11 +619,17 @@ class ScrubPreview(ctk.CTkFrame):
         self.note.configure(text="")
 
     def load(self, source: str | None, output: str | None = None,
-             prefer: str = "Source", position: float | None = None) -> None:
+             prefer: str = "Source", position: float | None = None,
+             autoplay: bool = False) -> None:
         """
         Point the viewer at a file, and optionally its converted result.
         Probing happens off the UI thread so slow or networked drives never
         freeze the window.
+
+        `autoplay` plays it from the start, the way a click in the Library
+        does. With libmpv it starts before the probe is back - mpv needs
+        nothing from ffprobe to play, and on a busy drive the probe is
+        most of the wait.
         """
         paths = {}
         if source and os.path.exists(source):
@@ -636,6 +656,12 @@ class ScrubPreview(ctk.CTkFrame):
         self._show_stage(False)
         self._show_message("Reading file")
         self._draw_timeline()
+        self._autoplay = autoplay
+        if autoplay and self._mpv:
+            self._pos = 0.0
+            claim_playback(self.player_engine)
+            self.player_engine.load(self._current_path(), 0.0, 30.0, play=True)
+            self._show_stage(True)
         self._probe_async(position)
 
     def set_note(self, text: str, colour: str = T.FAIL) -> None:
@@ -659,8 +685,23 @@ class ScrubPreview(ctk.CTkFrame):
             return
         self._info = info
         duration = info.duration if info else 0.0
+        autoplay, self._autoplay = self._autoplay, False
+        if autoplay and self._mpv:
+            # Already playing since load(); fill in what the probe knows
+            # and leave the engine alone.
+            if duration and not self.player_engine.duration:
+                self.player_engine.duration = duration
+            path = self._current_path()
+            if path:
+                self.cache.prime_hover(path, duration)
+            self._update_meta()
+            self._draw_timeline()
+            self._build_strip()
+            return
         if position is not None:
             self._pos = max(0.0, min(position, max(duration - 0.05, 0.0)))
+        elif autoplay:
+            self._pos = 0.0
         else:
             self._pos = min(duration * 0.25, 3.0) if duration else 0.0
         path = self._current_path()
@@ -679,6 +720,8 @@ class ScrubPreview(ctk.CTkFrame):
         self._draw_timeline()
         self._request_frame(immediate=True)
         self._build_strip()
+        if autoplay and path:
+            self.toggle_play()
 
     def step(self, delta: float) -> None:
         if not self._paths:
@@ -1264,9 +1307,7 @@ class ContactSheet(ctk.CTkToplevel):
         head.pack(fill="x", padx=14, pady=(12, 6))
         ctk.CTkLabel(head, text=title, font=font(12, "bold"),
                      text_color=T.TEXT, anchor="w").pack(side="left")
-        ctk.CTkLabel(head,
-                     text=f"{self.COLS * self.ROWS} frames · click one to jump "
-                          "the inspector · Esc closes",
+        ctk.CTkLabel(head, text=f"{self.COLS * self.ROWS} frames",
                      font=font(10), text_color=T.FAINT).pack(side="right")
 
         self.canvas = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0,
@@ -1311,9 +1352,6 @@ class ContactSheet(ctk.CTkToplevel):
         def slots():
             for i in range(count):
                 x, y = self._cell_xy(i)
-                self.canvas.create_rectangle(
-                    x, y, x + self.CELL_W, y + self.cell_h,
-                    fill=T.INPUT, outline="")
                 self.canvas.create_text(
                     x + self.CELL_W // 2, y + self.cell_h + self.cap // 2,
                     text=fmt_clock(self._marks[i]), fill=T.FAINT,
@@ -1334,9 +1372,10 @@ class ContactSheet(ctk.CTkToplevel):
         if not self.alive or token != self._token or not data:
             return
         try:
-            image = Image.open(io.BytesIO(data))
+            image = Image.open(io.BytesIO(data)).convert("RGB")
             image = image.resize((self.CELL_W, self.cell_h), Image.LANCZOS)
-            photo = ImageTk.PhotoImage(image)
+            radius = min(px(T.R_LG), image.width // 2, image.height // 2)
+            photo = ImageTk.PhotoImage(round_corners(image, radius, T.SURFACE))
         except Exception:
             return
         self._refs.append(photo)
@@ -1350,6 +1389,7 @@ class ContactSheet(ctk.CTkToplevel):
             x, y = self._cell_xy(index)
             if x <= event.x <= x + self.CELL_W and y <= event.y <= y + self.cell_h:
                 self.on_jump(self._marks[index])
+                self._close()
                 return
 
 
@@ -1501,11 +1541,12 @@ class DuplicateWindow(ctk.CTkToplevel):
                 font=font(10, "bold"), text_color=T.DIM, anchor="w")
             head.grid(row=0, column=0, sticky="w", padx=12, pady=(8, 2))
 
+            cull = button_style("text")
+            cull["text_color"] = T.FAIL
             ctk.CTkButton(
-                card, text="Keep largest, delete rest", height=24, width=170,
-                corner_radius=T.R_SM, font=font(10), fg_color=T.BTN,
-                hover_color=T.FAIL_DEEP, text_color=T.DIM,
-                command=lambda g=group, b=best, c=card: self._cull(g, b, c)
+                card, text="Keep largest, delete rest", height=24, width=180,
+                corner_radius=T.R_SM, command=lambda g=group, b=best, c=card: self._cull(g, b, c),
+                **cull
             ).grid(row=0, column=1, padx=10, pady=(8, 2))
 
             for line, (path, info) in enumerate(sorted(
@@ -1520,20 +1561,19 @@ class DuplicateWindow(ctk.CTkToplevel):
                 label.grid(row=line, column=0, sticky="w", padx=12)
                 ctk.CTkButton(
                     card, text="Open", height=20, width=48, corner_radius=T.R_SM,
-                    font=font(9), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                    text_color=T.DIM,
-                    command=lambda p=path: open_in_explorer(p)
+                    command=lambda p=path: open_in_explorer(p),
+                    **button_style("text")
                 ).grid(row=line, column=1, padx=10, sticky="e")
             ctk.CTkLabel(card, text="", height=4).grid(row=len(group) + 1, column=0)
 
     def _cull(self, group, best, card):
         losers = [path for path, _ in group if path != best[0]]
         names = "\n".join(os.path.basename(p) for p in losers)
-        if not messagebox.askyesno(
-                "Delete duplicates",
+        if not ask_yes(
+                self, "Delete duplicates",
                 f"Delete these converted copies?\n\n{names}\n\n"
                 "Originals in the source folder are not touched.",
-                parent=self):
+                yes="Delete", danger=True):
             return
         removed = 0
         for path in losers:

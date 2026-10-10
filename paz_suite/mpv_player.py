@@ -517,7 +517,7 @@ class MpvPlayer:
             return ""
         self._played_at = None
         return ("mpv is running but no picture is coming out - usually a "
-                "video-output problem. Settings > e621 & App > Playback "
+                "video-output problem. Settings > Player "
                 "has a video output to try, or switch back to the built-in "
                 "player there.")
 

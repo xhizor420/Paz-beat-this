@@ -610,7 +610,7 @@ class LibMpvPlayer:
         if now - self._moved_at < self.STALL_AFTER:
             return ""
         return ("mpv has the clip but the picture isn't moving. "
-                "Settings > e621 & App > Playback can switch players.")
+                "Settings > Player can switch players.")
 
     def shutdown(self) -> None:
         self._failed = True

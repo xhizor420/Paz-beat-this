@@ -13,12 +13,10 @@ import tkinter as tk
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import chain
-from tkinter import messagebox
-
 import customtkinter as ctk
 from PIL import ImageTk
 
-from .theme import (T, button_style, font, label_style, lens_photo, mix, pt, px, restyle, text_fits,
+from .theme import (T, button_style, font, label_style, lens_photo, mix, pt, px, restyle, round_pts, text_fits,
                      text_width, unscaled, LIBRARY_LABELS)
 from .format import fmt_len, fmt_short, fmt_size, fmt_score
 from .files import (
@@ -26,8 +24,8 @@ from .files import (
     open_in_explorer,
 )
 from .config import THUMB_DIR
-from .media import tile_image, thumb_key, make_thumb, probe
-from .e621 import BATCH_SIZE, E621_POST, GIVE_UP_AFTER
+from .media import tile_image, thumb_key, thumb_pixel_width, make_thumb, probe
+from .e621 import BATCH_SIZE, E621_POST, GIVE_UP_AFTER, PACE
 from .similar import rank as rank_similar, tag_weights
 from .library_db import (
     db_connect, Rec, compile_query, parse_query, query_tokens, SORTS, SIMILAR_SORT,
@@ -40,8 +38,8 @@ from .winsys import awake
 from .speedcheck import SpeedCheck
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
-from .widgets import (EMPTY_INK, MiniProgress, PrimaryButton, draw_empty, popup_menu,
-                      menu_rule, tip)
+from .widgets import (EMPTY_INK, MiniProgress, PrimaryButton, ask_yes, draw_empty,
+                      popup_menu, menu_rule, tip)
 from .shortcuts import open_shortcuts
 
 
@@ -915,14 +913,14 @@ class LibraryTab(ctk.CTkFrame):
     # as doing nothing.
     THEATER_BONUS = 240
 
-    def panel_width(self) -> int:
+    def panel_width(self, flush: bool = False) -> int:
         try:
-            # winfo_width() can be one geometry pass behind a change that
-            # just happened (e.g. the sidebar collapsing when theater
-            # turns on) - forcing pending layout through first keeps the
-            # two calls that matter here (this one, and the one theater
-            # makes right after) reading the same, current number.
-            self.root.update_idletasks()
+            # Only after a layout change (theater, a resize). Doing this
+            # on every clip was a 200-500ms hitch: the freeze log caught
+            # it inside this function, once per selection, because
+            # update_idletasks walks the whole window.
+            if flush:
+                self.root.update_idletasks()
             total = self.root.winfo_width()
         except tk.TclError:
             total = 1680
@@ -1214,7 +1212,7 @@ class LibraryTab(ctk.CTkFrame):
         # that wraps to two lines on one clip and one on the next would
         # otherwise move every button underneath by a row - and the
         # buttons are what the mouse is already on its way to.
-        self.detail_name = ctk.CTkLabel(card, text="Nothing selected", font=font(15, "bold", display=True),
+        self.detail_name = ctk.CTkLabel(card, text="", font=font(15, "bold", display=True),
                                          text_color=T.FAINT, anchor="w",
                                          wraplength=470, justify="left", height=24)
         self.detail_name.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 0))
@@ -1868,6 +1866,12 @@ class LibraryTab(ctk.CTkFrame):
         setter = getattr(self.app, "set_header_status", None)
         if setter:
             setter(f"{len(self.records):,} clips indexed", T.OK)
+        # A stand-in used by tests installs a library through this method
+        # and has no thumbnail pass of its own.
+        if getattr(self, "_sharpen_thumbs", None) is not None:
+            self._sharpen_gen = getattr(self, "_sharpen_gen", 0) + 1
+            threading.Thread(target=self._sharpen_thumbs, args=(self._sharpen_gen,),
+                             daemon=True, name="thumb-sharpen").start()
 
     def _load_library(self):
         """Read and install, here and now. For the constructor, where
@@ -2590,6 +2594,9 @@ class LibraryTab(ctk.CTkFrame):
 
     CARD_W, IMG_H = 224, 126
     GAP = 10
+    # One radius for the card, its picture and the picture's placeholder,
+    # so the three corners land on each other.
+    CARD_R = 14
 
     @property
     def CAP_H(self) -> int:
@@ -2759,8 +2766,12 @@ class LibraryTab(ctk.CTkFrame):
 
     def _on_map(self, _event=None):
         # Startup, and any other route to being shown that does not go
-        # through the tab strip.
-        self.on_shown()
+        # through the tab strip. Mapped is not the same as in front: the
+        # tabs are stacked in one cell (PazApp._select_tab), so one laid
+        # out early underneath is mapped too.
+        current = getattr(getattr(self.app, "tabview", None), "get", None)
+        if current is None or current() == "Library":
+            self.on_shown()
 
     def _on_unmap(self, _event=None):
         self._visible = False
@@ -2918,15 +2929,17 @@ class LibraryTab(ctk.CTkFrame):
         # is selected or hovered - which is why the old separate "used"
         # frame and hover strip are gone.
         bottom = y + self.IMG_H + self.CAP_H - 4
-        canvas.create_rectangle(x, y, x + self.CARD_W, bottom,
-                                fill=T.SURFACE, outline="", tags=(tag, f"cardbg{index}"))
-        canvas.create_rectangle(x, y, x + self.CARD_W, y + self.IMG_H,
-                                fill=T.INPUT, outline="", tags=(tag, "well"))
+        r = self.CARD_R
+        canvas.create_polygon(round_pts(x, y, x + self.CARD_W, bottom, r),
+                              fill=T.SURFACE, outline="", tags=(tag, f"cardbg{index}"))
+        canvas.create_polygon(round_pts(x, y, x + self.CARD_W, y + self.IMG_H, r),
+                              fill=T.INPUT, outline="", tags=(tag, "well"))
         canvas.create_text(x + self.CARD_W // 2, y + self.IMG_H // 2, text="…",
                            fill=T.FAINT, font=(T.UI, pt(11)), tags=(tag, f"ph{index}"))
         colour, width = self._card_outline(rec, hover=False)
-        canvas.create_rectangle(x, y, x + self.CARD_W, bottom, fill="",
-                                outline=colour, width=width, tags=(tag, f"cardline{index}"))
+        canvas.create_polygon(round_pts(x, y, x + self.CARD_W, bottom, r),
+                              fill="", outline=colour, width=width,
+                              tags=(tag, f"cardline{index}"))
 
         # Caption follows the design: the clip's own name on top, then the
         # artist with the score pushed right. Resolution/fps and the rating
@@ -3248,7 +3261,7 @@ class LibraryTab(ctk.CTkFrame):
         """
         try:
             return tile_image(data, self.CARD_W, self.IMG_H,
-                              self.cfg.thumb_fit, backing=T.SURFACE)
+                              self.cfg.thumb_fit, radius=self.CARD_R, clear=True)
         except Exception:
             return None
 
@@ -3266,14 +3279,16 @@ class LibraryTab(ctk.CTkFrame):
         slot = self._layout[index]
         canvas = self.gallery
         x, y = slot["x"], slot["y"]
-        top = y + self.IMG_H - 3
+        # A rounded line kept clear of the picture's rounded corners.
+        mid = y + self.IMG_H - 4
+        x0, x1 = x + self.CARD_R, x + self.CARD_W - self.CARD_R
         canvas.delete(f"pv{index}")
-        canvas.create_rectangle(x, top, x + self.CARD_W, y + self.IMG_H,
-                                fill=T.LINE_SOFT, outline="",
-                                tags=(slot["tag"], f"pv{index}"))
-        canvas.create_rectangle(x, top, x + int(self.CARD_W * frac), y + self.IMG_H,
-                                fill=T.ACCENT, outline="",
-                                tags=(slot["tag"], f"pv{index}"))
+        canvas.create_line(x0, mid, x1, mid, fill=T.LINE_SOFT, width=3,
+                           capstyle="round", tags=(slot["tag"], f"pv{index}"))
+        if frac > 0:
+            canvas.create_line(x0, mid, x0 + max((x1 - x0) * frac, 1), mid,
+                               fill=T.ACCENT, width=3, capstyle="round",
+                               tags=(slot["tag"], f"pv{index}"))
 
     def _preview_stop(self, restore: bool = True) -> None:
         """Stop the reel. `restore=False` when something else is about to
@@ -3424,8 +3439,8 @@ class LibraryTab(ctk.CTkFrame):
         pad, h = px(5), px(18)
         w = self._text_w("badge", text) + pad * 2
         top = y + self.IMG_H - px(23)
-        canvas.create_rectangle(x + px(5), top, x + px(5) + w, top + h,
-                                fill=T.BG, outline="", tags=tags)
+        canvas.create_polygon(round_pts(x + px(5), top, x + px(5) + w, top + h, px(7)),
+                              fill=T.BG, outline="", tags=tags)
         canvas.create_text(x + px(5) + pad, top + h // 2, text=text,
                            fill=T.TEXT, font=(T.MONO, pt(10)), anchor="w",
                            tags=tags)
@@ -3454,8 +3469,8 @@ class LibraryTab(ctk.CTkFrame):
         if resting is not None and self.gallery.find_withtag(f"im{index}"):
             self.gallery.itemconfigure(f"im{index}", image=resting)
 
-    # Getting a thumbnail onto a card is two jobs with two homes. Reading
-    # the 320px file, decoding it, scaling it to the card, filling the
+        # Getting a thumbnail onto a card is two jobs with two homes. Reading
+        # the stored file, decoding it, scaling it to the card, filling the
     # letterbox and rounding the corners is about three milliseconds and
     # can happen anywhere; turning the result into something Tk can draw
     # has to happen on the UI thread. A page is forty-eight of each.
@@ -3472,6 +3487,107 @@ class LibraryTab(ctk.CTkFrame):
     # page flip into a few milliseconds.
     TILE_CACHE = 150
     PHOTO_CACHE = 300
+
+    def _sharpen_thumbs(self, gen: int) -> None:
+        """Replace thumbnails that are smaller than the screen wants.
+
+        The picture already on a card stays until its replacement is
+        ready, and the page on screen is done before the rest of the
+        library. One frame at a time, through the same slot hover and
+        playback already share, so this never takes the disk for itself.
+        """
+        time.sleep(1.5)
+        target = max(int(getattr(self.cfg, "thumb_width", 720)), 2)
+        # Clips already looked at for this width, sharp or not, so a
+        # library reload only walks the ones it hasn't seen.
+        seen = self.__dict__.setdefault("_sharpen_seen", {})
+        done = seen.setdefault(target, set())
+        pending = {rec.path: rec for rec in list(getattr(self, "records", ()) or ())
+                   if rec.path not in done}
+        while pending and gen == getattr(self, "_sharpen_gen", 0):
+            # Off the drive while a sync or a clip is using it.
+            while gen == getattr(self, "_sharpen_gen", 0) and self._sharpen_should_wait():
+                time.sleep(0.4)
+            if gen != getattr(self, "_sharpen_gen", 0):
+                return
+            rec = self._pick_sharpen(pending)
+            pending.pop(rec.path, None)
+            done.add(rec.path)
+            # The thumbnail folder is local and cheap to ask; the clip is on
+            # the library drive, so it is only touched for a real rebuild.
+            if rec.duration <= 0 or thumb_pixel_width(rec.path) >= target:
+                continue
+            if not os.path.exists(rec.path):
+                continue
+            if make_thumb(rec.path, rec.duration, target):
+                self.ui(self._reshow_thumb, rec.path)
+            time.sleep(0.05)
+
+    def _sharpen_should_wait(self) -> bool:
+        if getattr(self, "busy", False):
+            return True
+        player = getattr(self, "player", None)
+        return bool(player is not None and getattr(player, "playing", False))
+
+    def _pick_sharpen(self, pending: dict):
+        """The next clip to sharpen: one on the page being looked at, if
+        any of those are still waiting, otherwise the next in the library."""
+        try:
+            size = max(int(self.cfg.page_size), 1)
+            page = self.filtered[self.page * size:(self.page + 1) * size]
+        except Exception:
+            page = ()
+        for rec in page:
+            if rec.path in pending:
+                return pending[rec.path]
+        return next(iter(pending.values()))
+
+    def _reshow_thumb(self, path: str) -> None:
+        """Swap the sharp thumbnail onto a card that is on screen."""
+        width, height, fit = self.CARD_W, self.IMG_H, self.cfg.thumb_fit
+        key = (path, width, height, fit)
+        self._photos.pop(key, None)
+        with self._tiles_lock:
+            self._tiles.pop(key, None)
+        player = getattr(self, "player", None)
+        if player is not None:
+            if getattr(player, "_thumb_src", (None,))[0] == path:
+                player._thumb_src = None
+            prepared = getattr(player, "_prepared", None)
+            lock = getattr(player, "_prep_lock", None)
+            if prepared is not None and lock is not None:
+                with lock:
+                    for old in [k for k in prepared if k and k[0] == path]:
+                        prepared.pop(old, None)
+        for index, slot in enumerate(getattr(self, "_layout", ()) or ()):
+            if slot["rec"].path != path:
+                continue
+            image = self._tile_build(slot["rec"], width, height, fit)
+            if image is None:
+                return
+            if not self.gallery.find_withtag(f"im{index}"):
+                self._place_thumb(index, slot["rec"], image, self._page_token, key)
+            else:
+                # Swap the picture on the card's existing image item.
+                # _place_thumb would draw a second one, and its badges
+                # again, on top of the first.
+                try:
+                    photo = ImageTk.PhotoImage(image)
+                except Exception:
+                    return
+                self._photo_put(key, photo)
+                self._page_refs.append(photo)
+                self._static_thumb[index] = photo
+                # A hover scrub or a reel owns the card's picture right
+                # now; it puts _static_thumb back when it lets go.
+                if index not in (self._sb_index, getattr(self, "_pv_index", None)):
+                    self.gallery.itemconfigure(f"im{index}", image=photo)
+            if (player is not None and not player.playing
+                    and getattr(player, "rec", None) is not None
+                    and getattr(player.rec, "path", None) == path
+                    and not getattr(player, "holds_own_still", False)):
+                player._show_thumb(player.rec)
+            return
 
     def _tile_get(self, key):
         with self._tiles_lock:
@@ -3519,7 +3635,8 @@ class LibraryTab(ctk.CTkFrame):
         try:
             with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
                 data = fh.read()
-            return tile_image(data, width, height, fit, backing=T.SURFACE)
+            return tile_image(data, width, height, fit, radius=self.CARD_R,
+                              clear=True)
         except Exception:
             # A missing or corrupt thumbnail is one blank tile, not a
             # page that stops loading at the clip before it.
@@ -3751,8 +3868,8 @@ class LibraryTab(ctk.CTkFrame):
         pad, h = px(5), px(18)
         w = self._text_w("badge", text) + pad * 2
         x0 = x if anchor == "nw" else x - w
-        canvas.create_rectangle(x0, y, x0 + w, y + h, fill=T.BG, outline="",
-                                tags=(tag,))
+        canvas.create_polygon(round_pts(x0, y, x0 + w, y + h, px(7)),
+                              fill=T.BG, outline="", tags=(tag,))
         canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
                            font=(T.MONO, pt(10)), anchor="w", tags=(tag,))
 
@@ -4021,11 +4138,11 @@ class LibraryTab(ctk.CTkFrame):
 
         self._ready_job = self.after(30, retry)
 
-    def _fit_panel(self, _event=None):
+    def _fit_panel(self, _event=None, flush: bool = False):
         if not self._window_ready():
             self._after_window_ready()
             return
-        width = self.panel_width()
+        width = self.panel_width(flush=flush)
         inner = width - 26
         box = self._picture_box(inner)
         # The whole box, not just its height: the height is the same for
@@ -4163,7 +4280,7 @@ class LibraryTab(ctk.CTkFrame):
                 self.after_cancel(self._panel_job)
             except ValueError:
                 pass
-        self._panel_job = self.after(220, self._fit_panel)
+        self._panel_job = self.after(220, lambda: self._fit_panel(flush=True))
 
     def toggle_theater(self):
         self.cfg.theater = not self.cfg.theater
@@ -4175,7 +4292,7 @@ class LibraryTab(ctk.CTkFrame):
         self.theater_btn.configure(
             fg_color=T.ACCENT_DEEP if self.cfg.theater else T.BTN,
             text_color=T.ACCENT if self.cfg.theater else T.DIM)
-        self._fit_panel()
+        self._fit_panel(flush=True)
         self._render_soon(150)
 
     # ── the handle between the player and the tag list ───────────────────
@@ -4290,7 +4407,7 @@ class LibraryTab(ctk.CTkFrame):
         # to the clip - see clip_aspect().
         self._fit_panel()
         if not rec:
-            self.detail_name.configure(text="Nothing selected", text_color=T.FAINT)
+            self.detail_name.configure(text="", text_color=T.FAINT)
             self.detail_meta.configure(text="")
             self._cancel_tag_list()
             self._tags_for = None
@@ -4944,16 +5061,15 @@ class LibraryTab(ctk.CTkFrame):
         if not self.records:
             self.set_status("Nothing to verify yet - sync the library first.", T.WARN)
             return
-        if not messagebox.askyesno(
-                "Verify library",
+        if not ask_yes(
+                self.root, "Verify library",
                 f"Fully decode all {len(self.records)} clips to check for "
                 "corruption?\n\nProbing only reads the file header, so it "
                 "can't catch a truncated download or a broken frame in the "
-                "middle - this does a full decode instead, which is much "
-                "slower. It runs in the background, can be stopped at any "
-                "point, and nothing is modified unless you delete a result "
-                "yourself.",
-                parent=self.root):
+                "middle. This does a full decode instead, which is much "
+                "slower. It runs in the background and can be stopped. "
+                "Nothing is modified unless you delete a result yourself.",
+                yes="Verify"):
             return
         VerifyWindow(self.root, self)
 
@@ -5198,7 +5314,8 @@ class LibraryTab(ctk.CTkFrame):
         if not ambient:
             self.busy = True
             self.more_btn.configure(state="disabled")
-        delay = max(float(self.cfg.e621_fetch_delay), 0.5)
+        # Paced inside e621 itself, for every fetcher at once.
+        delay = PACE
         # One the user asked for keeps the PC awake until it is done; the
         # background trickle does not.
         if not ambient:
@@ -5231,10 +5348,8 @@ class LibraryTab(ctk.CTkFrame):
                         f"{self.F('fetching')} {len(asked)}/{total}", tone)
 
             def pause() -> None:
-                # wait(), not sleep(): a cancel lands at once rather than
-                # after the pause e621's rate limit asks for.
-                if counts["requests"]:
-                    stop.wait(delay)
+                # The wait for e621's rate limit is e621.fetch's own now
+                # (see e621._pace); this only counts.
                 counts["requests"] += 1
 
             def failed_again(error: str) -> bool:

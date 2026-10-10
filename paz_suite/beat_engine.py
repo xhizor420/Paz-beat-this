@@ -137,13 +137,27 @@ REQUIREMENTS = (
 
 
 def dependency_status() -> list:
-    """[(pip name, purpose, installed?, version-or-error)] for the UI."""
+    """[(pip name, purpose, installed?, version-or-error)] for the UI.
+
+    Asks the package index, not the packages. Importing torch to read its
+    version took seconds of the interpreter - fighting the window for it
+    every launch, the moment the tab was built - and left the whole
+    library in memory for an app that may never analyse a song. A broken
+    install still shows up: analysis imports it for real and says why."""
     import importlib
+    import importlib.metadata
+    import importlib.util
+    importlib.invalidate_caches()        # so a pip install just now is seen
     rows = []
     for module, package, purpose in REQUIREMENTS:
         try:
-            mod = importlib.import_module(module)
-            rows.append((package, purpose, True, getattr(mod, "__version__", "")))
+            if importlib.util.find_spec(module) is None:
+                raise ModuleNotFoundError(f"No module named '{module}'")
+            try:
+                version = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError:
+                version = ""
+            rows.append((package, purpose, True, version))
         except Exception as exc:
             rows.append((package, purpose, False, str(exc).split("\n")[0]))
     return rows
@@ -197,12 +211,23 @@ def install_dependencies(packages=None, progress_cb=None) -> tuple:
 
 def checkpoint_file(name: str) -> str | None:
     """Where torch.hub would cache this checkpoint, or None if torch is
-    missing (in which case nothing is cached anyway)."""
+    missing (in which case nothing is cached anyway).
+
+    Worked out the way torch.hub does it rather than by importing torch,
+    which costs seconds - unless torch is loaded already (an analysis has
+    run), in which case it is asked, so a hub dir set in code still counts."""
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        return os.path.join(torch.hub.get_dir(), "checkpoints", f"beat_this-{name}.ckpt")
+    import importlib.util
     try:
-        import torch
-    except Exception:
+        if importlib.util.find_spec("torch") is None:
+            return None
+    except (ImportError, ValueError):
         return None
-    return os.path.join(torch.hub.get_dir(), "checkpoints", f"beat_this-{name}.ckpt")
+    cache = os.getenv("XDG_CACHE_HOME", os.path.join("~", ".cache"))
+    home = os.path.expanduser(os.getenv("TORCH_HOME", os.path.join(cache, "torch")))
+    return os.path.join(home, "hub", "checkpoints", f"beat_this-{name}.ckpt")
 
 
 def checkpoint_present(name: str) -> bool:

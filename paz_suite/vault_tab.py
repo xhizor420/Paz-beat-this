@@ -25,7 +25,7 @@ import os
 import re
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -42,8 +42,9 @@ from .library_db import (
 )
 from .library_player import InlinePlayer
 from .library_windows import HelpWindow
-from .widgets import EMPTY_INK, PrimaryButton, empty_overlay, popup_menu, menu_rule, tip
-from . import artwork, icons, uithread
+from .widgets import (EMPTY_INK, PrimaryButton, ask_yes, empty_overlay, popup_menu,
+                      menu_rule, rounded_well, tip)
+from . import artwork, icons, prefetch, uithread
 
 _SPLIT_RE = re.compile(r"[,\n\r\t;]+|\s+")
 
@@ -180,7 +181,7 @@ class VaultTab(ctk.CTkFrame):
             self.tree.column(key, width=column_width(title, width),
                              minwidth=px(60), anchor=anchor)
             self.tree.heading(key, text=title, anchor=anchor)
-        self.tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        rounded_well(self.tree, row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
         scroll = ctk.CTkScrollbar(tree_wrap, command=self.tree.yview, width=12,
                                   button_color=T.LINE, button_hover_color=T.FAINT)
         scroll.grid(row=0, column=1, sticky="ns", padx=(2, 6), pady=8)
@@ -189,7 +190,7 @@ class VaultTab(ctk.CTkFrame):
 
         mark_row = ctk.CTkFrame(panel, fg_color="transparent")
         mark_row.grid(row=4, column=0, sticky="ew", pady=(10, 0))
-        ctk.CTkLabel(mark_row, text="Project:", font=font(11), text_color=T.DIM
+        ctk.CTkLabel(mark_row, text="Project", font=font(11), text_color=T.DIM
                      ).pack(side="left", padx=(0, 6))
         self.project_box = ctk.CTkComboBox(
             mark_row, width=220, height=32, corner_radius=T.R_SM, font=font(11),
@@ -239,7 +240,7 @@ class VaultTab(ctk.CTkFrame):
         head = ctk.CTkFrame(panel, fg_color="transparent")
         head.grid(row=2, column=0, sticky="ew", pady=(0, 4))
         head.grid_columnconfigure(0, weight=1)
-        self.detail_header = ctk.CTkLabel(head, text="Select a project above",
+        self.detail_header = ctk.CTkLabel(head, text="",
                                           font=font(11, "bold"), text_color=T.FAINT, anchor="w")
         self.detail_header.grid(row=0, column=0, sticky="w")
         self.open_in_library_btn = ctk.CTkButton(
@@ -302,7 +303,8 @@ class VaultTab(ctk.CTkFrame):
                                      minwidth=px(48), anchor=anchor,
                                      stretch=stretch)
             self.project_tree.heading(key, text=title, anchor=anchor)
-        self.project_tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        rounded_well(self.project_tree, row=0, column=0, sticky="nsew",
+                     padx=(8, 0), pady=8)
         list_scroll = ctk.CTkScrollbar(list_wrap, command=self.project_tree.yview, width=12,
                                        button_color=T.LINE, button_hover_color=T.FAINT)
         list_scroll.grid(row=0, column=1, sticky="ns", padx=(2, 6), pady=8)
@@ -331,7 +333,7 @@ class VaultTab(ctk.CTkFrame):
         self.player = InlinePlayer(card, self)
         self.player.frame.grid(row=0, column=0, padx=8, pady=(8, 4))
         self.player_caption = ctk.CTkLabel(
-            card, text="Pick a clip to see it", font=font(10, mono=True),
+            card, text="", font=font(10, mono=True),
             text_color=T.FAINT, anchor="w", wraplength=self.PLAYER_W - 16,
             justify="left")
         self.player_caption.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
@@ -409,13 +411,48 @@ class VaultTab(ctk.CTkFrame):
         self._show_in_player(self._project_clips[self._focused_index])
         self.player.play()
 
+    # Same rule as the Library: libmpv starts at once, the slower engines
+    # wait out a quick run of arrow presses first.
+    AUTOPLAY_MS = 150
+
+    def _pick_clip(self, rec) -> None:
+        """A clip chosen by hand - a click on the list or the strip, or an
+        arrow - plays, as in the Library: look, judge, next."""
+        self._show_in_player(rec)
+        self._prefetch_near()
+        job = getattr(self, "_autoplay_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except ValueError:
+                pass
+        delay = 0 if self.player.backend == "libmpv" else self.AUTOPLAY_MS
+        self._autoplay_job = self.after(delay, lambda: self._autoplay(rec))
+
+    def _autoplay(self, rec) -> None:
+        self._autoplay_job = None
+        if (self._focused_index is not None and self._project_clips
+                and self._project_clips[self._focused_index] is rec
+                and not self.player.playing):
+            self.player.play()
+
+    def _prefetch_near(self) -> None:
+        """Read the focused clip and the ones next to it into memory, so
+        the next pick starts off RAM rather than the drive."""
+        at = self._focused_index
+        if at is None:
+            return
+        clips = self._project_clips
+        near = [clips[i] for i in (at, at + 1, at - 1, at + 2) if 0 <= i < len(clips)]
+        prefetch.want([self.player.source_path(r) for r in near])
+
     def _show_in_player(self, rec) -> None:
         player = getattr(self, "player", None)
         if player is None:
             return
         player.show_rec(rec)
         if rec is None:
-            self.player_caption.configure(text="Pick a clip to see it",
+            self.player_caption.configure(text="",
                                           text_color=T.FAINT)
             return
         bits = [rec.name]
@@ -433,7 +470,13 @@ class VaultTab(ctk.CTkFrame):
         return self._visible
 
     def _on_map(self, _event=None):
-        self.on_shown()
+        # Startup, and any other route to being shown that does not go
+        # through the tab strip. Mapped is not the same as in front: the
+        # tabs are stacked in one cell (PazApp._select_tab), so one laid
+        # out early underneath is mapped too.
+        current = getattr(getattr(self.app, "tabview", None), "get", None)
+        if current is None or current() == "Vault":
+            self.on_shown()
 
     def _on_unmap(self, _event=None):
         self._visible = False
@@ -763,10 +806,11 @@ class VaultTab(ctk.CTkFrame):
         self.set_status(f"Renamed '{name}' to '{new_name}'.", T.OK)
 
     def _clear_project(self, name: str) -> None:
-        if not messagebox.askyesno(
-                "Clear project",
+        if not ask_yes(
+                self, "Clear project",
                 f"Remove every 'used in {name}' mark? This only clears the "
-                "mark - the clips themselves are untouched.", parent=self):
+                "mark. The clips themselves stay where they are.",
+                yes="Clear", danger=True):
             return
         conn = db_connect()
         try:
@@ -823,7 +867,7 @@ class VaultTab(ctk.CTkFrame):
     def _show_project_detail(self) -> None:
         name = self._selected_project
         if not name:
-            self.detail_header.configure(text="Select a project above", text_color=T.FAINT)
+            self.detail_header.configure(text="", text_color=T.FAINT)
             self.open_in_library_btn.configure(state="disabled")
             self._draw_strip_placeholder("Select a project above to see its clips")
             self.focused_info.configure(text="")
@@ -872,7 +916,7 @@ class VaultTab(ctk.CTkFrame):
             self._focused_index = index
             self._update_strip_highlight(old, index)
             self._update_focused_info()
-            self._show_in_player(rec)
+            self._pick_clip(rec)
 
     def _open_focused(self) -> None:
         if self._focused_index is None:
@@ -985,7 +1029,7 @@ class VaultTab(ctk.CTkFrame):
         self._focused_index = index
         self._update_strip_highlight(old, index)
         self._update_focused_info()
-        self._show_in_player(self._project_clips[index])
+        self._pick_clip(self._project_clips[index])
         iid = f"p{index}"
         if iid in self._project_rows:
             self.project_tree.selection_set(iid)

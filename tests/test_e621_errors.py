@@ -26,6 +26,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from paz_suite import e621                                    # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def no_pacing(monkeypatch):
+    """These are about what gets cached, not about timing. The real pace
+    backs off on every 429 these fake, and would wait for real."""
+    monkeypatch.setattr(e621, "_pace", lambda: None)
+    yield
+    e621._pace_gap = e621.PACE
+    e621._pace_next = 0.0
+
+
 @pytest.fixture
 def meta(tmp_path, monkeypatch):
     monkeypatch.setattr(e621, "CONFIG_DIR", str(tmp_path))

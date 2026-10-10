@@ -351,6 +351,13 @@ class VlcPlayer:
         # Modest read-ahead: this is local disk, and a big cache only
         # makes the first frame later.
         media.add_option("file-caching=300")
+        if self.loop:
+            # VLC's own repeat: the end runs straight back into the start
+            # inside the open file, ~3ms at the seam. Handing it the clip
+            # again from _ended, the old way, was ~270ms of stopped
+            # picture every time round - measured on the library drive.
+            media.add_option("input-repeat=65535")
+        self._media_loops = self.loop
         if start > 0.05:
             # Part of opening the file, so it cannot be missed. set_time()
             # straight after play() was ignored - the file was not open
@@ -375,7 +382,11 @@ class VlcPlayer:
             spent = player.get_state() in (self._vlc.State.Ended,
                                            self._vlc.State.Stopped,
                                            self._vlc.State.NothingSpecial)
-            if spent:
+            # Loop turned on or off while paused: the open clip still
+            # repeats (or doesn't) the old way, so it is opened again,
+            # here where it is, with the new setting.
+            stale = bool(self.path) and getattr(self, "_media_loops", self.loop) != self.loop
+            if spent or stale:
                 # Nothing left to un-pause: hand it the clip again.
                 if not self.path:
                     return
@@ -414,6 +425,20 @@ class VlcPlayer:
             player.set_rate(float(command[1]))
         elif name == "ended":
             self._ended()
+        elif name == "reloop":
+            # The loop button, mid-clip. Repeat is part of the opened
+            # file, so a playing clip is reopened where it is to change
+            # it; a paused one waits for Play (see "play").
+            if (self.path and self.playing
+                    and getattr(self, "_media_loops", self.loop) != self.loop):
+                here = self.position
+                self._set_media(self.path, here)
+                player.play()
+                self._seek_target = here
+                self._seek_at = time.monotonic()
+                self._vlc_ms = None
+                self._played_from = here
+                self._played_at = time.monotonic()
 
     def _ended(self) -> None:
         player = self._player
@@ -559,6 +584,7 @@ class VlcPlayer:
 
     def toggle_loop(self) -> bool:
         self.loop = not self.loop
+        self._put("reloop")
         return self.loop
 
     def toggle_mute(self) -> bool:
@@ -596,7 +622,7 @@ class VlcPlayer:
         if self._vlc_time - self._played_from > 0.20:
             return ""
         return ("VLC has the clip but the picture isn't moving. "
-                "Settings > e621 & App > Playback can switch players.")
+                "Settings > Player can switch players.")
 
     def shutdown(self) -> None:
         self._failed = True

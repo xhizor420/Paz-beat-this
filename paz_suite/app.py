@@ -15,7 +15,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import ImageTk
 
-from .theme import (T, BANNER_H, banner_image, faster_corners,
+from .theme import (T, BANNER_H, banner_image, faster_corners, round_pts,
                     mix, px, pt, resolve_fonts)
 from .config import AppConfig, CONFIG_DIR
 from .e621 import E621Meta, APP_NAME, APP_VERSION
@@ -416,9 +416,7 @@ class PazApp:
         return right
 
     def _round_rect(self, x0, y0, x1, y1, r, **kw):
-        points = (x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
-                  x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0)
-        return self.header.create_polygon(points, smooth=True, **kw)
+        return self.header.create_polygon(round_pts(x0, y0, x1, y1, r), **kw)
 
     def _mark_for(self, colour: str):
         marks = self.__dict__.setdefault("_marks", {})
@@ -611,32 +609,37 @@ class PazApp:
 
     def _select_tab(self, name: str) -> None:
         self._show_tab(name)
-        # And take the others away now, not in 100ms. CTkTabview.set()
-        # grids the new tab into the same cell as the old one and only
-        # forgets the old one on a 100ms timer - so for those 100ms the
-        # tab on screen is whichever of the two is higher in the stacking
-        # order, which is creation order, not the one that was asked for.
-        # Measured: Library -> Convert, Vault -> Library and Beat This ->
-        # Convert all left the OLD tab showing at +0ms and +50ms and only
-        # changed at +150ms. A tenth of a second of the app looking like
-        # it ignored the click, on every switch to an earlier tab.
+        # The tabs stay laid out in the one cell, stacked, and switching
+        # raises the one asked for. Taking the others away instead -
+        # grid_forget, as CustomTkinter does - meant every switch
+        # unmapped one whole tab and mapped another, and every CTk widget
+        # in it redrew on the <Configure> that brings: 120-260ms a switch,
+        # measured, against 35-60ms for a raise. Nothing behind is drawn
+        # to the screen (an embedded mpv included - checked with a clip
+        # playing), and the tabs learn they are hidden from on_hidden in
+        # _on_tab_changed rather than from <Unmap>.
         #
-        # CustomTkinter's own tab bar does not have this - its click path
-        # forgets the old tab straight away. This app draws its own strip
-        # and so always came in through set(), which is the slow path.
-        for other in TAB_NAMES:
-            if other != name:
-                try:
-                    self.tabview.tab(other).grid_forget()
-                except (ValueError, tk.TclError):
-                    pass
-        # And on top. Whatever the stacking order was left as - by the
-        # early layout above, by CustomTkinter, by anything - the tab that
-        # was asked for is the one that is seen.
+        # The raise also settles which tab is seen whatever the stacking
+        # order was left as - by the early layout, by CustomTkinter, by
+        # anything: the one asked for is on top.
         try:
-            tk.Misc.lift(self.tabview.tab(name))
+            frame = self.tabview.tab(name)
+            tk.Misc.lift(frame)
         except (ValueError, tk.TclError):
-            pass
+            frame = None
+        # Keystrokes follow focus, and a tab underneath is still mapped:
+        # a filter box focused on the tab just left would go on taking
+        # them. Hand focus to the window unless it is already on this tab.
+        if frame is not None:
+            try:
+                focus = frame.focus_get()
+            except (KeyError, tk.TclError):
+                focus = None
+            if focus is not None and not str(focus).startswith(str(frame)):
+                behind = [str(self.tabview.tab(other)) for other in TAB_NAMES
+                          if other != name]
+                if any(str(focus).startswith(path + ".") for path in behind):
+                    frame.winfo_toplevel().focus_set()
         self._on_tab_changed()
 
     def _style_tabs(self) -> None:
@@ -736,7 +739,7 @@ class PazApp:
         the redraw. So it is done here instead, while the user is looking
         at something else: the tab is gridded into the same cell as the
         one showing, lowered beneath it so it cannot be seen, laid out,
-        and taken away again. Measured on the first switch afterwards:
+        and left there for _select_tab to raise. Measured on the first switch afterwards:
         Convert 131-148ms to 16, Vault 103-108 to 8, Beat This 123-136
         to 10-13.
 
@@ -765,11 +768,8 @@ class PazApp:
                 # tab but the first came up as an empty black panel.
                 tk.Misc.lower(frame, tv.tab(showing))
                 frame.update_idletasks()
-                # Only if it is still not the one that is meant to be
-                # showing - nothing here yields, but that is cheap to be
-                # sure of.
-                if tv.get() != name:
-                    frame.grid_forget()
+                # And left there, under the one showing: switching to it
+                # later is a raise (see _select_tab).
             except (ValueError, KeyError, tk.TclError):
                 pass
             finally:
@@ -945,7 +945,8 @@ class PazApp:
         tab = self._tab_object(name, build=False)
         on_help = None
         if name == "Library":
-            on_help = lambda: HelpWindow(self.root)
+            def on_help():
+                HelpWindow(self.root)
         elif tab is not None:
             on_help = getattr(tab, "_open_help", None)
         open_shortcuts(self.root, name, on_help)
@@ -1003,6 +1004,18 @@ class PazApp:
             if closing is not None:
                 closing()
         self.cfg.save()
+        # Off the screen first. Tearing a few thousand widgets down takes
+        # Tk half a second to most of one (the freeze log's _on_close
+        # entries), and a window sitting there unresponsive through it
+        # reads as the app hanging on the way out.
+        # withdraw() alone: it hides the window at once on Windows. An
+        # update_idletasks() after it ran redraws queued for widgets whose
+        # players had just been shut down, and crashed Tk (access violation,
+        # freeze.log 2026-10-10).
+        try:
+            self.root.withdraw()
+        except tk.TclError:
+            pass
         self.root.destroy()
 
 
