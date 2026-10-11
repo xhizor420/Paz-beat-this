@@ -18,7 +18,7 @@ from PIL import ImageTk
 
 from .theme import (T, button_style, font, label_style, lens_photo, mix, pt, px, restyle, round_pts, text_fits,
                      text_width, unscaled, LIBRARY_LABELS)
-from .format import fmt_len, fmt_short, fmt_size, fmt_score
+from .format import fmt_len, fmt_short, fmt_size, fps_label
 from .files import (
     is_ignored_dir, media_files, post_id_from, open_file,
     open_in_explorer,
@@ -115,6 +115,25 @@ def delete_saved(saved: list, name: str) -> list:
     out = list(saved)
     out.remove(entry)
     return out
+
+
+# The category a clip is in, as its card's border. Picked to sit apart from
+# the tab colours (magenta, violet, mint, amber) that selection and hover
+# use, so a category never reads as "selected". A folder not listed here
+# takes the next of the spare colours, in the order Settings lists them.
+CATEGORY_COLOURS = {"furry": "#4FA3FF", "furry futa": "#FF7A59",
+                    "mlp": "#9BE15D", "mlp futa": "#F2D04B"}
+SPARE_COLOURS = ("#5ED6E8", "#E58BFF", "#C9A27A", "#8A9BFF")
+
+
+def category_colour(folder: str, folders=()) -> str:
+    known = CATEGORY_COLOURS.get((folder or "").lower())
+    if known:
+        return known
+    extra = [f for f in folders if f.lower() not in CATEGORY_COLOURS]
+    if folder in extra:
+        return SPARE_COLOURS[extra.index(folder) % len(SPARE_COLOURS)]
+    return T.LINE
 
 
 class LibraryTab(ctk.CTkFrame):
@@ -227,8 +246,15 @@ class LibraryTab(ctk.CTkFrame):
         # pt(), not a bare number: this one was missed when the rest of
         # the hand-drawn sizes were scaled, so card captions stayed 10px
         # on a display where everything around them grew.
-        self._card_font = tkfont.Font(family=T.UI, size=pt(12))
-        self._badge_font = tkfont.Font(family=T.MONO, size=pt(10))
+        # Caption and badges, compact: one 10pt line under the picture and
+        # 9pt plates over it. 12pt and 11pt on two lines, with 10pt badges,
+        # read large and took a fifth of every card from the picture.
+        self._card_font = tkfont.Font(family=T.UI, size=pt(10))
+        self._cap_font = tkfont.Font(family=T.MONO, size=pt(10))
+        self._badge_font = tkfont.Font(family=T.MONO, size=pt(8))
+        # The project name on a card: proportional, so "ENEMY AND REVENGE 2"
+        # takes about two thirds of the room it did in the mono badge face.
+        self._proj_font = tkfont.Font(family=T.UI, size=pt(8))
         self._spec_font = tkfont.Font(family=T.MONO, size=pt(11))
         self._quick_font = tkfont.Font(family=T.UI, size=pt(10))
         # Remembered string widths - see _text_w. Keyed by which font, so
@@ -240,6 +266,8 @@ class LibraryTab(ctk.CTkFrame):
         self._query_chips: list = []
         self._chips_shown = 0
         self._measure_fonts = {"card": self._card_font,
+                               "cap": self._cap_font,
+                               "proj": self._proj_font,
                                "badge": self._badge_font,
                                "spec": self._spec_font,
                                "quick": self._quick_font}
@@ -524,7 +552,7 @@ class LibraryTab(ctk.CTkFrame):
     # doesn't end up with library clips scattered through its root.
     RESOLVE_BIN = "PAZ Library"
 
-    SIDEBAR_W = 280
+    SIDEBAR_W = 236
 
     def _build_sidebar(self):
         self.side = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0, width=self.SIDEBAR_W)
@@ -609,9 +637,14 @@ class LibraryTab(ctk.CTkFrame):
         self.chips = ctk.CTkFrame(head, fg_color="transparent", height=30)
         self.chips.grid(row=0, column=0, sticky="ew")
 
+        # What the border colours mean - the card has no caption to say it.
+        self.legend = tk.Canvas(head, bg=T.BG, highlightthickness=0, bd=0,
+                                height=px(18), width=1)
+        self.legend.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        self._draw_legend()
         self.count_label = ctk.CTkLabel(head, text="", font=font(10, mono=True),
                                         text_color=T.DIM, anchor="e")
-        self.count_label.grid(row=0, column=1, sticky="e", padx=(12, 2))
+        self.count_label.grid(row=0, column=2, sticky="e", padx=(12, 2))
 
         info = ctk.CTkFrame(center, fg_color="transparent")
         info.grid(row=1, column=0, sticky="ew", pady=(2, 4))
@@ -2600,9 +2633,9 @@ class LibraryTab(ctk.CTkFrame):
 
     @property
     def CAP_H(self) -> int:
-        """Caption strip height. Grows with the text scale - at 200% the
-        two lines of caption no longer fit in a fixed 42px band."""
-        return px(50)
+        """No caption: the card is its picture, with its category as the
+        border. This is only the border's own room under the picture."""
+        return px(4)
 
     @property
     def card_width(self) -> int:
@@ -2941,31 +2974,22 @@ class LibraryTab(ctk.CTkFrame):
                               fill="", outline=colour, width=width,
                               tags=(tag, f"cardline{index}"))
 
-        # Caption follows the design: the clip's own name on top, then the
-        # artist with the score pushed right. Resolution/fps and the rating
-        # moved onto the thumbnail as badges (see _place_thumb) - they read
-        # faster over the frame than as another line of grey text, and it
-        # buys the name a full line instead of sharing one with a dot.
-        name = rec.pid or os.path.splitext(rec.name)[0]
-        canvas.create_text(x + px(8), y + self.IMG_H + px(15),
-                           text=self._ellipsize(name, x + self.CARD_W - 10),
-                           fill=T.TEXT, font=(T.MONO, pt(12)), anchor="w",
-                           tags=(tag, f"tt{index}"))
-
-        score = fmt_score(rec.score)
-        score_w = (self._text_w("spec", f"▲{score}") + 10) if score else 0
-        if rec.artists:
-            canvas.create_text(x + px(8), y + self.IMG_H + px(31),
-                               text=self._ellipsize(rec.artists[0],
-                                                    x + self.CARD_W - score_w - 12),
-                               fill=T.TAG["artist"], font=(T.UI, pt(11)),
-                               anchor="w", tags=(tag,))
-        if score:
-            canvas.create_text(x + self.CARD_W - px(8), y + self.IMG_H + px(31), text=f"▲{score}",
-                               fill=T.TEXT if rec.score >= 1000 else T.FAINT,
-                               font=(T.MONO, pt(10)), anchor="e", tags=(tag,))
-
         self._layout.append({"rec": rec, "x": x, "y": y, "tag": tag})
+
+    def _draw_legend(self) -> None:
+        """ "● Furry  ● Furry Futa  ● MLP  ● MLP Futa" in the border colours."""
+        import tkinter.font as tkfont
+        c = self.legend
+        c.delete("all")
+        face = tkfont.Font(family=T.UI, size=pt(9))
+        x, mid, r = px(2), px(9), px(4)
+        for folder in self.cfg.subfolders:
+            colour = category_colour(folder, self.cfg.subfolders)
+            c.create_oval(x, mid - r, x + 2 * r, mid + r, fill=colour, outline="")
+            x += 2 * r + px(5)
+            c.create_text(x, mid, text=folder, anchor="w", fill=T.FAINT, font=face)
+            x += face.measure(folder) + px(12)
+        c.configure(width=max(x, 1))
 
     def _card_outline(self, rec: Rec, hover: bool) -> tuple:
         """(colour, width) for a card's border. Selection outranks the
@@ -2980,16 +3004,15 @@ class LibraryTab(ctk.CTkFrame):
             return T.ACCENT2, 3
         if self.selected and self.selected.path == rec.path:
             return T.ACCENT, 2
-        if rec.used_projects and rec.used_color:
-            # Blended most of the way to the background. At full chroma
-            # and two pixels this was the loudest thing on the page, and
-            # in a library where most clips eventually get spent that is a
-            # wall of coloured boxes. It only has to whisper "been here" -
-            # which project it was is on the badge, and the card you are
-            # acting on is the one wearing the accent.
-            return mix(rec.used_color, T.BG, 0.55), 1
         if hover:
             return T.ACCENT2, 2
+        # Otherwise the category, as the border - the card has no caption.
+        # Toned a little toward the background so a page of them reads as
+        # colour-coded, not as forty-eight things lit up. (A clip already
+        # used in a project says so on its project badge.)
+        colour = category_colour(rec.folder, self.cfg.subfolders)
+        if colour != T.LINE:
+            return mix(colour, T.BG, 0.3), 2
         return T.LINE, 1
 
     def _restyle_card(self, index: int) -> None:
@@ -3138,6 +3161,7 @@ class LibraryTab(ctk.CTkFrame):
         self._pv_step = 0
         self._pv_token += 1
         self._pv_at = at
+        self._pv_frac = None
         self._pv_after = self.after(self.PREVIEW_DWELL_MS, self._preview_begin)
 
     def _preview_begin(self) -> None:
@@ -3224,7 +3248,8 @@ class LibraryTab(ctk.CTkFrame):
             # started where a scrub left off is a window onto the middle of
             # a seven-minute clip, and a bar that ran 0..1 across it would
             # contradict the scrub bar the user was just moving.
-            self._draw_progress(index, self._reel_frac(index, reel, i, count))
+            self._pv_frac = self._reel_frac(index, reel, i, count)
+            self._draw_progress(index, self._pv_frac)
         self._pv_step += 1
         self._pv_after = self.after(
             max(int(1000 / reel.get("fps", self.PREVIEW_FPS_FALLBACK)), 16),
@@ -3401,9 +3426,11 @@ class LibraryTab(ctk.CTkFrame):
                 image = self._tile_image(data)
         except Exception:
             image = None
-        self.ui(self._scrub_show, index, frac, image, token)
+            data = None
+        self.ui(self._scrub_show, index, frac, image, token, data)
 
-    def _scrub_show(self, index: int, frac: float, image, token: int) -> None:
+    def _scrub_show(self, index: int, frac: float, image, token: int,
+                    data: bytes | None = None) -> None:
         if token != self._sb_token or self._sb_index != index:
             return
         self._sb_busy = False
@@ -3414,6 +3441,9 @@ class LibraryTab(ctk.CTkFrame):
                 self.gallery.itemconfigure(f"im{index}", image=photo)
                 self._sb_photo = photo
                 self._draw_scrub(index, frac)
+                show = getattr(self, "_show_big_peek", None)
+                if show is not None:
+                    show(index, frac, data)
         # A position that arrived while this one was being fetched is the
         # one the hand is on now, so it goes next.
         want, self._sb_want = self._sb_want, None
@@ -3436,13 +3466,13 @@ class LibraryTab(ctk.CTkFrame):
         canvas.create_line(px_at, y, px_at, y + self.IMG_H,
                            fill=T.ACCENT, width=1, tags=tags)
         text = f"{fmt_short(frac * rec.duration)} / {fmt_short(rec.duration)}"
-        pad, h = px(5), px(18)
+        pad, h = px(3), px(14)
         w = self._text_w("badge", text) + pad * 2
-        top = y + self.IMG_H - px(23)
-        canvas.create_polygon(round_pts(x + px(5), top, x + px(5) + w, top + h, px(7)),
+        top = y + self.IMG_H - px(18)
+        canvas.create_polygon(round_pts(x + px(5), top, x + px(5) + w, top + h, px(6)),
                               fill=T.BG, outline="", tags=tags)
         canvas.create_text(x + px(5) + pad, top + h // 2, text=text,
-                           fill=T.TEXT, font=(T.MONO, pt(10)), anchor="w",
+                           fill=T.TEXT, font=self._badge_font, anchor="w",
                            tags=tags)
 
     def _scrub_reset(self) -> None:
@@ -3459,7 +3489,40 @@ class LibraryTab(ctk.CTkFrame):
                 pass
             self._sb_after = None
 
+    def _show_big_peek(self, index: int, frac: float, data) -> None:
+        """The same frame as the card, big, beside the pointer - the cards
+        are small now, and the hover frame is already made at 640 wide.
+        No key to hold: it is there while the pointer is on a card."""
+        if not data or not getattr(self.cfg, "library_hover_peek", True):
+            return
+        if index >= len(self._layout):
+            return
+        rec = self._layout[index]["rec"]
+        try:
+            x, y = self.winfo_pointerxy()
+        except tk.TclError:
+            return
+        bits = [f"{rec.height}p" if rec.height else "",
+                f"{fps_label(rec.fps)} fps" if rec.fps else "",
+                rec.folder or ""]
+        title = "  ·  ".join(b for b in bits if b)
+        sub = f"{fmt_short(frac * rec.duration)} / {fmt_short(rec.duration)}"
+        big = getattr(self, "_big_peek", None)
+        if big is None:
+            from .widgets import BigPeekWindow
+            big = self._big_peek = BigPeekWindow(self.root)
+        try:
+            big.show_frame(data, title, sub, x, y, frac)
+        except tk.TclError:
+            pass
+
     def _scrub_stop(self) -> None:
+        peek = getattr(self, "_big_peek", None)
+        if peek is not None:
+            try:
+                peek.hide()
+            except tk.TclError:
+                pass
         index, self._sb_index = self._sb_index, None
         self._scrub_reset()
         if index is None or index >= len(self._layout):
@@ -3551,7 +3614,11 @@ class LibraryTab(ctk.CTkFrame):
             self._tiles.pop(key, None)
         player = getattr(self, "player", None)
         if player is not None:
-            if getattr(player, "_thumb_src", (None,))[0] == path:
+            # None until the player has shown a picture - and it is set to
+            # None again after this, so it is None more often than not.
+            # Indexing it unchecked failed on every sharpened thumbnail.
+            shown = getattr(player, "_thumb_src", None)
+            if shown and shown[0] == path:
                 player._thumb_src = None
             prepared = getattr(player, "_prepared", None)
             lock = getattr(player, "_prep_lock", None)
@@ -3861,17 +3928,18 @@ class LibraryTab(ctk.CTkFrame):
     # sit on top of the thumbnail, which only exists once it has loaded.
 
     def _pill(self, tag: str, x: int, y: int, text: str, colour: str,
-              anchor: str = "nw") -> None:
-        """A small dark plate with a line of mono on it. `x`,`y` is the
-        corner named by `anchor` ("nw" or "ne")."""
+              anchor: str = "nw", face: str = "badge") -> None:
+        """A small dark plate with a line of text on it - the mono badge
+        face unless `face` says otherwise. `x`,`y` is the corner named by
+        `anchor` ("nw" or "ne")."""
         canvas = self.gallery
-        pad, h = px(5), px(18)
-        w = self._text_w("badge", text) + pad * 2
+        pad, h = px(3), px(14)
+        w = self._text_w(face, text) + pad * 2
         x0 = x if anchor == "nw" else x - w
-        canvas.create_polygon(round_pts(x0, y, x0 + w, y + h, px(7)),
+        canvas.create_polygon(round_pts(x0, y, x0 + w, y + h, px(6)),
                               fill=T.BG, outline="", tags=(tag,))
         canvas.create_text(x0 + pad, y + h // 2, text=text, fill=colour,
-                           font=(T.MONO, pt(10)), anchor="w", tags=(tag,))
+                           font=self._measure_fonts[face], anchor="w", tags=(tag,))
 
     def _draw_tick(self, index: int, rec: Rec, slot: dict) -> None:
         """The selection tick, on its own tag so selection can be repainted
@@ -3904,8 +3972,8 @@ class LibraryTab(ctk.CTkFrame):
         # so the selection tick owns that corner.
         spec = f"{rec.height}p" if rec.height else "—"
         if rec.fps:
-            spec += f"·{rec.fps:.0f}"
-        self._pill(tag, x + px(5), y + self.IMG_H - px(46), spec,
+            spec += f"·{fps_label(rec.fps)}"
+        self._pill(tag, x + px(5), y + self.IMG_H - px(34), spec,
                    T.DIM if rec.premium else T.FAINT)
 
         # Top right: the rating, as its own colour. Explicit is the loudest
@@ -3922,7 +3990,7 @@ class LibraryTab(ctk.CTkFrame):
         # card's width of badge on a thumbnail; "4:42" says the same in a
         # glance and leaves the room to the project name beside it.
         length = fmt_short(rec.duration) if rec.duration else "—"
-        self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(23),
+        self._pill(tag, x + self.CARD_W - px(5), y + self.IMG_H - px(18),
                    length, T.DIM, anchor="ne")
 
         # Bottom left: which project already spent this clip. The coloured
@@ -3933,20 +4001,34 @@ class LibraryTab(ctk.CTkFrame):
             # Whatever the length badge leaves, measured: a fixed allowance
             # let "ENEMY AND REVENGE 2" run under "2 min 42 sec" on a
             # narrow card and read as one string.
-            pad = px(5)
+            pad = px(3)
             length_w = self._text_w("badge", length) + 2 * pad
             room = self.CARD_W - 2 * px(5) - length_w - px(6) - 2 * pad
-            if self._text_w("badge", label) > room:
-                while label and self._text_w("badge", label + "…") > room:
-                    label = label[:-1]
-                label = (label.rstrip() + "…") if label else ""
-            # Named, not coloured. Four badges a card, each in its own
-            # colour, was four things shouting over the frame they are
-            # meant to be annotating - so they all speak in the same
-            # quiet voice and the rating is the only one left in colour,
-            # because the rating is the one that gets scanned for.
-            self._pill(tag, x + px(5), y + self.IMG_H - px(23), label or "used",
-                       T.DIM)
+            # Never more than half the card. Across most of a wide card's
+            # picture, the project name was a bar over the very thing the
+            # card is for.
+            room = min(room, self.CARD_W // 2 - 2 * pad)
+            if room < px(30):
+                # No room for a word: the project's colour, as a dot. The
+                # name is in the details panel and the tooltip of the tag.
+                cx, cy, r = x + px(13), y + self.IMG_H - px(13), px(5)
+                canvas.create_oval(cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2,
+                                   fill=T.BG, outline="", tags=(tag,))
+                canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                   fill=rec.used_color or T.DIM, outline="",
+                                   tags=(tag,))
+            else:
+                if self._text_w("proj", label) > room:
+                    while label and self._text_w("proj", label + "…") > room:
+                        label = label[:-1]
+                    label = (label.rstrip() + "…") if label else ""
+                # Named, not coloured. Four badges a card, each in its own
+                # colour, was four things shouting over the frame they are
+                # meant to be annotating - so they all speak in the same
+                # quiet voice and the rating is the only one left in colour,
+                # because the rating is the one that gets scanned for.
+                self._pill(tag, x + px(5), y + self.IMG_H - px(18), label or "used",
+                           T.DIM, face="proj")
         if rec.used_projects:
             canvas.tag_raise(f"used{index}")
 
@@ -3986,10 +4068,25 @@ class LibraryTab(ctk.CTkFrame):
         else:
             self.marked.clear()
             self._mark_anchor = index
+        # Where the card's picture was when clicked - the reel's frame if
+        # the preview was running, else where the hover scrub had got to -
+        # read before the selection moves on and both let go of the card.
+        start = 0.0
+        reel_frac = getattr(self, "_pv_frac", None)
+        if rec.duration:
+            if self._pv_index == index and reel_frac is not None:
+                start = reel_frac * rec.duration
+            elif self._sb_index == index and self._sb_x is not None:
+                start = self._sb_frac * rec.duration
         self._select(rec)
         if not (ctrl or shift):
-            # A plain click is "show me this" - it plays. Ctrl and Shift
-            # are for marking, and leave the player alone.
+            # A plain click is "show me this" - it plays, from the moment
+            # the hover was showing, so the spot found by scrubbing is the
+            # spot that plays. The arrow keys go through _select_index and
+            # still start at the beginning. Ctrl and Shift are for marking,
+            # and leave the player alone.
+            if 0.5 < start < rec.duration - 0.5:
+                self.player.engine.seek(start)
             self._autoplay_soon()
 
     def targets(self, fallback: Rec | None = None) -> list:
@@ -4472,7 +4569,7 @@ class LibraryTab(ctk.CTkFrame):
         Two lines, split on purpose: what the file is, then where it
         stands. As one run it wrapped wherever the panel's edge fell -
         mid-fact, with a separator left hanging at the end of a line."""
-        file_bits = [f"{rec.width}x{rec.height}", f"{rec.fps:.0f} fps",
+        file_bits = [f"{rec.width}x{rec.height}", f"{fps_label(rec.fps)} fps",
                      fmt_short(rec.duration) if rec.duration else "—",
                      fmt_size(rec.size)]
         if rec.score:

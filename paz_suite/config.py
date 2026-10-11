@@ -137,6 +137,8 @@ class AppConfig:
     watch: bool = False
     watch_resume: bool = False
     hover_peek: bool = True
+    # Library: a bigger picture beside the pointer while hovering a card.
+    library_hover_peek: bool = True
 
     # ── Library: indexing scope ─────────────────────────────────────────
     library_root: str = ""             # defaults to output_root when unset
@@ -162,6 +164,13 @@ class AppConfig:
     # been typed into the box.
     saved_searches: list = field(default_factory=list)
     theater: bool = False
+    # Vault: whether the paste-IDs import panel is out. Folded away by
+    # default - it is an occasional job, and open it took half the tab.
+    vault_lookup_open: bool = False
+    # Tags left out of a Vault project's overview - too common in your own
+    # library to say anything about a project. Only that screen; the
+    # Library's tags are untouched.
+    vault_hidden_tags: list = field(default_factory=list)
     last_search: str = ""
     last_sort: str = ""
     detail_open: dict = field(default_factory=dict)

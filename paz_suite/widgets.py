@@ -6,6 +6,8 @@ panel and the coloured log.
 from __future__ import annotations
 
 import io
+import os
+import time
 import tkinter as tk
 from datetime import datetime
 
@@ -29,25 +31,38 @@ _OPEN_MENUS: list = []
 
 class PopupMenu:
     """A rounded, themed popup. Built like tk.Menu so existing call
-    sites keep working; drawn like a card so it doesn't look like 1998."""
+    sites keep working; drawn like a card so it doesn't look like 1998.
 
-    ROW_H = 28
-    PAD_X = 8
-    MIN_W = 200
+    Compact and quiet: 24px rows, 10pt text, one hairline outline, and a
+    neutral hover with a thin bar in the tab's colour - not a block of
+    colour behind coloured text, which was the loudest thing on screen
+    for something that is open for a second.
+
+    It closes on any click that is not on it, on Escape, and when the app
+    stops being the window in front - the last is the one the old menu
+    missed: a click on another program never reaches Tk, and an
+    always-on-top menu stayed up over whatever was clicked."""
+
+    ROW_H = 24
+    PAD_X = 6
+    PAD_Y = 5
+    MIN_W = 168
 
     def __init__(self, parent, **kw):
         self.parent = parent.parent if isinstance(parent, PopupMenu) else parent
         self.items: list = []
-        self.hot_bg = kw.get("activebackground") or T.ACCENT_DEEP
-        self.hot_fg = kw.get("activeforeground") or T.ACCENT
+        # The tab's colour, for the hover bar. The deep shade some callers
+        # pass is the old hover fill; the bar wants the bright one.
+        self.accent = kw.get("activeforeground") or _ACCENT_FOR.get(
+            kw.get("activebackground"), T.ACCENT)
         self._win = None
         self._canvas = None
-        self._photos: list = []
         self._hover = -1
         self._sub = None
         self._sub_item = -1
-        self._close_ids: list = []
+        self._watch = None
         self._owner = None
+        self._born = 0.0
 
     def add_command(self, label="", command=None, state="normal",
                     accelerator="", **_kw) -> None:
@@ -100,22 +115,21 @@ class PopupMenu:
         return sum(1 for item in self.items if item["kind"] != "sep")
 
     def _metrics(self):
-        import tkinter.font as tkfont
-        face = tkfont.Font(family=T.UI, size=pt(11))
-        small = tkfont.Font(family=T.UI, size=pt(10))
+        face, small = _menu_fonts()
         widest = 0
         for item in self.items:
             if item["kind"] == "sep":
                 continue
-            w = face.measure(item["label"]) + small.measure(item.get("accelerator") or "")
-            if w > widest:
-                widest = w
-        width = max(px(self.MIN_W), widest + px(self.PAD_X) * 2 + px(36))
-        height = px(8)
+            w = face.measure(item["label"])
+            extra = item.get("accelerator") or ""
+            if extra:
+                w += small.measure(extra) + px(18)
+            widest = max(widest, w)
+        width = max(px(self.MIN_W), widest + px(self.PAD_X) * 2 + px(22))
+        height = px(self.PAD_Y) * 2
         for item in self.items:
-            height += px(7) if item["kind"] == "sep" else px(self.ROW_H)
-        height += px(8)
-        return width, height, face, small
+            height += px(9) if item["kind"] == "sep" else px(self.ROW_H)
+        return width, height
 
     def _show(self, x: int, y: int, owner=None) -> None:
         self.close()
@@ -123,7 +137,7 @@ class PopupMenu:
             return
         root = self.parent.winfo_toplevel()
         self._owner = owner
-        width, height, face, small = self._metrics()
+        width, height = self._metrics()
         screen_w = root.winfo_screenwidth()
         screen_h = root.winfo_screenheight()
         if x + width > screen_w - 8:
@@ -149,20 +163,18 @@ class PopupMenu:
         canvas = tk.Canvas(win, width=width, height=height, bg=hole,
                            highlightthickness=0, bd=0)
         canvas.pack()
-        r = px(T.R_LG)
-        canvas.create_polygon(_round_pts(1, 1, width - 2, height - 2, r),
-                              smooth=True, fill=T.LINE, outline="")
-        canvas.create_polygon(_round_pts(2, 2, width - 3, height - 3, r - 1),
-                              smooth=True, fill=T.ELEVATED, outline="")
+        # One shape, one hairline. Two stacked fills drew a ragged double
+        # edge where the rounded corners met the chroma key.
+        canvas.create_polygon(_round_pts(0, 0, width - 1, height - 1, px(T.R_SM)),
+                              fill=T.ELEVATED, outline=T.LINE, width=1)
         self._win = win
         self._canvas = canvas
-        self._photos = []
         self._hover = -1
-        self._paint_rows(face, small, width)
+        self._paint_rows(width)
         canvas.bind("<Motion>", self._on_move)
         canvas.bind("<Leave>", self._on_leave)
-        canvas.bind("<Button-1>", self._on_click)
-        win.bind("<Escape>", lambda e: self.close())
+        canvas.bind("<ButtonRelease-1>", self._on_click)
+        win.bind("<Escape>", lambda e: self._close_all())
         win.geometry(f"{width}x{height}+{x}+{y}")
         win.deiconify()
         win.lift()
@@ -170,40 +182,43 @@ class PopupMenu:
             win.focus_force()
         except tk.TclError:
             pass
-        # After this click finishes, so the right-click that opened us
-        # does not also dismiss us.
-        self._close_ids.append(("after", win.after(80, lambda: self._bind_outside(root))))
+        self._born = time.monotonic()
         _OPEN_MENUS.append(self)
+        _install_dismiss(root)
+        if owner is None:
+            self._watch = win.after(_WATCH_MS, self._watch_front)
 
-    def _paint_rows(self, face, small, width: int) -> None:
+    def _paint_rows(self, width: int) -> None:
+        face, small = _menu_fonts()
         c = self._canvas
         c.delete("row")
-        y = px(8)
+        y = px(self.PAD_Y)
         pad = px(self.PAD_X)
         row_h = px(self.ROW_H)
         for i, item in enumerate(self.items):
             if item["kind"] == "sep":
-                c.create_line(pad, y + px(3), width - pad, y + px(3),
+                c.create_line(pad + px(4), y + px(4), width - pad - px(4), y + px(4),
                               fill=T.LINE, tags=("row",))
-                y += px(7)
+                y += px(9)
                 continue
             item["_y0"] = y
             item["_y1"] = y + row_h
             disabled = item.get("state") == "disabled"
             hover = i == self._hover and not disabled
             if hover:
-                rr = px(6)
                 c.create_polygon(
-                    _round_pts(pad - px(2), y + 1, width - pad + px(2), y + row_h - 1, rr),
-                    smooth=True, fill=self.hot_bg, outline="", tags=("row", "hot"))
-            fill = T.FAINT if disabled else (self.hot_fg if hover else T.TEXT)
-            c.create_text(pad + px(6), y + row_h // 2, text=item["label"],
+                    _round_pts(pad - px(2), y + 1, width - pad + px(2), y + row_h - 1, px(5)),
+                    fill=_HOVER, outline="", tags=("row",))
+                c.create_line(pad + px(1), y + px(6), pad + px(1), y + row_h - px(6),
+                              fill=self.accent, width=px(2), capstyle="round",
+                              tags=("row",))
+            fill = T.FAINT if disabled else T.TEXT
+            c.create_text(pad + px(9), y + row_h // 2, text=item["label"],
                           anchor="w", fill=fill, font=face, tags=("row",))
             extra = item.get("accelerator") or ""
             if extra:
                 c.create_text(width - pad - px(6), y + row_h // 2, text=extra,
-                              anchor="e", fill=T.FAINT if not hover else self.hot_fg,
-                              font=small, tags=("row",))
+                              anchor="e", fill=T.FAINT, font=small, tags=("row",))
             y += row_h
 
     def _item_at(self, y: int) -> int:
@@ -221,10 +236,7 @@ class PopupMenu:
                 self._open_sub(i)
             return
         self._hover = i
-        width = int(self._canvas.cget("width"))
-        import tkinter.font as tkfont
-        self._paint_rows(tkfont.Font(family=T.UI, size=pt(11)),
-                         tkfont.Font(family=T.UI, size=pt(10)), width)
+        self._paint_rows(int(self._canvas.cget("width")))
         item = self.items[i] if i >= 0 else None
         if item and item["kind"] == "cascade":
             self._open_sub(i)
@@ -237,15 +249,11 @@ class PopupMenu:
             return
         if self._hover >= 0:
             self._hover = -1
-            width = int(self._canvas.cget("width"))
-            import tkinter.font as tkfont
-            self._paint_rows(tkfont.Font(family=T.UI, size=pt(11)),
-                             tkfont.Font(family=T.UI, size=pt(10)), width)
+            self._paint_rows(int(self._canvas.cget("width")))
 
     def _on_click(self, event) -> None:
         i = self._item_at(event.y)
         if i < 0:
-            self.close()
             return
         item = self.items[i]
         if item.get("state") == "disabled":
@@ -268,8 +276,8 @@ class PopupMenu:
         self._close_sub()
         self._sub = sub
         self._sub_item = i
-        x = self._win.winfo_rootx() + self._win.winfo_width() - px(6)
-        y = self._win.winfo_rooty() + item.get("_y0", 0)
+        x = self._win.winfo_rootx() + self._win.winfo_width() - px(4)
+        y = self._win.winfo_rooty() + item.get("_y0", 0) - px(self.PAD_Y)
         sub._show(x, y, owner=self)
 
     def _close_sub(self) -> None:
@@ -278,40 +286,39 @@ class PopupMenu:
             self._sub = None
             self._sub_item = -1
 
-    def _bind_outside(self, root) -> None:
-        def dismiss(event):
-            if self._win is None:
-                return
-            w = event.widget
-            try:
-                if str(w) == str(self._canvas) or str(w) == str(self._win):
-                    return
-                if self._sub is not None and (
-                        str(w) == str(self._sub._canvas) or str(w) == str(self._sub._win)):
-                    return
-            except tk.TclError:
-                pass
-            self.close()
-        for seq in ("<Button-1>", "<Button-3>"):
-            ident = root.bind_all(seq, dismiss, add="+")
-            self._close_ids.append((seq, ident))
+    def _watch_front(self) -> None:
+        """Close once another program is in front - a click there never
+        reaches Tk, so nothing else would close it."""
+        self._watch = None
+        if self._win is None:
+            return
+        if not _app_in_front():
+            self._close_all()
+            return
+        try:
+            self._watch = self._win.after(_WATCH_MS, self._watch_front)
+        except tk.TclError:
+            pass
+
+    def owns(self, widget) -> bool:
+        """Whether `widget` is this menu or one of its open submenus."""
+        name = str(widget)
+        menu = self
+        while menu is not None:
+            if menu._win is not None and (name == str(menu._win)
+                                          or name == str(menu._canvas)):
+                return True
+            menu = menu._sub
+        return False
 
     def close(self) -> None:
         self._close_sub()
-        root = None
-        try:
-            root = self.parent.winfo_toplevel()
-        except tk.TclError:
-            pass
-        for seq, ident in self._close_ids:
+        if self._watch is not None and self._win is not None:
             try:
-                if seq == "after" and self._win is not None:
-                    self._win.after_cancel(ident)
-                elif root is not None and ident:
-                    root.unbind(seq, ident)
+                self._win.after_cancel(self._watch)
             except (tk.TclError, ValueError):
                 pass
-        self._close_ids = []
+        self._watch = None
         if self._win is not None:
             try:
                 self._win.destroy()
@@ -327,6 +334,79 @@ class PopupMenu:
         while owner._owner is not None:
             owner = owner._owner
         owner.close()
+
+
+# ── menu plumbing ───────────────────────────────────────────────────────
+
+_ACCENT_FOR = {}            # deep shade -> its bright accent, filled in below
+_HOVER = ""                 # neutral hover fill, filled in below
+_WATCH_MS = 200
+_MENU_FONTS: list = []
+_DISMISS_ROOTS: set = set()
+
+
+def _menu_fonts():
+    """(label, accelerator) fonts, made once - the old menu made two new
+    font objects on every mouse move."""
+    if not _MENU_FONTS:
+        import tkinter.font as tkfont
+        _MENU_FONTS.extend([tkfont.Font(family=T.UI, size=pt(10)),
+                            tkfont.Font(family=T.UI, size=pt(9))])
+    return _MENU_FONTS[0], _MENU_FONTS[1]
+
+
+def _install_dismiss(root) -> None:
+    """One app-wide click handler, installed once, that closes every open
+    menu when a press lands anywhere that is not one. (Each menu used to
+    bind its own and remove it from the wrong place, so they piled up.)"""
+    key = str(root)
+    if key in _DISMISS_ROOTS:
+        return
+    _DISMISS_ROOTS.add(key)
+
+    def dismiss(event):
+        # Runs after the clicked widget's own handlers, so a right-click
+        # that has just opened a menu reaches here too - a menu that young
+        # was opened by this very press and stays.
+        now = time.monotonic()
+        for menu in [m for m in _OPEN_MENUS if m._owner is None]:
+            if now - menu._born < 0.25 or menu.owns(event.widget):
+                continue
+            menu.close()
+
+    for seq in ("<ButtonPress-1>", "<ButtonPress-2>", "<ButtonPress-3>"):
+        root.bind_all(seq, dismiss, add="+")
+
+
+def _app_in_front() -> bool:
+    """Whether the window in front belongs to this process. True wherever
+    that cannot be asked (not Windows), so nothing closes by mistake."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    except Exception:
+        return True
+
+
+def _menu_palette() -> None:
+    _ACCENT_FOR.update({T.ACCENT_DEEP: T.ACCENT, T.ACCENT2_DEEP: T.ACCENT2,
+                        T.ACCENT3_DEEP: T.ACCENT3, T.ACCENT4_DEEP: T.ACCENT4,
+                        T.WARN_DEEP: T.WARN, T.FAIL_DEEP: T.FAIL})
+    global _HOVER
+    _HOVER = mix(T.ELEVATED, T.TEXT, 0.08)
+
+
+_menu_palette()
 
 
 def _round_pts(x0, y0, x1, y1, r):
@@ -946,6 +1026,14 @@ class PeekWindow:
         if self.win is not None and self._visible:
             self.win.withdraw()
             self._visible = False
+
+
+class BigPeekWindow(PeekWindow):
+    """The Library's hover preview: the same bubble, larger. Its cards are
+    small, and a 380-wide bubble read as tiny on a 4K screen. Not larger
+    than this: the hover frame it shows is made 640 wide, and past about
+    one and a half times that it goes soft."""
+    DESIGN_W, DESIGN_H, DESIGN_CAP = 620, 349, 26
 
 
 class Toaster:

@@ -47,15 +47,15 @@ from .theme import T, px, round_pts, text_width
 
 # Design pixels, as the CTk version drew them. Everything goes through
 # px() on the way to the screen.
-CHIP_H = 24
+CHIP_H = 21
 CHIP_R = 10
-CHIP_PAD = 18          # text-to-border padding plus the border, both sides
-CHIP_GAP = 4           # between chips on a line
+CHIP_PAD = 14          # text-to-border padding plus the border, both sides
+CHIP_GAP = 3           # between chips on a line
 LINE_GAP = 2           # between wrapped lines
 SWATCH = 10            # extra width a project chip's colour dot takes
 LEFT = 5               # chips start this far in
 RIGHT = 3              # and stop this far short of the edge
-HEAD_H = 22
+HEAD_H = 20
 HEAD_R = 8
 HEAD_X = 6             # heading hover plate inset
 HEAD_TEXT_X = 6        # heading text inside its plate
@@ -66,9 +66,9 @@ HIDDEN_H = 24
 HIDDEN_ABOVE = 10
 HIDDEN_BELOW = 6
 HIDDEN_X = 8
-FALLBACK_ROOM = 236    # before the canvas has a width of its own
+FALLBACK_ROOM = 196    # before the canvas has a width of its own
 MIN_ROOM = 110
-CHIP_FONT = 11
+CHIP_FONT = 10
 HEAD_FONT = 9
 HIDDEN_FONT = 9
 

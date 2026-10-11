@@ -44,7 +44,7 @@ from .library_player import InlinePlayer
 from .library_windows import HelpWindow
 from .widgets import (EMPTY_INK, PrimaryButton, ask_yes, empty_overlay, popup_menu,
                       menu_rule, rounded_well, tip)
-from . import artwork, icons, prefetch, uithread
+from . import artwork, icons, prefetch, project_stats, uithread
 
 _SPLIT_RE = re.compile(r"[,\n\r\t;]+|\s+")
 
@@ -94,6 +94,13 @@ class VaultTab(ctk.CTkFrame):
         self._cover_cache: dict = {}
         self._selected_project: str | None = None
         self._project_clips: list = []
+        # Every clip in the project; _project_clips is what the tag filter
+        # leaves of it (all of it when there is no filter).
+        self._project_all: list = []
+        self._tag_filter: tuple = ()
+        self._overview_on = False
+        self._share_key = None
+        self._share: dict = {}
         self._project_rows: dict = {}   # tree iid -> Rec, for the clip list
         self._focused_index: int | None = None
         self._strip_refs: list = []
@@ -105,11 +112,10 @@ class VaultTab(ctk.CTkFrame):
         # The project list's rows, by project name - see _restyle_project_row.
         self._project_widgets: dict = {}
 
-        self.grid_columnconfigure(0, weight=1, uniform="cols")
-        self.grid_columnconfigure(1, weight=1, uniform="cols")
         self.grid_rowconfigure(1, weight=1)
 
         self._build()
+        self._apply_lookup_open()
         self._refresh_projects()
         self.set_status(self.F("empty"), T.FAINT)
 
@@ -133,13 +139,14 @@ class VaultTab(ctk.CTkFrame):
     def _build_lookup(self):
         panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
         panel.grid(row=1, column=0, sticky="nsew", padx=(14, 7), pady=14)
+        self._lookup_panel = panel
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(3, weight=1)
 
         ctk.CTkLabel(panel, text="PASTE POST IDS OR FILENAMES", **label_style(), anchor="w").grid(row=0, column=0, sticky="w", pady=(0, 4))
 
         self.paste_box = ctk.CTkTextbox(
-            panel, height=110, corner_radius=T.R_LG, fg_color=T.SURFACE,
+            panel, height=72, corner_radius=T.R_LG, fg_color=T.SURFACE,
             border_width=1, border_color=T.ACCENT3_DEEP, text_color=T.TEXT,
             font=font(11, mono=True))
         self.paste_box.grid(row=1, column=0, sticky="ew")
@@ -175,9 +182,9 @@ class VaultTab(ctk.CTkFrame):
                                  show="headings", selectmode="extended")
         empty_overlay(self.tree, "search", "Paste post IDs or filenames, then Look up")
         for key, title, width, anchor in (
-                ("name", "File", 220, "w"), ("artist", "Artist", 130, "w"),
-                ("res", "Resolution", 90, "w"), ("len", "Length", 64, "e"),
-                ("used", "Already used in", 190, "w")):
+                ("name", "File", 120, "w"), ("artist", "Artist", 96, "w"),
+                ("res", "Res", 76, "w"), ("len", "Len", 50, "e"),
+                ("used", "Used in", 120, "w")):
             self.tree.column(key, width=column_width(title, width),
                              minwidth=px(60), anchor=anchor)
             self.tree.heading(key, text=title, anchor=anchor)
@@ -215,10 +222,21 @@ class VaultTab(ctk.CTkFrame):
         panel.grid(row=1, column=1, sticky="nsew", padx=(7, 14), pady=14)
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(5, weight=1)
+        self._projects_panel = panel
 
-        projects_head = ctk.CTkLabel(panel, text="PROJECTS", **label_style(), anchor="w")
-        projects_head.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        top = ctk.CTkFrame(panel, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        top.grid_columnconfigure(0, weight=1)
+        projects_head = ctk.CTkLabel(top, text="PROJECTS", **label_style(), anchor="w")
+        projects_head.grid(row=0, column=0, sticky="w")
         tip(projects_head, "Click a project to browse its clips  ·  right-click for more")
+        # The paste-IDs import, folded away until it is wanted.
+        self.import_btn = ctk.CTkButton(
+            top, text="Import IDs…", width=120, height=26, corner_radius=T.R_SM,
+            command=self._toggle_lookup, **button_style("text"))
+        self.import_btn.grid(row=0, column=1, sticky="e")
+        tip(self.import_btn, "Paste post IDs or filenames to find clips and mark "
+                             "them used in a project")
 
         # The list sits in a box whose height is set from the number of
         # projects (see _fit_projects_list) and is stretched to fill it.
@@ -243,11 +261,14 @@ class VaultTab(ctk.CTkFrame):
         self.detail_header = ctk.CTkLabel(head, text="",
                                           font=font(11, "bold"), text_color=T.FAINT, anchor="w")
         self.detail_header.grid(row=0, column=0, sticky="w")
+        self.clear_filter_btn = ctk.CTkButton(
+            head, text="Clear filter  ✕", width=110, height=24, corner_radius=T.R_SM,
+            command=lambda: self._set_tag_filter(()), **button_style("text"))
         self.open_in_library_btn = ctk.CTkButton(
             head, text="Open in Library →", width=130, height=24, corner_radius=T.R_SM,
             state="disabled", command=lambda: self._open_in_library(self._selected_project),
             **button_style("text"))
-        self.open_in_library_btn.grid(row=0, column=1, sticky="e")
+        self.open_in_library_btn.grid(row=0, column=2, sticky="e")
 
         strip_wrap = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=T.R_LG,
                                   border_width=1, border_color=T.ACCENT3_DEEP)
@@ -282,9 +303,45 @@ class VaultTab(ctk.CTkFrame):
         bottom.grid_rowconfigure(0, weight=1)
         bottom.grid_columnconfigure(0, weight=1)
 
-        list_wrap = ctk.CTkFrame(bottom, fg_color=T.SURFACE, corner_radius=T.R_LG,
+        left = ctk.CTkFrame(bottom, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew")
+        left.grid_columnconfigure(0, weight=1)
+        left.grid_rowconfigure(1, weight=1)
+        self.view_switch = ctk.CTkSegmentedButton(
+            left, values=["Clips", "Overview"], command=self._switch_view,
+            font=font(11), height=28, corner_radius=T.R_SM, fg_color=T.INPUT,
+            selected_color=T.ACCENT3_DEEP, selected_hover_color=T.ACCENT3_DEEP,
+            unselected_color=T.INPUT, unselected_hover_color=T.BTN_HOV,
+            text_color=T.TEXT)
+        self.view_switch.set("Clips")
+        self.view_switch.grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        # The project at a glance - see _draw_overview.
+        over = ctk.CTkFrame(left, fg_color=T.SURFACE, corner_radius=T.R_LG,
+                            border_width=1, border_color=T.ACCENT3_DEEP)
+        over.grid(row=1, column=0, sticky="nsew")
+        over.grid_columnconfigure(0, weight=1)
+        over.grid_rowconfigure(0, weight=1)
+        self.overview = tk.Canvas(over, bg=T.SURFACE, highlightthickness=0, bd=0)
+        self.overview.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=8)
+        over_scroll = ctk.CTkScrollbar(over, command=self.overview.yview, width=12,
+                                       button_color=T.LINE, button_hover_color=T.FAINT)
+        over_scroll.grid(row=0, column=1, sticky="ns", padx=(2, 6), pady=8)
+        self.overview.configure(yscrollcommand=over_scroll.set)
+        self.overview.bind("<Configure>", lambda e: self._overview_on and self._draw_overview())
+        self.overview.bind("<MouseWheel>", lambda e: self.overview.yview_scroll(
+            int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units"))
+        self.overview.bind("<Button-1>", self._overview_click)
+        self.overview.bind("<Button-3>", self._overview_menu)
+        self.overview.bind("<Motion>", self._overview_hover)
+        self._overview_wrap = over
+        self._overview_hits: list = []
+        over.grid_remove()
+
+        list_wrap = ctk.CTkFrame(left, fg_color=T.SURFACE, corner_radius=T.R_LG,
                                  border_width=1, border_color=T.ACCENT3_DEEP)
-        list_wrap.grid(row=0, column=0, sticky="nsew")
+        list_wrap.grid(row=1, column=0, sticky="nsew")
+        self._list_wrap = list_wrap
         list_wrap.grid_columnconfigure(0, weight=1)
         list_wrap.grid_rowconfigure(0, weight=1)
 
@@ -820,6 +877,8 @@ class VaultTab(ctk.CTkFrame):
         if self._selected_project == name:
             self._selected_project = None
             self._project_clips = []
+            self._project_all = []
+            self._tag_filter = ()
             self._show_project_detail()
         self._reload_library()
         self._refresh_projects()
@@ -860,9 +919,222 @@ class VaultTab(ctk.CTkFrame):
         name = self._selected_project
         clips = [r for r in records if name in r.used_projects]
         clips.sort(key=lambda r: r.name.lower())
-        self._project_clips = clips
-        self._focused_index = 0 if clips else None
+        if getattr(self, "_filter_project", None) != name:
+            self._tag_filter = ()
+            self._filter_project = name
+        self._project_all = clips
+        self._apply_tag_filter()
+
+    # ── overview ─────────────────────────────────────────────────────────
+
+    def _apply_tag_filter(self) -> None:
+        wanted = set(self._tag_filter)
+        self._project_clips = [rec for rec in self._project_all
+                               if wanted <= (getattr(rec, "tags", None) or set())]
+        self._focused_index = 0 if self._project_clips else None
         self._show_project_detail()
+        if self._overview_on:
+            self._draw_overview()
+
+    def _set_tag_filter(self, tags: tuple) -> None:
+        """Show only this project's clips that carry `tags` - from a tag or
+        a pair clicked in the overview - and go back to the clips."""
+        self._tag_filter = tuple(tags)
+        self._apply_tag_filter()
+        if tags:
+            self.view_switch.set("Clips")
+            self._switch_view("Clips")
+
+    def _switch_view(self, which: str) -> None:
+        self._overview_on = which == "Overview"
+        if self._overview_on:
+            self._list_wrap.grid_remove()
+            self._overview_wrap.grid()
+            self._draw_overview()
+        else:
+            self._overview_wrap.grid_remove()
+            self._list_wrap.grid()
+
+    def _library_share(self) -> dict:
+        """Tag shares over the whole library, made once per library load."""
+        library = getattr(self.app, "library", None)
+        records = library.records if library else []
+        key = (id(records), len(records))
+        if key != self._share_key:
+            self._share = project_stats.library_share(records)
+            self._share_key = key
+        return self._share
+
+    def _draw_overview(self) -> None:
+        """Totals, quality, category mix, the tags the clips share and the
+        ones that come together. Tags and pairs can be clicked to show
+        only those clips."""
+        import tkinter.font as tkfont
+        from .format import fmt_len
+        from .library_tab import category_colour
+        c = self.overview
+        c.delete("all")
+        self._overview_hits = []
+        width = max(c.winfo_width(), px(200))
+        pad = px(6)
+        head = tkfont.Font(family=T.UI, size=pt(9), weight="bold")
+        body = tkfont.Font(family=T.UI, size=pt(10))
+        small = tkfont.Font(family=T.UI, size=pt(9))
+        clips = self._project_all
+        y = px(6)
+        if not clips:
+            c.create_text(pad, y + px(10), anchor="w", fill=T.FAINT, font=body,
+                          text="Pick a project to see what it is made of.")
+            c.configure(scrollregion=(0, 0, width, px(60)))
+            return
+        o = project_stats.overview(clips, self._library_share(), self.cfg.subfolders,
+                                   self.cfg.min_height, self.cfg.min_fps,
+                                   hidden=self.cfg.vault_hidden_tags)
+
+        def section(title):
+            nonlocal y
+            y += px(10)
+            c.create_text(pad, y, anchor="w", text=title.upper(), fill=T.FAINT, font=head)
+            y += px(16)
+
+        def line(text, colour=T.TEXT, font_=body):
+            nonlocal y
+            c.create_text(pad, y + px(8), anchor="w", text=text, fill=colour, font=font_)
+            y += px(20)
+
+        line(f"{o.clips} clips  ·  {fmt_len(o.seconds)}  ·  {fmt_size(o.size)}")
+        line(f"Real 60 fps {o.real_60}   ·   4K {o.real_4k}   ·   4K 60 {o.real_4k60}",
+             T.DIM, small)
+
+        section("Categories")
+        bar_w = width - pad * 2
+        x = pad
+        for folder, n in o.categories:
+            seg = bar_w * n / max(o.clips, 1)
+            c.create_rectangle(x, y, x + seg, y + px(8), outline="",
+                               fill=category_colour(folder, self.cfg.subfolders))
+            x += seg
+        y += px(14)
+        x = pad
+        for folder, n in o.categories:
+            dot = category_colour(folder, self.cfg.subfolders)
+            c.create_oval(x, y + px(4), x + px(8), y + px(12), fill=dot, outline="")
+            text = f"{folder or 'Other'} {n}"
+            c.create_text(x + px(12), y + px(8), anchor="w", text=text,
+                          fill=T.DIM, font=small)
+            x += px(12) + small.measure(text) + px(14)
+            if x > width - px(60):
+                x = pad
+                y += px(18)
+        y += px(20)
+
+        def bars(rows, label_of, tags_of):
+            nonlocal y
+            top = max((n for _k, n in rows), default=1)
+            name_w = int((width - pad * 2) * 0.62)
+            for key, n in rows:
+                label = label_of(key)
+                share = n / max(o.clips, 1)
+                row_top = y
+                c.create_rectangle(pad, y + px(3), pad + (width - pad * 2) * n / top,
+                                   y + px(19), outline="", fill=T.ACCENT3_DEEP)
+                text = label
+                while text and body.measure(text) > name_w:
+                    text = text[:-2] + "…" if len(text) > 2 else ""
+                c.create_text(pad + px(6), y + px(11), anchor="w", text=text,
+                              fill=T.TEXT, font=body)
+                c.create_text(width - pad - px(4), y + px(11), anchor="e",
+                              text=f"{n}  ·  {share:.0%}", fill=T.DIM, font=small)
+                y += px(23)
+                self._overview_hits.append(((0, row_top, width, y), tags_of(key)))
+
+        if o.tags:
+            section("Tags these clips share")
+            bars(o.tags, project_stats.tag_label, lambda tag: (tag,))
+        if o.pairs:
+            section("Go together")
+            bars(o.pairs,
+                 lambda pair: f"{project_stats.tag_label(pair[0])}  +  "
+                              f"{project_stats.tag_label(pair[1])}",
+                 lambda pair: tuple(pair))
+        if o.artists:
+            section("Artists")
+            for name, n in o.artists:
+                line(f"{name}  ·  {n}", T.DIM, small)
+        hidden = self.cfg.vault_hidden_tags
+        y += px(8)
+        if o.tags or hidden:
+            note = "Right-click a tag to hide it here."
+            if hidden:
+                note = (f"{len(hidden)} tag{'' if len(hidden) == 1 else 's'} hidden "
+                        "here  ·  click to show")
+            top = y
+            c.create_text(pad, y + px(8), anchor="w", text=note,
+                          fill=T.ACCENT3 if hidden else T.FAINT, font=small)
+            y += px(22)
+            if hidden:
+                self._overview_hits.append(((0, top, width, y), "hidden"))
+        y += px(6)
+        c.configure(scrollregion=(0, 0, width, y))
+
+    def _overview_hit(self, event):
+        y = self.overview.canvasy(event.y)
+        for (x0, y0, x1, y1), tags in self._overview_hits:
+            if y0 <= y < y1:
+                return tags
+        return None
+
+    def _overview_click(self, event) -> None:
+        tags = self._overview_hit(event)
+        if tags == "hidden":
+            self._hidden_menu(event)
+        elif tags:
+            self._set_tag_filter(tags)
+
+    def _overview_menu(self, event) -> None:
+        """Right-click a tag or a pair: leave it out of this overview. Too
+        common in your own library to say what a project is about -
+        anthro on human, say - and only this screen; the Library keeps it."""
+        tags = self._overview_hit(event)
+        if not tags or tags == "hidden":
+            return
+        menu = popup_menu(self, activebackground=T.ACCENT3_DEEP)
+        for tag in tags:
+            menu.add_command(label=f"Hide “{project_stats.tag_label(tag)}” here",
+                             command=lambda t=tag: self._hide_overview_tag(t))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _hidden_menu(self, event) -> None:
+        hidden = list(self.cfg.vault_hidden_tags)
+        if not hidden:
+            return
+        menu = popup_menu(self, activebackground=T.ACCENT3_DEEP)
+        for tag in sorted(hidden):
+            menu.add_command(label=f"Show “{project_stats.tag_label(tag)}” again",
+                             command=lambda t=tag: self._show_overview_tag(t))
+        menu_rule(menu)
+        menu.add_command(label="Show them all again",
+                         command=lambda: self._show_overview_tag(None))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _hide_overview_tag(self, tag: str) -> None:
+        if tag not in self.cfg.vault_hidden_tags:
+            self.cfg.vault_hidden_tags.append(tag)
+            self.cfg.save_soon()
+        self._draw_overview()
+
+    def _show_overview_tag(self, tag) -> None:
+        if tag is None:
+            self.cfg.vault_hidden_tags.clear()
+        elif tag in self.cfg.vault_hidden_tags:
+            self.cfg.vault_hidden_tags.remove(tag)
+        self.cfg.save_soon()
+        self._draw_overview()
+
+    def _overview_hover(self, event) -> None:
+        cursor = "hand2" if self._overview_hit(event) else ""
+        if str(self.overview.cget("cursor")) != cursor:
+            self.overview.configure(cursor=cursor)
 
     def _show_project_detail(self) -> None:
         name = self._selected_project
@@ -876,8 +1148,14 @@ class VaultTab(ctk.CTkFrame):
             self._show_in_player(None)
             return
         count = len(self._project_clips)
-        self.detail_header.configure(
-            text=f"{name}  ·  {count} clip{'s' if count != 1 else ''}", text_color=T.TEXT)
+        if self._tag_filter:
+            what = "  +  ".join(project_stats.tag_label(t) for t in self._tag_filter)
+            text = f"{name}  ·  {count} of {len(self._project_all)} clips  ·  {what}"
+            self.clear_filter_btn.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        else:
+            text = f"{name}  ·  {count} clip{'s' if count != 1 else ''}"
+            self.clear_filter_btn.grid_remove()
+        self.detail_header.configure(text=text, text_color=T.TEXT)
         self.open_in_library_btn.configure(state="normal")
         self._fill_project_tree()
         if not self._project_clips:
@@ -1071,7 +1349,36 @@ class VaultTab(ctk.CTkFrame):
         return isinstance(event.widget, (ctk.CTkEntry, tk.Entry, tk.Text, ttk.Entry))
 
     def key_lookup(self, event=None) -> None:
+        # F5 with the import folded away opens it rather than looking up
+        # whatever was left in a box nobody can see.
+        if not self.cfg.vault_lookup_open:
+            self._toggle_lookup()
+            return
         self._run_lookup()
+
+    def _toggle_lookup(self) -> None:
+        self.cfg.vault_lookup_open = not self.cfg.vault_lookup_open
+        self.cfg.save_soon()
+        self._apply_lookup_open()
+        if self.cfg.vault_lookup_open:
+            self.paste_box.focus_set()
+
+    def _apply_lookup_open(self) -> None:
+        """Import out: it takes the left two fifths and projects the rest.
+        Folded: projects have the whole tab, and the player grows into it."""
+        open_ = bool(self.cfg.vault_lookup_open)
+        if open_:
+            self._lookup_panel.grid()
+            self._projects_panel.grid_configure(column=1, columnspan=1, padx=(7, 14))
+            self.grid_columnconfigure(0, weight=2, uniform="")
+            self.grid_columnconfigure(1, weight=3, uniform="")
+        else:
+            self._lookup_panel.grid_remove()
+            self._projects_panel.grid_configure(column=0, columnspan=2, padx=14)
+            self.grid_columnconfigure(0, weight=1, uniform="")
+            self.grid_columnconfigure(1, weight=1, uniform="")
+        self.import_btn.configure(text="Hide import" if open_ else "Import IDs…")
+        self._player_resize()
 
     def on_app_close(self) -> bool:
         # mpv (either kind) and VLC draw into our window. Killing the
