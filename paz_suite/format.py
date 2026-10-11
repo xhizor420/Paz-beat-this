@@ -78,3 +78,12 @@ def fmt_score(n) -> str:
     if n >= 1000:
         return f"{sign}{n / 1000:.1f}k".replace(".0k", "k")
     return f"{sign}{n}"
+
+
+def fps_label(fps: float) -> str:
+    """60, 59.94, 23.98 - two places, trailing zeros dropped, so a rate
+    shows as whole only when it is. Rounded to a whole number, 59.94 read
+    as "60", and for a 60 fps edit that is the one difference that counts."""
+    if not fps:
+        return "—"
+    return f"{fps:.2f}".rstrip("0").rstrip(".")

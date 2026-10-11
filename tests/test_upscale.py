@@ -144,9 +144,10 @@ def test_odd_sizes_share_a_band_instead_of_a_group_each():
     clips = [GapClip("F", f"{h}.mp4", str(h), width=h * 16 // 9, height=h, fps=30.0)
              for h in (1072, 1080, 1088, 1200, 714, 720, 360)]
     groups = grouped(clips)
-    # 1072 is a cropped 1080 and 714 a cropped 720, not the band below.
-    assert [_height_label(h) for h, _ in groups] == ["1080p", "720p", "Under 480p"]
-    assert [len(m) for _, m in groups] == [4, 2, 1]
+    # Exact bands, no allowance: 1072 is under 1080, so it is 720p, and
+    # 714 is under 720, so it is 480p.
+    assert [_height_label(h) for h, _ in groups] == ["1080p", "720p", "480p", "Under 480p"]
+    assert [len(m) for _, m in groups] == [3, 2, 1, 1]
 
 
 def test_a_drag_with_nothing_to_drag_says_so():
@@ -167,7 +168,45 @@ def test_clips_split_by_what_topaz_has_to_do_then_resolution():
     ]
     out = sections(clips)
     assert [need for need, _ in out] == ["60 fps", "4K", "4K and 60", ""]
-    fps_only = out[0][1]
-    assert [c.name for c in fps_only[0][1]] == ["fps4k30.mp4", "fps4k.mp4"]
+    fps_only = out[0][1]                      # [(ratio, [(band, clips)])]
+    assert fps_only[0][0] == "16:9"
+    assert [c.name for c in fps_only[0][1][0][1]] == ["fps4k30.mp4", "fps4k.mp4"]
     both = out[2][1]
-    assert [h for h, _ in both] == [1080, 720]
+    assert [h for h, _ in both[0][1]] == [1080, 720]
+
+
+def test_clips_split_by_shape_between_job_and_resolution():
+    from paz_suite.convert_engine import GapClip
+    from paz_suite.upscale_window import NO_SHAPE, OTHER_WIDE, ratio, ratio_title, shapes
+    def clip(w, h, name="x.mp4"):
+        return GapClip("F", name, name, width=w, height=h, fps=30.0, need="4K")
+    assert ratio(clip(1920, 1080)) == "16:9"
+    assert ratio(clip(1920, 1072)) == "16:9"          # a cropped 16:9 is still one
+    assert ratio(clip(1080, 1920)) == "9:16"
+    assert ratio(clip(2160, 2160)) == "1:1"
+    assert ratio(clip(1440, 1080)) == "4:3"
+    assert ratio(clip(3000, 1000)) == OTHER_WIDE
+    assert ratio(GapClip("F", "u", "u")) == NO_SHAPE
+    assert ratio_title("9:16") == "9:16 portrait"
+    assert ratio_title("1:1") == "1:1 square"
+    out = shapes([clip(1080, 1920, "tall"), clip(1920, 1080, "wide"), clip(1000, 1000, "sq")])
+    assert [name for name, _ in out] == ["16:9", "9:16", "1:1"]
+
+
+def test_only_a_real_60_counts_as_60():
+    from paz_suite.convert_engine import classify
+    cfg = AppConfig(min_height=2160, min_fps=60)
+    assert classify(cfg, 3840, 2160, 60.0)[1] == "Edit pool"
+    for near in (59.94, 59.98, 59.999, 58.5, 50.0):
+        assert classify(cfg, 3840, 2160, near)[1] == "Needs frames", near
+    assert classify(cfg, 3840, 2160, 120.0)[1] == "Edit pool"
+
+
+def test_a_near_60_shows_its_real_rate():
+    from paz_suite.format import fps_label
+    from paz_suite.upscale_window import _fps_text
+    assert fps_label(60.0) == "60"
+    assert fps_label(59.94) == "59.94"
+    assert fps_label(59.98) == "59.98"
+    assert fps_label(23.976) == "23.98"
+    assert _fps_text(59.98) == "59.98 fps"

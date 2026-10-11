@@ -57,34 +57,23 @@ class Task:
 
 # ── sorting rules ───────────────────────────────────────────────────────
 
-def snap_target(cfg: AppConfig) -> int:
-    return int(round(cfg.min_fps))
+# Minimum fps is met or it is not - no allowance. A 60/1 stream measures
+# 60.0 exactly; 59.94 and 59.98 are NOT 60 - in a PMV cut to 60 they drift
+# against the music - so they need Topaz's real interpolation, not a pass.
+# (Near-misses used to be counted as 60 and resampled to it on the way
+# through; that duplicated a frame now and then, which is the judder an
+# edit cannot hide.)
 
 
-def snap_applies(cfg: AppConfig, fps: float) -> bool:
-    """
-    True when a near-miss source (58.5 up to just under the target) should
-    be resampled to exactly the target. Always on - 59.94 is just NTSC's
-    way of saying 60, so it's always treated as the real target rather
-    than failing the bar by a rounding hair. The upper bound is a plain
-    `< target` (no epsilon fudge-factor) so nothing in that band - 59.94,
-    59.97, 59.999, whatever a container happens to report - slips through
-    uncaught. Never touches sources already at or above the target, so
-    120 fps footage is left alone.
-    """
-    if not fps:
-        return False
-    target = snap_target(cfg)
-    return (target - 1.5) <= fps < target
+def meets_fps(cfg: AppConfig, fps: float) -> bool:
+    return bool(fps) and fps >= cfg.min_fps
 
 
 def classify(cfg: AppConfig, width: int, height: int, fps: float) -> tuple:
     """Return (destination_root, label) for a clip of these properties."""
     short_side = min(width, height) if width else 0
-    if snap_applies(cfg, fps):
-        fps = float(snap_target(cfg))
     big = short_side >= cfg.min_height
-    fast = fps >= cfg.min_fps
+    fast = meets_fps(cfg, fps)
     if big and fast:
         return cfg.premium_root, "Edit pool"
     if big:
@@ -229,7 +218,6 @@ class Recipe:
     has_audio: bool = False
     duration: float = 0.0        # effective length, after any looping
     loops: int = 0               # extra repeats prepended via -stream_loop
-    snap_to: int = 0             # resample to this exact fps (0 = leave alone)
     gop: int = 0                 # keyframe interval in frames (0 = default)
     cfr: bool = False
     audio_mode: str = "keep"
@@ -248,12 +236,8 @@ def plan_recipe(cfg: AppConfig, info: MediaInfo | None) -> Recipe:
         recipe.notes.append(f"looped x{recipe.loops + 1} to reach {cfg.loop_min:.0f}s")
     recipe.duration = duration * (recipe.loops + 1)
 
-    if snap_applies(cfg, fps):
-        recipe.snap_to = snap_target(cfg)
-        recipe.notes.append(f"{fps:.2f} fps resampled to {recipe.snap_to}.00")
-
     if cfg.edit_gop:
-        base = recipe.snap_to or fps or 60
+        base = fps or 60
         recipe.gop = max(24, min(int(round(base)), 240))
 
     if info and info.vfr and cfg.force_cfr:
@@ -283,8 +267,6 @@ def build_command(source: str, target: str, cfg: AppConfig,
 
     filters = ["setparams=colorspace=bt709:color_primaries=bt709:"
                "color_trc=bt709:range=tv"]
-    if recipe.snap_to:
-        filters.append(f"fps={recipe.snap_to}")
     cmd += ["-vf", ",".join(filters)]
 
     cmd += venc

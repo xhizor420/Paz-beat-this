@@ -1062,7 +1062,10 @@ class ConvertTab(ctk.CTkFrame):
                     continue
 
                 info = probe(entry.path)
-                if info and info.width >= 3800 and info.fps >= 50:
+                # The one rule, not a looser one of its own: this used to
+                # pass anything 3800 wide at 50 fps or more as 4K60.
+                if info and classify(self.cfg, info.width, info.height,
+                                     info.fps)[1] == "Edit pool":
                     skipped_low += 1
                     self.log(f"  {entry.name} is already 4K60 - use "
                              f"Promote, not the upscaler", "warn")

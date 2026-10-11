@@ -249,11 +249,8 @@ class SettingsWindow(ctk.CTkToplevel):
                     ["ultrafast", "veryfast", "fast", "medium", "slow", "veryslow"])
 
         self._section(tab, "Frame rate for editing", 8)
-        # Sources from 58.5 fps up to just under Minimum fps are re-encoded
-        # at exactly that rate: 59.94 is NTSC's 60, not a slower clip, and
-        # the file really comes out 60.000.
-        self._hint(tab, 9, "A source a hair under your Minimum fps (59.94 for 60) is "
-                          "re-encoded to exactly that rate. Faster sources are left as they are.")
+        self._hint(tab, 9, "Frame rates are kept as they are. A 59.94 source stays "
+                          "59.94 and goes to Needs 60 fps, for Topaz to interpolate.")
         self._switch(tab, 10, "force_cfr", "Force constant frame rate")
         self._switch(tab, 11, "edit_gop", "1-second keyframes (smooth scrubbing)")
         self._switch(tab, 12, "loop_short", "Loop very short clips")
@@ -283,8 +280,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self._hint(tab, 3, "Compared with the shorter side, so a portrait "
                           "2160×3840 clip counts as 4K too.")
         self._number(tab, 4, "min_fps", "Minimum fps", 1, 480)
-        self._hint(tab, 5, "A source from 58.5 fps up to this is re-encoded "
-                          "to exactly this rate (see Encoding), and then counts.")
+        self._hint(tab, 5, "Exactly: 59.94 or 59.98 is not 60, and goes to "
+                          "the needs-work folder for Topaz.")
 
         self._section(tab, "Delivery", 6)
         self._choice(tab, 7, "transfer_mode", "Move files by", ["copy", "move", "hardlink"])
@@ -329,6 +326,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self._number(tab, 9, "card_width", "Gallery tile width (target)", 120, 480)
         self._hint(tab, 10, "The gallery fits as many columns of at least "
                            "this width as it can, then stretches them to fill.")
+        self._switch(tab, 11, "library_hover_peek",
+                     "Bigger preview beside the pointer while hovering a card")
 
         self._section(tab, "Tagging", 14)
         self._switch(tab, 15, "library_autofetch",
