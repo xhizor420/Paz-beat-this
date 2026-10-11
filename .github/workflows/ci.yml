@@ -23,7 +23,14 @@ jobs:
       - name: Lint
         run: python -m pyflakes paz_suite tools
       - name: Unit tests
-        run: python -m pytest tests -q
+        run: python -m pytest --junitxml=test-results.xml tests -q
+
+      # The logs need a signed-in account to read; annotations do not.
+      # Each failing test is posted as one, so the reason a run failed is
+      # on the run page (and in the API) for anyone.
+      - name: Report failures
+        if: failure()
+        run: python tools/junit_annotations.py test-results.xml
 
   smoke:
     # Starts the real app, visits every tab and screenshots it. Fails on

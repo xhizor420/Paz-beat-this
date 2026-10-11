@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from functools import partial
 import tkinter as tk
 
 import customtkinter as ctk
@@ -943,12 +944,12 @@ class PazApp:
     def _shortcuts(self) -> None:
         name = self._active()
         tab = self._tab_object(name, build=False)
-        on_help = None
         if name == "Library":
-            def on_help():
-                HelpWindow(self.root)
+            on_help = partial(HelpWindow, self.root)
         elif tab is not None:
             on_help = getattr(tab, "_open_help", None)
+        else:
+            on_help = None
         open_shortcuts(self.root, name, on_help)
 
     def _only(self, tab_name: str, fn) -> None:
