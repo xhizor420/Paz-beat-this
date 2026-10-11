@@ -1,285 +1,362 @@
 # PAZ Suite
 
-Personal video pipeline: batch-convert clips to 4K/60, browse and search
-the library, track what's already used in a project, and pull beat
-markers out of a song for the edit. Four tabs, one app.
+**A personal video pipeline for making PMVs** - grab new clips, convert
+them to an edit-ready format, get them to true 4K 60, browse and search
+the whole library, keep track of what each project used, and turn a song
+into beat markers for DaVinci Resolve. Four tabs, one app, Windows first.
 
-- **Convert** — watches a source folder, encodes to MP4 (GPU with CPU
-  fallback), sorts output by resolution/fps into a 4K 60+ pool vs. a
-  needs-work folder.
-- **Library** — browse/search everything by artist/character/species/
-  rating/tag, play clips (defaults to the 4K/60 copy when one exists),
-  fix missing metadata, verify integrity.
-- **Vault** — paste a list of post IDs or filenames, find them in the
-  library, mark the ones used in a named project so they're visibly
-  flagged later instead of getting mixed back into the unused pool.
-- **Beat This** — pick a song, run the [Beat This!](https://github.com/CPJKU/beat_this)
-  neural beat tracker on it, and export the beats/downbeats as markers
-  for DaVinci Resolve (or a plain `.beats` file). See below.
+| Tab | What it is for |
+|---|---|
+| **Convert** | Grab new favorites, encode to MP4 on the GPU, sort into the 4K 60 pool or the needs-work folder, and hand what needs it to Topaz |
+| **Library** | Browse, search and play everything - by artist, character, species, rating, tag, category |
+| **Vault** | Projects: which clips each one used, and what it is made of |
+| **Beat This** | Song → beats and downbeats → markers in Resolve |
 
-## Setup
+---
 
-Python 3.9+, plus `ffmpeg`/`ffprobe`/`ffplay` on PATH.
+## Contents
+
+- [Quick start](#quick-start)
+- [The workflow](#the-workflow)
+- [Convert](#convert)
+- [Library](#library)
+- [Vault](#vault)
+- [Beat This](#beat-this)
+- [Playback](#playback)
+- [Keyboard](#keyboard)
+- [Search syntax](#search-syntax)
+- [Settings](#settings)
+- [Troubleshooting](#troubleshooting)
+- [Where things are kept](#where-things-are-kept)
+- [Development](#development)
+- [Credits](#credits)
+
+---
+
+## Quick start
+
+**Needs:** Python 3.12+ and `ffmpeg` / `ffprobe` on PATH.
 
 ```
 pip install -r requirements.txt
 python main.py
 ```
 
-### On Windows
+On Windows, double-click **`PAZ Suite.pyw`** to start it without a
+console, then right-click its taskbar button → **Pin to taskbar** (it has
+its own taskbar identity, so the pin starts PAZ Suite, not Python).
 
-Double-click **`PAZ Suite.pyw`** to start it with no console window.
-Anything that would have gone to the console - including the details of
-an error - is written to `%USERPROFILE%\.video_tool\paz_suite.log`.
-Double-clicking `main.py` works too: it hands over to `PAZ Suite.pyw` and
-the console it briefly opened closes. Run from a cmd or PowerShell prompt
-(`python main.py`), it keeps printing there, for debugging; set
-`PAZ_CONSOLE=1` to keep a console in any case.
-Once it is running, right-click its taskbar button and **Pin to taskbar**:
-it has its own taskbar identity, so the pin starts PAZ Suite, not Python.
+**First launch:** open **Settings → Folders** and point Source, Converted,
+4K 60+ and Needs work at your real folders. The Library indexes the
+Converted folder unless you choose others under **Settings → Library**.
 
-On Windows the app also:
+For the best player, also install **libmpv** - see [Playback](#playback).
 
-- keeps the PC from going to sleep while a conversion, a library sync or
-  a tag fetch you started is running (the screen can still turn off);
-- asks for 1 ms timers, so its redraws and animations are not rounded up
-  to Windows' default 15.6 ms tick;
-- runs the thread that draws the window a notch above normal priority,
-  so clicks are answered first while ffmpeg or Topaz keep the CPU busy
-  (background ffmpeg work - thumbnails, previews - already runs below
-  normal).
+---
 
-**Worth doing once:** add `%USERPROFILE%\.video_tool` to Microsoft
-Defender's exclusions (Windows Security → Virus & threat protection →
-Manage settings → Exclusions → Add an exclusion → Folder). That folder
-holds the app's own thumbnails, database and tag cache - thousands of
-small files it writes and reads constantly - and Defender scanning each
-one is the single biggest Windows-only slowdown the app cannot remove by
-itself. Only exclude that folder, not your video library.
+## The workflow
 
-The tests run on Windows on every push (the **Windows tests** workflow
-under the repository's Actions tab).
+```
+ Grabber ──► Convert ──► sorted ──► 4K 60 pool ───────────► Library ──► Vault
+ (Grab new)  (GPU encode)  │                                  │
+                           └► needs work ──► Topaz ──► 4K 60 ─┘
+                                (Needs 4K 60 window)
 
-**For playback, install libmpv.** The player uses the best backend it
-finds, in this order:
+ Song ──► Beat This ──► markers ──► DaVinci Resolve ◄── clips (→ Resolve)
+```
 
-| | needs | sound against picture |
-|---|---|---|
-| libmpv | `libmpv-2.dll` + `python-mpv` | locked - mpv keeps one clock |
-| VLC | [VLC](https://videolan.org) + `python-vlc` | locked - VLC keeps one clock |
-| mpv | `mpv` on PATH | locked |
-| built-in | ffmpeg + `sounddevice` | locked - see below |
-| built-in | ffmpeg alone | drifts; adjustable by hand |
+A clip counts as **4K 60** only when its shorter side is at least the
+Minimum short side (2160) **and** its frame rate is at least the Minimum
+fps (60) - exactly. 59.94 is not 60: in an edit cut to 60 it drifts
+against the music, so it goes to Topaz for real interpolation instead of
+being rounded up.
 
-libmpv is the one to have: mpv's own engine, loaded into the program. On
-this library a new clip is on screen in about a tenth of a second (VLC
-took 0.3-0.5s, longer off a busy drive), everything decodes on the GPU
-including AV1 4K60, and nothing drops at 4K60. Like VLC it is in-process,
-so there is no connection between the two that can fail to open - the
-weak point of the older mpv backend, which runs mpv.exe beside the app.
+---
 
-`python-mpv` comes with `requirements.txt`. The DLL comes from a Windows
-build of mpv's library - the `mpv-dev-x86_64-….7z` archives at
-[shinchiro/mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases)
-(the builds mpv.io links to). Put `libmpv-2.dll` from it in
-`%LOCALAPPDATA%\PAZ Suite\mpv\`, or point `PAZ_LIBMPV_DIR` at its folder.
-Without it the player falls back to VLC, then the others, by itself.
+## Convert
 
-The built-in player used to decode video with ffmpeg and play sound with a
-separate ffplay - two processes with no clock between them, so sound sat a
-fixed distance from the picture for the life of the clip. With
-`sounddevice` installed it drives the audio device itself, which means it
-knows how much sound has actually reached the speakers, and it paces the
-picture to that: frames are dropped or held to stay level with what is
-being heard. Audio is the master because a gap in sound is audible and a
-repeated frame is not.
+- **Grab new** runs [Grabber](https://github.com/Bionus/imgbrd-grabber)
+  on the search it already has open, using its own folder rules and its
+  own "already downloaded" list. A strip under the tab shows progress,
+  says where each video went (*Grabbed 3 new · MLP Futa 2 · Furry 1*), has
+  a **Stop** button, and tucks itself away when it is done. The Convert log
+  lists every file and its folder.
+- **Scan folders / Start** encode on the GPU (NVENC) with a CPU fallback,
+  keep frame rates exactly as they are, and sort each result into the 4K 60
+  pool or the needs-work folder.
+- **Find upscale gaps** opens the **Needs 4K 60** window:
+  - every clip that still needs work, in three sections by what Topaz has
+    to do - **Needs 60 fps**, **Needs 4K**, **Needs 4K and 60** - then by
+    shape (16:9, 9:16, 1:1…), then by resolution, highest frame rate first;
+  - every heading folds, and its **Select all** takes that whole batch - one
+    set of Topaz settings - in one click;
+  - **Copy** (Ctrl+C) puts the files on the clipboard like Explorer does,
+    to paste into Topaz; or drag them straight onto it;
+  - it is its own window, so clicking it never pulls the main window over
+    Topaz.
+- **Fetch e621 tags**, the duplicate finder, verify and reports are under
+  the tab's buttons and **More**.
 
-Measured over a 24-second clip against a recording of the output: picture
-stays within one frame of the sound and does not accumulate error
-(-13 ms end to end), and the sound plays at 1000.21 ms per second with no
-dropouts.
+---
 
-Without `sounddevice` it falls back to the old ffplay path, which drifts.
-The player's **sync** button shifts it by ear there, 50 to 400 ms either
-way, and remembers the setting; on every other path it says there is
-nothing to set.
+## Library
 
-Which one is live, and why the others aren't, is under the player's
-**sync** button → *Copy playback report*.
+- **Cards are just the picture.** The border colour is the category -
+  Furry, Furry Futa, MLP, MLP Futa - with a key beside the clip count.
+  Resolution and fps, length, rating and the project a clip was used in
+  sit on the picture as small badges. Gallery tile width is in Settings.
+- **Hover a card** to scrub through it, with a larger preview beside the
+  pointer. Rest on it and a short reel plays.
+- **Click** plays - from the spot you were hovering. **Up / Down** walk the
+  results and always start each clip from the beginning.
+- **Search** by any tag; save searches as chips; sort by score, newest,
+  length, or **Like this** - everything ranked by how much it shares with
+  the selected clip.
+- The tag sidebar (collapsible) shows what is in the current results.
+- Right-click a card for play, folder, e621, fetch tags, add to Resolve,
+  mark as used and copy.
+- **Grid** shows a contact sheet of the selected clip; click a frame to play
+  from it.
 
-### Your own pictures
+---
 
-Right-click the header strip, or **Settings → Your pictures**. Three slots:
+## Vault
 
-| | shape | where it shows |
-|---|---|---|
-| Header strip | 1760 × 76 or wider | across the top, every tab |
-| Window icon | 256 × 256 | taskbar, window, alt-tab |
-| Backdrop | 1920 × 1080 | under the clip grid, blurred and dimmed |
+- **Projects** list the clips each one used; pick a clip to play it right
+  there. **Open in Library** shows the project as a search.
+- **Overview** (next to Clips) shows what a project is made of: clips,
+  total length and size, how many are real 60 fps / 4K / 4K 60, the
+  category mix, the **tags its clips share**, the tags that **go together**
+  on the same clips, and the artists used most.
+  - Tags most of your library carries are left out on their own.
+    Right-click any other tag to **hide it here** - only this screen.
+  - Click a tag or a pair to show just those clips.
+- **Import IDs…** opens the paste panel: paste post IDs or filenames, look
+  them up, and mark the ones you used in a project.
+- Each project can have its own **cover picture** (right-click a project).
 
-Each one says the size it wants, reports the resolution of whatever you
-picked, and tells you in words what is about to be cropped. Drag the crop
-to place it, scroll to pull in closer. The backdrop also has blur and dim
-sliders - it is the ground the app sits on, so it is softened until it
-reads as texture rather than as something to look at.
+---
 
-Nothing is copied: a slot stores where the picture lives plus a focal
-point and a zoom, so the original file is untouched and the header
-re-crops as the window resizes instead of stretching. Move or delete the
-file and the slot simply empties.
+## Beat This
 
-Not slots, on purpose: behind the player and behind the thumbnails. Both
-are covered by a clip seconds after the app opens.
+Runs the [Beat This!](https://github.com/CPJKU/beat_this) neural beat
+tracker (CPJKU, ISMIR 2024, vendored in [`beat_this/`](beat_this/)) on a
+song and exports the beats and downbeats:
 
-Vault projects get a **cover picture** of their own (right-click a project
-→ Cover picture) at 1280 × 720 - the still for the finished video, kept
-with the project instead of loose in a folder, and shown against it in the
-project list.
+| Export | Use |
+|---|---|
+| **Save .beats** | plain `time<TAB>beat` text, as beat_this and Sonic Visualiser read it |
+| **Save EDL for Resolve** | one marker per beat; **Timeline → Import → Timeline Markers from EDL**, with the song at the start of the timeline |
+| **Send to Resolve now** | adds the markers to Resolve's open timeline directly, using its own frame rate and start |
 
-### If it freezes or crashes
-
-The app writes its own post-mortem to `~/.video_tool/freeze.log`
-(`C:\Users\<you>\.video_tool\freeze.log` on Windows).
-
-A hung window is the one failure that normally leaves no evidence: nothing
-crashed, so there is no traceback, and killing it from Task Manager throws
-away the only copy of where it stopped. So a heartbeat runs on the thread
-that draws the window, and a watcher notices when the beat stops and dumps
-every thread's stack to that file. The thread marked `MAIN/UI` is the one
-that is stuck and its top frame is the line to fix. Native crashes inside a
-video or audio library, and errors thrown out of UI callbacks, land in the
-same file.
-
-If playback misbehaves: reproduce it once, then send that file.
-
-### Playing keys
-
-`,` and `.` step one frame - that is how you find the frame a beat lands
-on, and it comes off the decoder already running, so holding it walks
-through a clip rather than waiting on one. Space or Enter plays, arrows
-seek five seconds, Shift+arrows one, Home and End are the ends of the
-clip, a digit jumps that tenth of the way in, `M` mutes. All of them
-defer to the search box, so typing a post ID still types.
-
-First launch: **Settings → Convert Folders** to point Source / Converted /
-4K 60+ / Needs work at your real folders. Library indexes Convert's
-"Converted" folder by default — change that under **Settings → Library**
-if it lives elsewhere.
-
-Convert, Library and Vault only need the dependencies above. Beat This
-needs its own, heavier set — see the next section — and its tab just
-shows an "install these" message and stays disabled until they're
-present, so the rest of the suite runs fine without them.
-
-## Beat This: song → Resolve markers
-
-The **Beat This** tab wraps the vendored [`beat_this/`](beat_this/)
-checkout (the CPJKU beat tracker, ISMIR 2024) for one job: upload a song,
-get beat/downbeat markers you can bring into a DaVinci Resolve timeline.
-
-### Install
-
-The tab's **Setup** panel lists what's present and installs what isn't —
-press **Install dependencies**, then restart the app. **Download model**
-fetches the checkpoint ahead of time so the first analysis isn't a long
-silent wait. Equivalent by hand:
+**Install:** the tab's Setup panel installs what is missing (then restart),
+and **Download model** fetches the model ahead of the first run. By hand:
 
 ```
 pip install torch torchaudio einops rotary-embedding-torch soxr numpy
 ```
 
-Note this deliberately doesn't use `beat_this/requirements.txt` — those
-pins (`torch==2.3.1` and friends) have no wheels for current Python
-versions and fail outright on a new interpreter. If PyTorch won't install,
-get the right build for your machine from
-[pytorch.org](https://pytorch.org/get-started/locally/).
+If PyTorch will not install, get the build for your machine from
+[pytorch.org](https://pytorch.org/get-started/locally/). Audio is read
+with ffmpeg, so anything ffmpeg opens works - mp3, wav, flac, m4a, or a
+video's sound. *Send to Resolve now* needs Resolve open with
+**Preferences → General → External scripting** set to Local.
 
-Audio is decoded with `ffmpeg` (already required above) rather than
-torchaudio, so anything ffmpeg opens works — mp3, wav, flac, m4a, ogg,
-or the audio track of a video file. This matters: recent torchaudio
-delegates `load()` to TorchCodec and raises `Could not load audio from
-"…"` on an ordinary MP3 when it isn't installed.
+The rest of the app runs fine without any of this installed.
 
-DBN postprocessing is optional and needs
-`pip install git+https://github.com/CPJKU/madmom.git` on top.
+---
 
-### Using it
+## Playback
 
-1. Browse to a song, pick a model checkpoint (`final0` is the default;
-   `small*` is faster/lighter) and a device, then **Analyze** (or F5).
-   The first run per checkpoint downloads it and is slower.
-2. The table lists every beat: its time and its position in the bar
-   (1 = downbeat).
-3. Export:
-   - **Save .beats** — the plain `time<TAB>beat number` format `beat_this`
-     and Sonic Visualiser already read.
-   - **Save EDL for Resolve** — a CMX3600 EDL with one marker per beat.
-     Import with **Timeline → Import → Timeline Markers from EDL**.
-     Markers land at record timecode = time into the song, counting from
-     `00:00:00:00` — put the song at the very start of a timeline (or a
-     fresh one) before importing, since EDL marker import always uses
-     absolute record position, not the clip's own position. Pick the
-     frame rate matching your timeline first; timecode is non-drop-frame.
-   - **Send to Resolve now** — skips the file and adds markers straight
-     to Resolve's current timeline via its scripting API. Only works run
-     on the same machine as Resolve, with Resolve open and
-     **Preferences → General → External scripting using** set to Local
-     (or Network), plus `RESOLVE_SCRIPT_API` / `RESOLVE_SCRIPT_LIB` /
-     `PYTHONPATH` set per Resolve's own Developer/Scripting README.
-     Unlike the EDL, this reads the timeline's own frame rate and start
-     frame, so the clip doesn't need to sit at timeline zero.
+The player uses the best engine it finds, in this order (change it under
+**Settings → Player**):
 
-## Search syntax (Library)
+| Engine | Needs | Notes |
+|---|---|---|
+| **libmpv** | `libmpv-2.dll` + `python-mpv` | the one to have: a new clip on screen in about 0.1 s, GPU decoding, no dropped frames at 4K 60 |
+| VLC | [VLC](https://videolan.org) + `python-vlc` | in-process, sound locked to picture |
+| mpv | `mpv` on PATH | runs beside the app |
+| built-in | ffmpeg + `sounddevice` | picture follows the sound device's clock |
 
-`artist:` `character:` `species:` `rating:` `folder:` `id:` `is:` `used:` as
-prefixes, `-term` to exclude, `*` wildcards. `is:untagged`, `is:noid`,
-`is:4k`/`is:no4k`, `is:portrait`/`is:widescreen`/`is:square`, and
-`used:"project name"` (quoted for names with spaces) are the useful
-specials. In-app Help (the tab's Help button) covers the rest.
+**libmpv:** take `libmpv-2.dll` from an `mpv-dev-x86_64-….7z` build at
+[shinchiro/mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases)
+and put it in `%LOCALAPPDATA%\PAZ Suite\mpv\` (or point `PAZ_LIBMPV_DIR`
+at its folder). `python-mpv` comes with `requirements.txt`.
 
-## Layout
+**Looping** is on by default and seamless: on libmpv the end runs into the
+start one frame later, on VLC about 3 ms later.
+
+Which engine is live, and why the others are not, is under the player's
+settings button → *Copy playback report*.
+
+---
+
+## Keyboard
+
+| Keys | Does |
+|---|---|
+| Space / Enter | play / pause |
+| ← → | seek 5 s (Shift: 1 s) |
+| `,` `.` | one frame back / forward |
+| Home / End | start / end of the clip |
+| 0-9 | jump to that tenth of the clip |
+| M | mute |
+| ↑ ↓ | previous / next clip (Library, Vault) |
+| F5 | the tab's main action - scan, sync, look up, analyze |
+| Ctrl+C | copy (Needs 4K 60 window: the selected clips' files) |
+| F1 | every shortcut, for the tab you are on |
+
+All of them leave a text box alone, so typing a post ID still types.
+
+---
+
+## Search syntax
+
+| | |
+|---|---|
+| `tag` / `-tag` | has / has not |
+| `artist:` `character:` `species:` `rating:` `folder:` `id:` | one kind of tag |
+| `*` | wildcard |
+| `used:"project name"` | clips used in a project |
+| `is:4k` `is:no4k` | 4K, or has a 4K copy - or not |
+| `is:portrait` `is:widescreen` `is:square` | shape |
+| `is:untagged` `is:noid` | missing tags / no post ID |
+
+The Library's Help button covers the rest.
+
+---
+
+## Settings
+
+| Tab | What is in it |
+|---|---|
+| Folders | source, converted, 4K 60+, needs work, reports; categories |
+| Encoding | codec, GPU, quality, keyframes, audio |
+| Sorting | Minimum short side, Minimum fps (exact), copy / move / hardlink |
+| Library | indexed folders, thumbnails, tile width, hover preview, tag fetching |
+| Player | loop, theater, 4K copy, which engine |
+| App | e621 account, watch mode, display scale, your pictures, Beat This model |
+
+**Your pictures:** a header strip, a window icon and a blurred backdrop
+under the gallery - each crops itself to the size it needs, and the
+original file is never touched.
+
+---
+
+## Troubleshooting
+
+**The app froze or crashed.** It writes its own post-mortem to
+`%USERPROFILE%\.video_tool\freeze.log`: stalls, hangs (with every thread's
+stack - the one marked `MAIN/UI` is the stuck one) and errors from inside
+the window. Reproduce it once and send that file.
+
+**Topaz says a file "doesn't exist".** The file is fine - Topaz opens each
+clip with a GPU decoder, and while it is rendering it can hold nearly all
+of the graphics card's memory, so a clip added then fails to open. Add the
+next batch when the current one is done.
+
+**It is slow on Windows.** Add `%USERPROFILE%\.video_tool` - only that
+folder, not the library - to Microsoft Defender's exclusions (Windows
+Security → Virus & threat protection → Manage settings → Exclusions). It
+holds thousands of small thumbnail and cache files the app reads all the
+time, and Defender scanning each one is the biggest slowdown the app
+cannot remove by itself.
+
+**Sound and picture drift.** Install libmpv or VLC (see
+[Playback](#playback)); the player's report says which engine is in use.
+
+While it runs, the app keeps Windows awake for a conversion, sync or tag
+fetch you started (the screen can still turn off), asks for 1 ms timers,
+and runs its window thread a notch above normal priority so clicks are
+answered first while ffmpeg or Topaz are busy.
+
+---
+
+## Where things are kept
+
+| | |
+|---|---|
+| `%USERPROFILE%\.video_tool\paz_config.json` | settings |
+| `%USERPROFILE%\.video_tool\paz_library.sqlite3` | the library index and Vault projects |
+| `%USERPROFILE%\.video_tool\e621_meta.sqlite3` | cached e621 tags |
+| `%USERPROFILE%\.video_tool\paz_thumbs\` | gallery thumbnails |
+| `%USERPROFILE%\.video_tool\freeze.log` | stalls, hangs and errors |
+| `%USERPROFILE%\.video_tool\paz_suite.log` | console output when started without one |
+| `%LOCALAPPDATA%\PAZ Suite\mpv\` | `libmpv-2.dll` |
+
+---
+
+## Development
 
 ```
-main.py                     entry point
+pip install pytest pyflakes ruff
+python -m pytest tests -q
+python -m pyflakes paz_suite tools
+python -m ruff check paz_suite tests
+```
+
+Every push runs three checks on GitHub (the **Actions** tab): unit tests
+and lint on Windows with Python 3.14, the same on Python 3.12 with a
+minimal install, and a **smoke run** that starts the real app, visits
+every tab and screenshots it. A failing test is posted as an annotation on
+the run page, so the reason is readable without the log.
+
+<details>
+<summary>Code layout</summary>
+
+```
+main.py, PAZ Suite.pyw      entry points (console / no console)
 paz_suite/
-  config.py                 AppConfig (+ legacy migration)
-  theme.py, format.py       palette/fonts, human-readable formatting
-  fonts/                    Space Grotesk, Bricolage Grotesque, JetBrains Mono
-                            (SIL OFL, licences beside them) - loaded for the
-                            app only at startup, nothing is installed; Lucide.ttf
-                            is the icon set (ISC licence beside it)
-  icons.py                  Lucide glyphs drawn to images for buttons and canvases
-  shortcuts.py              the keyboard-shortcuts sheet (F1), per tab
-  uithread.py               safe hand-off from worker threads to the UI
-  files.py                  proxy-folder filtering, post-ID parsing, open/reveal
-  e621.py                   e621 tag lookup + cache (~/.video_tool/e621_meta.sqlite3,
-                            one row per post; the old e621_meta.json is
-                            imported once and left as a backup)
-  media.py                  ffprobe, thumbnailing, frame/storyboard cache, dhash
-  player_engine.py          shared ffmpeg-decode + ffplay-audio playback engine
-  audio_out.py              audio device output, and the clock the picture follows
-  libmpv_player.py          libmpv playback, in-process - the first choice
-  vlc_player.py             libVLC playback, in-process, same surface as above
-  prefetch.py               reads the clips you are about to play into RAM
-  mpv_player.py             mpv playback over a socket, same surface as above
-  widgets.py                Card/Bar/StatTile/PeekWindow/Toaster/JobPanel/LogView
-  convert_engine.py         encode planning + ffmpeg command/run/verify (no UI)
-  convert_widgets.py        queue table, scrub/play preview, contact sheet, dupe finder
+  app.py                    window shell, tab switching, keyboard dispatch
+  config.py                 settings (+ upgrades from older versions)
+  theme.py, format.py       palette, fonts, sizes; human-readable numbers
+  widgets.py                shared widgets: menus, dialogs, previews, logs
+  uithread.py               hand-off from worker threads to the window
+  watchdog.py               freeze and crash post-mortems
+  winsys.py                 Windows bits: timers, priority, keep-awake, fonts
+
+  convert_engine.py         encode plans, ffmpeg, sorting rules (no UI)
   convert_tab.py            the Convert tab
-  library_db.py             SQLite schema, search parser, Vault mark helpers (no UI)
-  library_player.py         the embedded clip player
-  library_windows.py        hidden tags, help, folders, integrity verifier
+  convert_widgets.py        queue table, preview, contact sheet, duplicates
+  grabber.py                runs Grabber and reads its progress
+  upscale_window.py         the Needs 4K 60 window
+  filedrag.py               Windows file drag and clipboard copy
+
+  library_db.py             SQLite schema, search parser, Vault marks (no UI)
   library_tab.py            the Library tab
+  library_player.py         the embedded player
+  library_windows.py        help, folders, hidden tags, verifier
+  tag_rail.py               the tag sidebar
+  media.py                  ffprobe, thumbnails, hover frames
+  prefetch.py               reads the next clips into memory ahead of time
+  e621.py                   e621 tag lookups, paced, and their cache
+
   vault_tab.py              the Vault tab
-  beat_engine.py            Beat This inference, BPM/TSV/EDL, Resolve scripting (no UI)
+  project_stats.py          a project's overview: totals, shared tags, pairs
+
+  beat_engine.py            Beat This inference, EDL, Resolve scripting
   beat_tab.py               the Beat This tab
-  settings_window.py        the settings dialog
-  app.py                    window shell, tab switcher, keyboard dispatch
-beat_this/                  vendored CPJKU/beat_this checkout (the beat tracker itself)
+  resolve_api.py            DaVinci Resolve scripting
+
+  libmpv_player.py, vlc_player.py, mpv_player.py, player_engine.py,
+  audio_out.py              the playback engines
+  settings_window.py        Settings
+  artwork.py, artwork_window.py   your pictures
+  fonts/                    Space Grotesk, Bricolage Grotesque, JetBrains Mono,
+                            Lucide icons - loaded for the app only, nothing installed
+beat_this/                  vendored CPJKU/beat_this
+tests/                      unit tests
+tools/                      smoke run, CI helpers
 ```
 
-## Note
+</details>
 
-Developed without a display/Tk available, so changes are validated with
-`py_compile`/`pyflakes` and standalone logic tests, not by actually
-running the GUI. Smoke-test after pulling changes.
+---
+
+## Credits
+
+- [Beat This!](https://github.com/CPJKU/beat_this) - CPJKU, beat and downbeat tracking
+- [mpv](https://mpv.io) / [shinchiro builds](https://github.com/shinchiro/mpv-winbuild-cmake), [VLC](https://videolan.org), [FFmpeg](https://ffmpeg.org)
+- [Grabber](https://github.com/Bionus/imgbrd-grabber) - downloads
+- [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) - UI toolkit
+- Fonts: Space Grotesk, Bricolage Grotesque, JetBrains Mono (SIL OFL); icons: [Lucide](https://lucide.dev) (ISC) - licences in `paz_suite/fonts/`
