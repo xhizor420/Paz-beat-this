@@ -136,6 +136,17 @@ def category_colour(folder: str, folders=()) -> str:
     return T.LINE
 
 
+def _tell_vault(tab) -> None:
+    """Let the Vault know its picture of the library is out of date.
+
+    build=False: a Vault that has not been built yet reads everything fresh
+    when it is, and a mark must not be the reason it gets built."""
+    get_tab = getattr(getattr(tab, "app", None), "_tab_object", None)
+    vault = get_tab("Vault", build=False) if get_tab else None
+    if vault is not None:
+        vault.mark_stale()
+
+
 class LibraryTab(ctk.CTkFrame):
 
     def __init__(self, parent, app):
@@ -303,6 +314,21 @@ class LibraryTab(ctk.CTkFrame):
         # is reserved for a real, user-requested full pass (see _fetch_tags).
         if self.records and self.cfg.library_autofetch and self.cfg.e621_enabled:
             self.after(800, self._fetch_tags)
+        self.after(self.RECHECK_EVERY_MS, self._recheck_tick)
+
+    # Left open for days, the app would otherwise only re-check scores
+    # when the tab is opened or a sync ends.
+    RECHECK_EVERY_MS = 6 * 3600 * 1000
+
+    def _recheck_tick(self) -> None:
+        """Every few hours: the same quiet background fetch as opening the
+        tab - new posts, and whatever is due a re-check."""
+        try:
+            if (self.records and self.cfg.library_autofetch and self.cfg.e621_enabled
+                    and not self.busy and not self.tagging):
+                self._fetch_tags()
+        finally:
+            self.after(self.RECHECK_EVERY_MS, self._recheck_tick)
 
     # ── copy ─────────────────────────────────────────────────────────────
 
@@ -1892,6 +1918,7 @@ class LibraryTab(ctk.CTkFrame):
         self._project_colors = loaded["colors"]
         # Built from the whole library, so it cannot outlive this load.
         self._weights = None
+        _tell_vault(self)
         if hasattr(self, "quick_chips"):
             self._refresh_missing_badge()
         # The identity bar carries one live number for the whole suite, so
@@ -4770,9 +4797,15 @@ class LibraryTab(ctk.CTkFrame):
     def _resolve_pair(self, rec: Rec) -> tuple:
         """(what Resolve should treat as the clip, what it should use as
         the proxy). The premium copy leads when there is one; with no
-        premium copy there is nothing to proxy, so the file stands alone."""
+        premium copy there is nothing to proxy, so the file stands alone.
+
+        The proxy is the one the Proxies tab made for the 4K file when
+        there is one - same frames, made for it. The converted copy is the
+        stand-in only until then."""
         if rec.premium_path and os.path.exists(rec.premium_path):
-            return rec.premium_path, rec.path
+            from .proxy_engine import proxy_path
+            made = proxy_path(rec.premium_path)
+            return rec.premium_path, made if os.path.exists(made) else rec.path
         return rec.path, ""
 
     def send_to_resolve(self, recs: list, bin_name: str = "") -> None:
@@ -4825,10 +4858,20 @@ class LibraryTab(ctk.CTkFrame):
             return
         conn = db_connect()
         try:
-            vault_mark(conn, paths, project)
             if project not in self._project_colors:
-                self._project_colors = {name: color for name, color, _n, _t
-                                        in vault_projects_list(conn)}
+                listed = {name: color for name, color, _n, _t
+                          in vault_projects_list(conn)}
+                # A mark on a project with no row of its own is saved and
+                # then never shown: the remembered project behind V can be
+                # one that has since been renamed or cleared.
+                if project not in listed:
+                    palette = T.PROJECT_PALETTE
+                    vault_ensure_project(conn, project,
+                                         palette[len(listed) % len(palette)])
+                    listed = {name: color for name, color, _n, _t
+                              in vault_projects_list(conn)}
+                self._project_colors = listed
+            vault_mark(conn, paths, project)
         finally:
             conn.close()
         colour = self._project_colors.get(project, T.ACCENT2)
@@ -4912,6 +4955,7 @@ class LibraryTab(ctk.CTkFrame):
         # The rail's PROJECTS counts are out of date now. Not redrawn for
         # one mark, but not reused either the next time the rail is.
         self._rail_counts = None
+        _tell_vault(self)
 
     # ── sync (incremental index build) ──────────────────────────────────────
 
@@ -5313,8 +5357,11 @@ class LibraryTab(ctk.CTkFrame):
         todo.extend(refreshing)
 
         if not todo:
-            self.set_status("Every post ID is already tagged or cached, and "
-                            "nothing is due for a refresh yet.", T.OK)
+            if full:
+                # Only when asked: the background run saying "nothing to
+                # do" every few hours is noise.
+                self.set_status("Every post ID is already tagged or cached, and "
+                                "nothing is due for a refresh yet.", T.OK)
             return
         note = f"{len(todo)} posts · {waiting:,} more next time" if waiting else ""
         # Ambient unless the user pressed the button: see _run_fetch.

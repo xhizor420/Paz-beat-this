@@ -83,6 +83,8 @@ class VaultTab(ctk.CTkFrame):
         # itself a fit - see _fit_player.
         self._visible = False
         self._fit_wanted = False
+        # The Library changed something this tab shows - see mark_stale.
+        self._stale = False
 
         self._results: dict = {}   # tree iid -> Rec
         self._unmatched: list = []
@@ -544,6 +546,41 @@ class VaultTab(ctk.CTkFrame):
         self._visible = True
         if self._fit_wanted:
             self._player_resize()
+        self._refresh_if_stale()
+
+    def mark_stale(self) -> None:
+        """The Library marked a clip or reloaded. Most of that happens with
+        this tab behind it, and rebuilding the project list for each of the
+        hundreds of marks in a picking session would be for nobody - so it
+        waits until the tab is looked at."""
+        self._stale = True
+        if self._visible:
+            self.after_idle(self._refresh_if_stale)
+
+    def _refresh_if_stale(self) -> None:
+        if self._stale:
+            self.refresh()
+
+    def refresh(self) -> None:
+        """Show what the database and the Library hold now, keeping the
+        selected project, the focused clip and whatever it is playing."""
+        self._refresh_projects()
+        if self._results:
+            selection = self.tree.selection()
+            self._run_lookup()
+            self.tree.selection_set([iid for iid in selection if iid in self._results])
+        if not self._selected_project:
+            return
+        # Nothing joined or left this project: the rows on screen are right,
+        # and rebuilding them would only throw away the scroll position.
+        clips = self._clips_of(self._selected_project)
+        if (len(clips) == len(self._project_all)
+                and all(new is old for new, old in zip(clips, self._project_all))):
+            self._update_focused_info()
+            return
+        focused = (self._project_clips[self._focused_index]
+                   if self._focused_index is not None else None)
+        self._load_project_clips(keep_path=focused.path if focused else None)
 
     def on_hidden(self) -> None:
         """Another tab is in front now. Sound coming out of a page nobody
@@ -693,6 +730,7 @@ class VaultTab(ctk.CTkFrame):
     # ── projects panel ──────────────────────────────────────────────────
 
     def _refresh_projects(self) -> None:
+        self._stale = False
         for child in self.projects_list.winfo_children():
             child.destroy()
         self._project_widgets = {}
@@ -858,6 +896,11 @@ class VaultTab(ctk.CTkFrame):
             conn.close()
         if self._selected_project == name:
             self._selected_project = new_name
+        # V marks into this name; left as it was, its marks would go to a
+        # project that no longer exists.
+        if self.cfg.last_project == name:
+            self.cfg.last_project = new_name
+            self.cfg.save_soon()
         self._reload_library()
         self._refresh_projects()
         self.set_status(f"Renamed '{name}' to '{new_name}'.", T.OK)
@@ -880,6 +923,10 @@ class VaultTab(ctk.CTkFrame):
             self._project_all = []
             self._tag_filter = ()
             self._show_project_detail()
+        # Cleared on purpose, so V asks again rather than bringing it back.
+        if self.cfg.last_project == name:
+            self.cfg.last_project = ""
+            self.cfg.save_soon()
         self._reload_library()
         self._refresh_projects()
         self.set_status(f"Cleared '{name}'.", T.OK)
@@ -913,25 +960,33 @@ class VaultTab(ctk.CTkFrame):
         except tk.TclError:
             pass
 
-    def _load_project_clips(self) -> None:
+    def _clips_of(self, name: str) -> list:
         library = getattr(self.app, "library", None)
         records = library.records if library else []
-        name = self._selected_project
         clips = [r for r in records if name in r.used_projects]
         clips.sort(key=lambda r: r.name.lower())
+        return clips
+
+    def _load_project_clips(self, keep_path: str | None = None) -> None:
+        name = self._selected_project
         if getattr(self, "_filter_project", None) != name:
             self._tag_filter = ()
             self._filter_project = name
-        self._project_all = clips
-        self._apply_tag_filter()
+        self._project_all = self._clips_of(name)
+        self._apply_tag_filter(keep_path)
 
     # ── overview ─────────────────────────────────────────────────────────
 
-    def _apply_tag_filter(self) -> None:
+    def _apply_tag_filter(self, keep_path: str | None = None) -> None:
         wanted = set(self._tag_filter)
         self._project_clips = [rec for rec in self._project_all
                                if wanted <= (getattr(rec, "tags", None) or set())]
         self._focused_index = 0 if self._project_clips else None
+        if keep_path:
+            for index, rec in enumerate(self._project_clips):
+                if rec.path == keep_path:
+                    self._focused_index = index
+                    break
         self._show_project_detail()
         if self._overview_on:
             self._draw_overview()

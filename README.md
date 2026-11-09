@@ -3,13 +3,14 @@
 **A personal video pipeline for making PMVs** - grab new clips, convert
 them to an edit-ready format, get them to true 4K 60, browse and search
 the whole library, keep track of what each project used, and turn a song
-into beat markers for DaVinci Resolve. Four tabs, one app, Windows first.
+into beat markers for DaVinci Resolve. Five tabs, one app, Windows first.
 
 | Tab | What it is for |
 |---|---|
 | **Convert** | Grab new favorites, encode to MP4 on the GPU, sort into the 4K 60 pool or the needs-work folder, and hand what needs it to Topaz |
 | **Library** | Browse, search and play everything - by artist, character, species, rating, tag, category |
 | **Vault** | Projects: which clips each one used, and what it is made of |
+| **Proxies** | Edit proxies for every 4K 60 clip, frame for frame, for Resolve |
 | **Beat This** | Song → beats and downbeats → markers in Resolve |
 
 ---
@@ -21,6 +22,7 @@ into beat markers for DaVinci Resolve. Four tabs, one app, Windows first.
 - [Convert](#convert)
 - [Library](#library)
 - [Vault](#vault)
+- [Proxies](#proxies)
 - [Beat This](#beat-this)
 - [Playback](#playback)
 - [Keyboard](#keyboard)
@@ -84,8 +86,15 @@ being rounded up.
 - **Scan folders / Start** encode on the GPU (NVENC) with a CPU fallback,
   keep frame rates exactly as they are, and sort each result into the 4K 60
   pool or the needs-work folder.
+- **Sorted by tags.** Grabber files a post under whichever search found it,
+  so one post can land in two folders, or in the wrong one. A scan fetches
+  tags for new clips first, then puts each clip in the category its tags
+  say: **MLP Futa**, **MLP**, **Furry Futa**, **Furry**, in that order.
+  Futa means gynomorph, herm or any intersex tag. A post saved twice is
+  converted once.
 - **Find upscale gaps** opens the **Needs 4K 60** window:
-  - every clip that still needs work, in three sections by what Topaz has
+  - every clip in the needs-work folder that still needs work - those
+    copies, not the originals, are what is copied or dragged - in three sections by what Topaz has
     to do - **Needs 60 fps**, **Needs 4K**, **Needs 4K and 60** - then by
     shape (16:9, 9:16, 1:1…), then by resolution, highest frame rate first;
   - every heading folds, and its **Select all** takes that whole batch - one
@@ -112,6 +121,8 @@ being rounded up.
 - **Search** by any tag; save searches as chips; sort by score, newest,
   length, or **Like this** - everything ranked by how much it shares with
   the selected clip.
+- **Tags and scores stay current** in the background: new posts are
+  re-checked daily, older ones weekly, a hundred per request.
 - The tag sidebar (collapsible) shows what is in the current results.
 - Right-click a card for play, folder, e621, fetch tags, add to Resolve,
   mark as used and copy.
@@ -134,6 +145,39 @@ being rounded up.
 - **Import IDs…** opens the paste panel: paste post IDs or filenames, look
   them up, and mark the ones you used in a project.
 - Each project can have its own **cover picture** (right-click a project).
+- Clips marked as used in the Library show up here the next time you open
+  the tab - new projects, counts and the project's clip list.
+
+---
+
+## Proxies
+
+Edit proxies for the 4K 60 pool, so a Resolve timeline plays smoothly
+while renders still come off the 4K files.
+
+- Covers the `.mp4` files directly in each category folder of the 4K pool -
+  nothing else. Each proxy goes in that category's own **Proxy** folder,
+  same name, `.mov` (`Furry\Proxy\4182933.mov`), where Resolve looks for it.
+- A proxy is the 4K file made smaller and nothing else: **every frame, at
+  the same frame rate**, the sound copied as it is. H.264 on the GPU,
+  1920 on the long side, CQ 20, a keyframe every half second - picked by
+  measuring it against ProRes Proxy, DNxHR and HEVC on this pool.
+- **Make proxies** works through everything that needs one. **Stop** (or
+  Esc) throws away only the one being made; pressing it again carries on.
+  Proxies already made are never made again, unless their 4K file changes.
+- Nothing half-made is ever left under a proxy's name: each one is written
+  as `.partial.mov`, checked - frame count, frame rate, length, a full
+  decode - and only then renamed. Anything that fails is listed under
+  **Failed** with the reason.
+- The pool can be added to while it runs. A 4K file written to in the
+  last two minutes waits for a later pass, and when a run reaches the end
+  it looks again and carries on with whatever arrived meanwhile.
+- **Proxies in Resolve, without linking by hand.** With Resolve open, every
+  clip in the open project that has a proxy gets it linked - clips added by
+  PAZ, dragged in by hand, or added before their proxy existed: when a run
+  ends, every 25 proxies during one, on **Link in Resolve**, and on **Add to
+  Resolve**. Turn on **Playback → Proxy Handling → Prefer Proxies** in
+  Resolve once and the timeline plays them; renders still use the 4K files.
 
 ---
 
@@ -333,6 +377,9 @@ paz_suite/
 
   vault_tab.py              the Vault tab
   project_stats.py          a project's overview: totals, shared tags, pairs
+
+  proxy_engine.py           what needs a proxy, making one, checking it
+  proxy_tab.py              the Proxies tab
 
   beat_engine.py            Beat This inference, EDL, Resolve scripting
   beat_tab.py               the Beat This tab

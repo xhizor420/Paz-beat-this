@@ -41,6 +41,19 @@ CREATE TABLE IF NOT EXISTS vault_marks (
     marked_at INTEGER,
     PRIMARY KEY (path, project)
 );
+CREATE TABLE IF NOT EXISTS proxies (
+    master       TEXT PRIMARY KEY,
+    proxy        TEXT,
+    master_size  INTEGER,
+    master_mtime INTEGER,
+    proxy_size   INTEGER,
+    status       TEXT,
+    reason       TEXT,
+    recipe       TEXT,
+    frames       INTEGER,
+    rate         TEXT,
+    made_at      INTEGER
+);
 """
 
 
@@ -504,6 +517,30 @@ def vault_projects_list(conn: sqlite3.Connection) -> list:
         "LEFT JOIN files f ON f.path = m.path "
         "GROUP BY p.name ORDER BY p.created_at DESC").fetchall()
     return [(name, color, count, created_at) for name, color, created_at, count in rows]
+
+
+# ── proxies ─────────────────────────────────────────────────────────────
+# One row per 4K master: where its proxy is and what was last found out
+# about it. It is what lets a run skip every proxy already made without
+# opening a single file - see proxy_engine.scan.
+
+_PROXY_COLUMNS = ("proxy", "master_size", "master_mtime", "proxy_size", "status",
+                  "reason", "recipe", "frames", "rate", "made_at")
+
+
+def proxy_rows(conn: sqlite3.Connection) -> dict:
+    """master path -> row as a dict."""
+    rows = conn.execute(
+        f"SELECT master, {', '.join(_PROXY_COLUMNS)} FROM proxies").fetchall()
+    return {row[0]: dict(zip(_PROXY_COLUMNS, row[1:])) for row in rows}
+
+
+def proxy_record(conn: sqlite3.Connection, master: str, fields: dict) -> None:
+    values = [fields.get(column) for column in _PROXY_COLUMNS]
+    conn.execute(
+        f"INSERT OR REPLACE INTO proxies (master, {', '.join(_PROXY_COLUMNS)}) "
+        f"VALUES ({', '.join('?' * (len(_PROXY_COLUMNS) + 1))})", [master, *values])
+    conn.commit()
 
 
 def vault_marks_by_path(conn: sqlite3.Connection) -> dict:

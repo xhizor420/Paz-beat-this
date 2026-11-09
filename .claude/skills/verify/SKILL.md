@@ -37,7 +37,7 @@ until DISPLAY=:99 xdpyinfo >/dev/null 2>&1; do sleep 1; done
 DISPLAY=:99 /usr/bin/python3.12 main.py          # run_in_background
 ```
 
-Window is `PAZ Suite  0.8 beta`, positioned 0,0. Its **size follows the
+Window is `PAZ Suite  0.10 beta`, positioned 0,0. Its **size follows the
 display** (~78% of screen width, floor 1760x1020, clamped to fit), so a
 1920x1080 Xvfb gives 1760x960 and a 3840x2160 one gives ~2992x1780. Ask
 rather than assume:

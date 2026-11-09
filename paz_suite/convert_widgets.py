@@ -1576,12 +1576,17 @@ class DuplicateWindow(ctk.CTkToplevel):
                 yes="Delete", danger=True):
             return
         removed = 0
+        stuck = []
         for path in losers:
             try:
                 os.remove(path)
                 removed += 1
-            except OSError:
-                pass
-        card.destroy()
+            except OSError as exc:
+                stuck.append(f"{os.path.basename(path)}: {exc}")
         self.tab.log(f"Removed {removed} duplicate copies", "warn")
+        if stuck:
+            # Leave the card up: these are still on disk.
+            self.tab.log("Could not delete " + "; ".join(stuck), "fail")
+        else:
+            card.destroy()
         self.tab.refresh_census()

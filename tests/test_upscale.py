@@ -14,19 +14,24 @@ from paz_suite import filedrag
 
 def test_a_folder_lists_only_clips_that_are_not_4k_60(tmp_path):
     out = tmp_path / "out"
+    need = tmp_path / "need"
     prem = tmp_path / "prem"
     folders = ["Furry", "MLP", "Furry Futa", "MLP Futa"]
     for folder in folders:
         (out / folder).mkdir(parents=True)
+        (need / folder).mkdir(parents=True)
         (prem / folder).mkdir(parents=True)
-    (out / "Furry" / "done.mp4").write_bytes(b"x")
+    # The needs-work copies are what is listed; the library knows the
+    # originals, under the converted folder, by the same name.
+    (need / "Furry" / "done.mp4").write_bytes(b"x")
     (prem / "Furry" / "done.mp4").write_bytes(b"x")
-    (out / "Furry" / "short.mp4").write_bytes(b"x" * 2048)
-    (out / "Furry" / "already.mp4").write_bytes(b"x")
-    (out / "MLP" / "slow.mp4").write_bytes(b"x")
+    (need / "Furry" / "short.mp4").write_bytes(b"x" * 2048)
+    (need / "Furry" / "already.mp4").write_bytes(b"x")
+    (need / "MLP" / "slow.mp4").write_bytes(b"x")
+    (out / "MLP" / "only_converted.mp4").write_bytes(b"x")
     cfg = AppConfig(
-        output_root=str(out), premium_root=str(prem), subfolders=folders,
-        min_height=2160, min_fps=60)
+        output_root=str(out), upscale_root=str(need), premium_root=str(prem),
+        subfolders=folders, min_height=2160, min_fps=60)
     details = {
         os.path.normcase(str(out / "Furry" / "short.mp4")): (1920, 1080, 30.0, 12.0),
         os.path.normcase(str(out / "Furry" / "already.mp4")): (3840, 2160, 60.0, 8.0),
@@ -38,7 +43,10 @@ def test_a_folder_lists_only_clips_that_are_not_4k_60(tmp_path):
     assert "already.mp4" not in furry
     assert furry["short.mp4"].need == "4K and 60"
     assert furry["short.mp4"].size == 2048
+    # The file handed to Topaz is the needs-work copy.
+    assert furry["short.mp4"].path == str(need / "Furry" / "short.mp4")
     assert [clip.need for clip in found["MLP"]] == ["60 fps"]
+    assert [clip.name for clip in found["MLP"]] == ["slow.mp4"]
     assert found["Furry Futa"] == []
     assert found["MLP Futa"] == []
 

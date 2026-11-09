@@ -107,6 +107,51 @@ def test_tags_already_fetched_ride_along(tmp_path):
     assert cells["1005.webm"] == {}
 
 
+def test_sorting_by_tags_follows_the_tags_and_converts_a_double_once(tmp_path):
+    """Grabber saved 3001 under both searches; its tags say Furry Futa.
+    3002 is tagged plain Furry; 3003 has no tags and stays put."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    for folder in ("Furry", "Furry Futa"):
+        (src / folder).mkdir(parents=True)
+    for name in ("3001.webm", "3002.webm", "3003.webm"):
+        (src / "Furry" / name).write_bytes(b"x")
+    (src / "Furry Futa" / "3001.webm").write_bytes(b"x")
+    (src / "Furry Futa" / "3002.webm").write_bytes(b"x")
+    tags = {"3001": {"tags": "gynomorph female"}, "3002": {"tags": "male female"}}
+
+    class Meta:
+        def get(self, pid):
+            return tags.get(pid)
+
+    rows, skipped, *_ = scan_sources(["Furry", "Furry Futa"], EXTS, False, str(src),
+                                     str(out), emeta=Meta(), by_tags=True)
+    assert sorted((r[1], os.path.basename(os.path.dirname(r[2])), r[0]) for r in rows) == [
+        ("3001.webm", "Furry", "Furry Futa"),
+        ("3002.webm", "Furry", "Furry"),
+        ("3003.webm", "Furry", "Furry"),
+    ]
+    assert all(r[3] == str(out / r[0] / (r[1][:-5] + ".mp4")) for r in rows)
+    assert skipped == 2                 # the second copies of 3001 and 3002
+
+
+def test_a_clip_converted_where_grabber_put_it_is_not_converted_again(tmp_path):
+    """Its tags changed since: moving it is Check categories' job."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    (src / "Furry").mkdir(parents=True)
+    (out / "Furry").mkdir(parents=True)
+    (src / "Furry" / "4001.webm").write_bytes(b"x")
+    (out / "Furry" / "4001.mp4").write_bytes(b"done")
+
+    class Meta:
+        def get(self, pid):
+            return {"tags": "gynomorph"}
+
+    rows, skipped, *_ = scan_sources(["Furry"], EXTS, False, str(src), str(out),
+                                     emeta=Meta(), by_tags=True,
+                                     categories=["Furry", "Furry Futa"])
+    assert rows == [] and skipped == 1
+
+
 def test_a_scan_is_only_started_by_the_newest_request():
     """Two scans in flight: only the newer one lands in the table."""
     landed = []

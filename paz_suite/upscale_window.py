@@ -27,7 +27,7 @@ from .filedrag import copy_files, drag_files
 from .files import open_in_explorer
 from .format import fmt_len, fmt_size, fps_label
 from .tag_rail import fit_text
-from .theme import T, font, label_style, pt, px, window_size
+from .theme import T, button_style, font, label_style, pt, px, window_size
 from .widgets import PrimaryButton, menu_rule, popup_menu, tell, tip
 
 # Card measured at 100%. px() grows it with the rest of the window.
@@ -317,14 +317,19 @@ class UpscaleWindow(ctk.CTkToplevel):
             bar, placeholder_text="Filter", width=170, height=30,
             font=font(11), corner_radius=T.R_SM, fg_color=T.INPUT,
             border_color=T.LINE, border_width=1, text_color=T.TEXT)
-        self.filter.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        self.fold_btn = ctk.CTkButton(
+            bar, text="Collapse all", width=110, height=30, corner_radius=T.R_SM,
+            command=self._fold_all, **button_style("text"))
+        self.fold_btn.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        tip(self.fold_btn, "Fold every heading in this folder, or open them all again")
+        self.filter.grid(row=0, column=2, sticky="e", padx=(0, 8))
         self.filter.bind("<KeyRelease>", self._filter_soon)
         # The window's one main action, so the filled button - in the
         # window's own orange.
         self.copy_btn = PrimaryButton(
             bar, T.WARN, text="Copy", width=140, height=30, corner_radius=T.R_SM,
             command=self._copy, state="disabled")
-        self.copy_btn.grid(row=0, column=2, sticky="e")
+        self.copy_btn.grid(row=0, column=3, sticky="e")
         tip(self.copy_btn,
             "Puts the selected clips on the clipboard, like Copy in Explorer. "
             "Paste them into Topaz with Ctrl+V. (Ctrl+C)")
@@ -593,7 +598,7 @@ class UpscaleWindow(ctk.CTkToplevel):
             self._draw_heading(f"{need_title(need)}  ·  {count(len(in_section))}",
                                in_section, y, left, right, section_h, section_key, 0)
             y += section_h
-            if section_key in self.collapsed:
+            if self._is_folded(section_key):
                 continue
             for shape, groups in by_shape:
                 in_shape = [clip.path for _h, members in groups for clip in members]
@@ -601,7 +606,7 @@ class UpscaleWindow(ctk.CTkToplevel):
                 self._draw_heading(f"{ratio_title(shape)}  ·  {count(len(in_shape))}",
                                    in_shape, y, left, right, head_h, shape_key, 1)
                 y += head_h
-                if shape_key in self.collapsed:
+                if self._is_folded(shape_key):
                     y += px(4)
                     continue
                 for height, members in groups:
@@ -610,7 +615,7 @@ class UpscaleWindow(ctk.CTkToplevel):
                     self._draw_heading(f"{_height_label(height)}  ·  {count(len(paths))}",
                                        paths, y, left, right, band_h, group_key, 2)
                     y += band_h
-                    if group_key in self.collapsed:
+                    if self._is_folded(group_key):
                         y += px(4)
                         continue
                     for k, clip in enumerate(members):
@@ -623,6 +628,7 @@ class UpscaleWindow(ctk.CTkToplevel):
                     rows = (len(members) + cols - 1) // cols
                     y += rows * (card_h + gap) + px(8)
         self.canvas.configure(scrollregion=(0, 0, width, y + pad))
+        self._update_fold_btn()
 
     def _draw_heading(self, label: str, paths: list, y: int, left: int,
                       right: int, head_h: int, key: tuple, level: int) -> None:
@@ -637,7 +643,7 @@ class UpscaleWindow(ctk.CTkToplevel):
         n = len(paths)
         section = level == 0
         title_font = (self._section_font, self._head_font, self._band_font)[level]
-        folded = key in self.collapsed
+        folded = self._is_folded(key)
         ink = (T.WARN, T.TEXT, T.DIM)[level]
         arrow = "▸" if folded else "▾"
         arrow_w = title_font.measure("▾") + px(8)
@@ -752,7 +758,12 @@ class UpscaleWindow(ctk.CTkToplevel):
                 return
             if clip.path in self._photos:
                 continue
-            dest = os.path.join(media.THUMB_DIR, media.thumb_key(clip.path))
+            # The original in the converted folder usually has its Library
+            # thumbnail already; the needs-work copy is the same picture.
+            original = os.path.join(self.tab.cfg.output_root, clip.folder, clip.name)
+            dest = os.path.join(media.THUMB_DIR, media.thumb_key(original))
+            if not os.path.isfile(dest):
+                dest = os.path.join(media.THUMB_DIR, media.thumb_key(clip.path))
             if not os.path.isfile(dest):
                 media.make_thumb(clip.path, clip.duration or 0, stored_w)
             if gen != self._thumb_gen or not os.path.isfile(dest):
@@ -815,6 +826,47 @@ class UpscaleWindow(ctk.CTkToplevel):
             if x0 <= x <= x1 and y0 <= y <= y1:
                 return key
         return None
+
+    def _is_folded(self, key: tuple) -> bool:
+        """Folded, unless a filter is typed: a search should show what it
+        found, not a heading with its matches folded away under it."""
+        return key in self.collapsed and not self.filter.get().strip()
+
+    def _all_keys(self) -> set:
+        """Every heading this folder has, at all three levels."""
+        keys = set()
+        for need, by_shape in sections(self._visible()):
+            keys.add(("s", self._folder, need))
+            for shape, groups in by_shape:
+                keys.add(("r", self._folder, need, shape))
+                for height, _members in groups:
+                    keys.add(("g", self._folder, need, shape, height))
+        return keys
+
+    def _sections_folded(self) -> bool:
+        """Every section heading folded - which is all that shows then.
+        Decided on the sections alone: clips still being measured land in
+        new groups under them, and those must not count as "still open"."""
+        keys = {("s", self._folder, need) for need, _ in sections(self._visible())}
+        return bool(keys) and keys <= self.collapsed
+
+    def _fold_all(self) -> None:
+        """Collapse every heading - a short list of sections to open the
+        one you want - or, when they are all folded, open everything in
+        this folder again."""
+        if self._sections_folded():
+            self.collapsed.difference_update(
+                {key for key in self.collapsed if key[1] == self._folder})
+        else:
+            self.collapsed.update(self._all_keys())
+        self.canvas.yview_moveto(0)
+        self._layout()
+        self._start_thumbs([slot["clip"] for slot in self._slots.values()
+                            if slot["clip"].path not in self._photos])
+
+    def _update_fold_btn(self) -> None:
+        self.fold_btn.configure(
+            text="Expand all" if self._sections_folded() else "Collapse all")
 
     def _toggle(self, key: tuple) -> None:
         """Fold a heading's cards away, or bring them back."""

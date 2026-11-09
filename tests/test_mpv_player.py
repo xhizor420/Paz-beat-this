@@ -83,7 +83,7 @@ def test_the_command_line_never_asks_for_low_latency(player, monkeypatch):
     monkeypatch.setattr(mp, "mpv_path", lambda: "/usr/bin/mpv")
     monkeypatch.setattr(mp.MpvPlayer, "_connect", lambda self, timeout=10.0: False)
     player.widget = FakeWidget()
-    player._spawn()               # the synchronous half of _start
+    player._spawn(None, player.widget.winfo_id())   # the synchronous half of _start
 
     cmd = seen["cmd"]
     assert not any("low-latency" in part for part in cmd)
@@ -110,8 +110,31 @@ def test_the_video_output_override_is_passed_through(player, monkeypatch):
         def winfo_id(self): return 1
     player.widget = FakeWidget()
     player.vo = "x11"
-    player._spawn()                       # no argument, as load() leads to
+    player._spawn(None, 1)                # no vo, as load() leads to
     assert "--vo=x11" in seen["cmd"]
+
+
+def test_closing_while_mpv_starts_leaves_no_mpv_running(player, monkeypatch):
+    """shutdown() during the start used to miss the process the start went
+    on to make - an invisible mpv.exe holding the clip open."""
+    killed = []
+
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): killed.append(True)
+        def wait(self, timeout=None): return 0
+
+    monkeypatch.setattr(mp.subprocess, "Popen", lambda cmd, **kw: FakeProc())
+    monkeypatch.setattr(mp, "mpv_path", lambda: "/usr/bin/mpv")
+    monkeypatch.setattr(mp.MpvPlayer, "_connect", lambda self, timeout=10.0: True)
+    monkeypatch.setattr(mp.threading, "Thread",
+                        lambda target, args=(), **kw: type("T", (), {
+                            "start": lambda self: target(*args)})())
+    gen = player._gen
+    player.shutdown()                     # closed before the start ran
+    player._start_blocking(None, 1, gen)
+    assert player._proc is None
+    assert killed
 
 
 def test_seek_is_absolute_and_clamped(player):

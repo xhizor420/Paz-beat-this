@@ -139,6 +139,91 @@ def test_a_refused_proxy_still_imports_the_clip(fake_resolve):
     assert "duration doesn't match" in message
 
 
+class PoolClip:
+    """A clip already in the media pool, with a file and maybe a proxy."""
+
+    def __init__(self, path, proxy="", refuse=False):
+        self.path, self.proxy, self.refuse, self.asked = path, proxy, refuse, 0
+
+    def GetClipProperty(self, key):
+        return {"File Path": self.path, "Proxy Media Path": self.proxy,
+                "File Name": os.path.basename(self.path)}.get(key, "")
+
+    def LinkProxyMedia(self, path):
+        self.asked += 1
+        if self.refuse:
+            return False
+        self.proxy = path
+        return True
+
+
+class PoolFolder(FakeFolder):
+    def __init__(self, name, clips=(), subs=()):
+        super().__init__(name)
+        self.clips, self.subs = list(clips), list(subs)
+
+    def GetClipList(self):
+        return self.clips
+
+    def GetSubFolderList(self):
+        return self.subs
+
+
+def project_with(monkeypatch, root):
+    pool = FakePool()
+    pool.root = root
+
+    class Project:
+        def GetMediaPool(self):
+            return pool
+
+    monkeypatch.setattr(ra, "current_project", lambda: (Project(), None))
+
+
+def test_every_clip_in_the_project_gets_its_proxy(monkeypatch, tmp_path):
+    proxies = {}
+    for name in ("a", "b", "c", "d"):
+        proxies[str(tmp_path / f"{name}.mp4")] = str(tmp_path / f"{name}.mov")
+        (tmp_path / f"{name}.mov").write_bytes(b"0")
+    loose = PoolClip(str(tmp_path / "a.mp4"))                       # dragged in by hand
+    nested = PoolClip(str(tmp_path / "b.mp4"))                      # in a bin in a bin
+    done = PoolClip(str(tmp_path / "c.mp4"), proxy=str(tmp_path / "c.mov"))
+    refused = PoolClip(str(tmp_path / "d.mp4"), refuse=True)
+    other = PoolClip(str(tmp_path / "song.wav"))                    # not a pool master
+    root = PoolFolder("Master", [loose, other],
+                      [PoolFolder("PMV", [done], [PoolFolder("Cuts", [nested, refused])])])
+    project_with(monkeypatch, root)
+
+    ok, message, linked = ra.link_proxies(lambda path: proxies.get(path, ""))
+    assert ok and linked == 2
+    assert loose.proxy.endswith("a.mov") and nested.proxy.endswith("b.mov")
+    assert done.asked == 0, "an already-linked clip is left alone"
+    assert other.asked == 0
+    assert "1 already linked" in message and "1 turned down" in message
+
+
+def test_a_proxy_not_made_yet_is_not_linked(monkeypatch, tmp_path):
+    clip = PoolClip(str(tmp_path / "a.mp4"))
+    project_with(monkeypatch, PoolFolder("Master", [clip]))
+    ok, message, linked = ra.link_proxies(lambda path: str(tmp_path / "a.mov"))
+    assert ok and linked == 0 and clip.asked == 0
+
+
+def test_no_resolve_open_is_an_answer_not_a_crash(monkeypatch):
+    monkeypatch.setattr(ra, "current_project", lambda: (None, "No project open in Resolve."))
+    ok, message, linked = ra.link_proxies(lambda path: "")
+    assert not ok and linked == 0 and "No project" in message
+
+
+def test_adding_clips_also_links_ones_already_in_the_pool(fake_resolve):
+    master, proxy, item, pool, storage = fake_resolve
+    already = PoolClip(master)
+    pool.root = PoolFolder("Master", [already])
+    storage.items = []                     # Resolve skipped it: already there
+    ok, message = ra.import_clips([(master, proxy)])
+    assert already.proxy == proxy
+
+
 def test_a_clip_with_no_premium_copy_goes_in_on_its_own(fake_resolve):
     master, _proxy, item, _pool, _storage = fake_resolve
     ok, message = ra.import_clips([(master, "")])

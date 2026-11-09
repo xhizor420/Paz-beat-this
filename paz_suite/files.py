@@ -167,7 +167,13 @@ def open_in_explorer(path: str, select: bool = True) -> None:
                 # switch with nothing attached - Explorer then ignores the
                 # path and opens Documents. The clip the user asked to be
                 # shown is nowhere on screen.
-                subprocess.Popen(["explorer", "/select," + os.path.normpath(path)])
+                # And the path quoted on its own. Passed as a list, Python
+                # quotes the whole argument once the path has a space in it
+                # ("Need Upscale", "Main MP4") - "/select,P:\...", which
+                # Explorer does not read as the switch at all, so nothing
+                # was shown. A command line written out by hand keeps the
+                # quotes where Explorer wants them: /select,"<path>".
+                subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
             else:
                 os.startfile(os.path.dirname(path) if os.path.isfile(path) else path)
         elif sys.platform == "darwin":

@@ -123,17 +123,24 @@ def measured(cfg, clip: GapClip, width, height, fps, duration) -> GapClip | None
 
 
 def clips_needing_upscale(cfg, details: dict | None = None) -> dict[str, list[GapClip]]:
-    """Each category's converted clips that are not already 4K 60.
+    """Each category's clips in the needs-work folder that are not 4K 60 yet.
+
+    These are the copies made for Topaz (sorting puts them there), and
+    they are what is listed and handed over - not the originals in the
+    converted folder, which the Library's player and read-ahead use.
 
     A clip is out once a file with the same name sits in the 4K folder.
     When the library already knows the picture, a clip that is itself
     already 4K 60 is left out too — that one wants Promote, not Topaz.
-    `details` maps a normalised path to (width, height, fps, duration).
+    `details` maps a normalised path to (width, height, fps, duration);
+    the library knows the original, so a copy is looked up by the
+    original's path - same folder and name under the converted folder.
     """
     details = details or {}
     found = {folder: [] for folder in cfg.subfolders}
     for folder in cfg.subfolders:
-        source_dir = os.path.join(cfg.output_root, folder)
+        source_dir = os.path.join(cfg.upscale_root, folder)
+        original_dir = os.path.join(cfg.output_root, folder)
         premium_dir = os.path.join(cfg.premium_root, folder)
         if not os.path.isdir(source_dir):
             continue
@@ -163,7 +170,9 @@ def clips_needing_upscale(cfg, details: dict | None = None) -> dict[str, list[Ga
             except OSError:
                 size = 0
             clip = GapClip(folder=folder, name=entry.name, path=entry.path, size=size)
-            known = details.get(os.path.normcase(entry.path))
+            known = (details.get(os.path.normcase(entry.path))
+                     or details.get(os.path.normcase(
+                         os.path.join(original_dir, entry.name))))
             if known:
                 clip = measured(cfg, clip, *known)
                 if clip is None:
@@ -551,16 +560,32 @@ def _discard(path: str) -> None:
 
 
 def transfer(source: str, dest: str, mode: str) -> None:
-    """copy / move / hardlink, with a copy fallback if linking is impossible."""
+    """copy / move / hardlink, with a copy fallback if linking is impossible.
+
+    Anything that copies bytes writes beside the destination and is renamed
+    into place only once complete: one cut off halfway must not leave a
+    short clip under the real name, which every later sort would skip as
+    already there."""
     import os
+    partial = dest + ".partial"
+
+    def via_partial(do) -> None:
+        _discard(partial)
+        try:
+            do(partial)
+            os.replace(partial, dest)
+        except BaseException:
+            _discard(partial)
+            raise
+
     if mode == "move":
-        shutil.move(source, dest)
+        via_partial(lambda to: shutil.move(source, to))
     elif mode == "hardlink":
         try:
             if os.path.exists(dest):
                 os.remove(dest)
             os.link(source, dest)
         except OSError:
-            shutil.copy2(source, dest)
+            via_partial(lambda to: shutil.copy2(source, to))
     else:
-        shutil.copy2(source, dest)
+        via_partial(lambda to: shutil.copy2(source, to))

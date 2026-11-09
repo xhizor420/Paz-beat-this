@@ -23,10 +23,12 @@ from datetime import datetime
 from .config import CONFIG_DIR, E621_DB_PATH, E621_META_LOG, E621_META_PATH
 
 APP_NAME = "PAZ Suite"
-# Still finding its edges - Resolve, the beat models and the
-# 4K paths all landed recently. 1.0 when those have been lived
-# with for a while.
-APP_VERSION = "0.8 beta"
+# 0.10: the Proxies tab - frame-exact edit proxies for the 4K pool - and
+# the Vault keeping up with marks made in the Library.
+# 0.9: tag-sorted Convert, a hundred tags per request, the Needs 4K 60
+# window, Library cards and the Vault overview. 1.0 when those have
+# been lived with for a while.
+APP_VERSION = "0.10 beta"
 
 E621_API = "https://e621.net/posts/{pid}.json"
 E621_POST = "https://e621.net/posts/{pid}"
@@ -86,6 +88,10 @@ GONE_FOR_GOOD = frozenset({404, 410})
 # Nothing is cached from a failed fetch, so the posts not reached are
 # simply first in the queue next time.
 GIVE_UP_AFTER = 8
+# Seconds to wait before asking again after a batch request failed,
+# times the failures in a row (capped) - not straight back at a server
+# that is struggling or rate limiting.
+RETRY_PAUSE = 2.0
 
 # Artist-category tags that aren't actually artists.
 _ARTIST_NOISE = {"conditional_dnp", "avoid_posting", "unknown_artist",
@@ -93,17 +99,19 @@ _ARTIST_NOISE = {"conditional_dnp", "avoid_posting", "unknown_artist",
 
 # ── soft refresh schedule ──────────────────────────────────────────────────
 #
-# A post's score and tags mostly move while it's new; a post from years ago
-# has effectively stopped changing. (post_age_days, recheck_every_days) -
-# first matching age band wins. Applied against how old the POST is on
-# e621, not how long it's been in the local library, so a freshly-uploaded
-# clip you tagged last year still gets checked often if the post itself is
-# recent.
+# A post's votes and tags move fastest while it is new, and keep coming in
+# slowly for years. (post_age_days, recheck_every_days) - first matching
+# age band wins. Applied against how old the POST is on e621, not how long
+# it's been in the local library, so a freshly-uploaded clip you tagged
+# last year still gets checked often if the post itself is recent.
+#
+# Months, it used to be - six for anything over a year old - when every
+# post was its own request. A hundred go in one now (fetch_many), so even
+# weekly for the whole library is about sixteen requests a day.
 _REFRESH_SCHEDULE = (
-    (30, 3),      # under a month old: recheck every 3 days
-    (180, 14),    # under half a year: every 2 weeks
-    (365, 60),    # under a year: every 2 months
-    (float("inf"), 180),   # older: every 6 months
+    (7, 1),       # under a week old: every day
+    (30, 2),      # under a month: every other day
+    (float("inf"), 7),     # older: every week
 )
 
 
@@ -470,6 +478,84 @@ class E621Meta:
         for pid, record in found.items():
             self._keep(pid, record)
         return {"records": found}
+
+    def fetch_all(self, pids, user: str = "", key: str = "", stop=None,
+                  progress=None, give_up: int = GIVE_UP_AFTER) -> dict:
+        """Every one of these posts: a hundred to a request, then one at a
+        time for whatever a search leaves out (only a lookup may mark a
+        post missing). Stops on `stop` being set, or after `give_up`
+        failures in a row. `progress(done, total)` after each request.
+
+        Returns {"hits", "missing", "failed", "error"} - counts, and the
+        last error. Saves as it goes."""
+        todo = list(dict.fromkeys(str(p) for p in pids if str(p).isdigit()))
+        out = {"hits": 0, "missing": 0, "failed": 0, "error": ""}
+        in_a_row = 0
+        answered = 0
+
+        def stopped():
+            return stop is not None and stop.is_set()
+
+        def one(pid) -> bool:
+            nonlocal in_a_row
+            record = self.fetch(pid, user, key)
+            if record.get("error") and not record.get("missing"):
+                out["failed"] += 1
+                out["error"] = record["error"]
+                in_a_row += 1
+                return in_a_row < give_up
+            out["missing" if record.get("missing") else "hits"] += 1
+            in_a_row = 0
+            return True
+
+        at = 0
+        try:
+            while at < len(todo) and not stopped():
+                chunk = todo[at:at + BATCH_SIZE]
+                if not self.batching:
+                    if not one(chunk[0]):
+                        out["failed"] += len(todo) - at - 1
+                        break
+                    at += 1
+                    answered += 1
+                else:
+                    answer = self.fetch_many(chunk, user, key)
+                    if answer.get("unsupported"):
+                        self.batching = False
+                        continue
+                    if answer.get("error"):
+                        out["error"] = answer["error"]
+                        in_a_row += 1
+                        if in_a_row >= give_up:
+                            out["failed"] += len(todo) - at
+                            break
+                        pause = RETRY_PAUSE * min(in_a_row, 5)
+                        if stop is not None:
+                            stop.wait(pause)
+                        elif pause:
+                            time.sleep(pause)
+                        continue
+                    records = answer["records"]
+                    out["hits"] += len(records)
+                    in_a_row = 0
+                    reached = at + len(chunk)
+                    for i, pid in enumerate(chunk):
+                        if pid not in records and (stopped() or not one(pid)):
+                            if not stopped():
+                                out["failed"] += len(todo) - (at + i + 1)
+                            # The bar shows how far it really got, not full.
+                            reached = at + i + 1
+                            at = len(todo)
+                            break
+                    else:
+                        at = reached
+                    answered = min(reached, len(todo))
+                    self.checkpoint()
+                if progress:
+                    progress(answered, len(todo))
+        finally:
+            self.save()
+        return out
 
     # ── soft refresh ────────────────────────────────────────────────────
 

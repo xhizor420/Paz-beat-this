@@ -26,6 +26,7 @@ from .convert_tab import ConvertTab
 from .library_tab import LibraryTab
 from .vault_tab import VaultTab
 from .beat_tab import BeatTab
+from .proxy_tab import ProxyTab
 from .settings_window import SettingsWindow
 from .library_windows import HelpWindow
 from .shortcuts import open_shortcuts
@@ -33,7 +34,7 @@ from .watchdog import Watchdog
 from . import watchdog
 from . import appicon, artwork, audio_out, heap, icons, libmpv_player, uithread, vlc_player, winsys
 
-TAB_NAMES = ("Convert", "Library", "Vault", "Beat This")
+TAB_NAMES = ("Convert", "Library", "Vault", "Proxies", "Beat This")
 
 
 class HeaderSlot:
@@ -583,6 +584,7 @@ class PazApp:
     _TAB_ACCENTS = {"Convert":   (T.ACCENT_DEEP, T.ACCENT),
                     "Library":   (T.ACCENT2_DEEP, T.ACCENT2),
                     "Vault":     (T.ACCENT3_DEEP, T.ACCENT3),
+                    "Proxies":   (T.ACCENT5_DEEP, T.ACCENT5),
                     "Beat This": (T.ACCENT4_DEEP, T.ACCENT4)}
 
     def _show_tab(self, name: str) -> None:
@@ -671,7 +673,7 @@ class PazApp:
     # Library tab", whether or not it exists yet.
 
     TAB_CLASSES = {"Convert": ConvertTab, "Library": LibraryTab,
-                   "Vault": VaultTab, "Beat This": BeatTab}
+                   "Vault": VaultTab, "Proxies": ProxyTab, "Beat This": BeatTab}
 
     def _tab_object(self, name: str, build: bool = True):
         """The tab object for `name`, building it if it is not there yet.
@@ -790,6 +792,10 @@ class PazApp:
         return self._tab_object("Vault")
 
     @property
+    def proxies(self):
+        return self._tab_object("Proxies")
+
+    @property
     def beat(self):
         return self._tab_object("Beat This")
 
@@ -865,6 +871,7 @@ class PazApp:
         root.bind("<Escape>", lambda e: (
             self.convert.key_stop() if self._active() == "Convert"
             else self.library.key_escape(e) if self._active() == "Library"
+            else self.proxies.key_stop() if self._active() == "Proxies"
             else None))
         root.bind("<Control-a>", lambda e: (
             self.library.mark_all_on_page(e) if self._active() == "Library"
@@ -877,6 +884,7 @@ class PazApp:
             self.convert.key_scan() if self._active() == "Convert"
             else self.library.key_sync() if self._active() == "Library"
             else self.vault.key_lookup() if self._active() == "Vault"
+            else self.proxies.key_scan() if self._active() == "Proxies"
             else self.beat.key_analyze()))
         root.bind("<Control-f>", lambda e: (
             self.convert.key_find_search() if self._active() == "Convert"
@@ -999,7 +1007,7 @@ class PazApp:
         convert = self._tab_object("Convert", build=False)
         if convert is not None and not convert.on_app_close():
             return
-        for name in ("Library", "Vault", "Beat This"):
+        for name in ("Library", "Vault", "Proxies", "Beat This"):
             tab = self._tab_object(name, build=False)
             closing = getattr(tab, "on_app_close", None)
             if closing is not None:

@@ -336,12 +336,13 @@ class SettingsWindow(ctk.CTkToplevel):
                     "New posts per background fetch", 0, 20000)
         self._hint(tab, 17, "Untagged posts fetched quietly when the Library "
                            "opens or a sync ends - an untagged clip can't be "
-                           "found by artist or character. 600 is about six "
-                           "minutes. 0 = no limit.")
+                           "found by artist or character. A hundred per "
+                           "request: 5000 is about a minute. 0 = no limit.")
         self._number(tab, 18, "library_stale_refresh_budget",
                     "Re-checks per background fetch", 0, 20000)
-        self._hint(tab, 19, "Tagged posts re-checked for new tags and votes, "
-                           "clips you've used first. 0 = off.")
+        self._hint(tab, 19, "Tagged posts re-checked for new tags and votes - "
+                           "new posts daily, older ones weekly - clips you've "
+                           "used first. A hundred per request. 0 = off.")
 
         self._section(tab, "Performance", 20)
         self._number(tab, 21, "probe_cache_limit", "ffprobe results cached", 2000, 500000)

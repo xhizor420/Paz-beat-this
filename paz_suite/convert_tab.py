@@ -22,7 +22,7 @@ from .theme import T, button_style, font, label_style, text_width, CONVERT_LABEL
 from .format import fmt_time, fmt_clock, fmt_size
 from .files import is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer
 from .media import check_dependencies, available_encoders, probe
-from .e621 import GIVE_UP_AFTER, PACE
+from .e621 import BATCH_SIZE, PACE
 from .convert_engine import (
     Task, GPU_ENCODERS, classify, plan_recipe, convert, transfer,
     Cancelled, _discard,
@@ -34,18 +34,26 @@ from .upscale_window import UpscaleWindow
 from .widgets import (Card, Bar, StatTile, JobPanel, LogView, LibraryBar,
                       PrimaryButton, ask_yes, menu_rule, popup_menu, tell, tip)
 from .shortcuts import shortcuts_button
-from . import grabber, prefetch, uithread
+from . import category_audit, grabber, prefetch, uithread
 from .winsys import awake
 
 
 def scan_sources(folders: list, extensions: set, overwrite: bool,
-                 source_root: str, output_root: str, emeta=None) -> tuple:
+                 source_root: str, output_root: str, emeta=None,
+                 by_tags: bool = False, overrides: dict | None = None,
+                 categories=None) -> tuple:
     """What in these categories still needs converting. Any thread.
 
     Returns (rows, skipped, missing_dirs, error), rows being
     (folder, name, source, target, cells) in the order the table shows
     them. A source file counts as converted when its target exists and is
     not empty, unless `overwrite` asks for everything again.
+
+    With `by_tags`, a clip's folder is the one its e621 tags say rather
+    than the one Grabber saved it in (category_audit.route) - and a post
+    Grabber saved twice, once for each search that found it, is converted
+    once. `categories` are every folder a clip may go to; the scanned
+    `folders` when not given.
 
     Each category is two directory listings - its source folder and its
     output folder - rather than a listing plus three filesystem calls per
@@ -55,20 +63,27 @@ def scan_sources(folders: list, extensions: set, overwrite: bool,
     rows: list = []
     skipped = 0
     missing: list = []
+    listings: dict = {}
+    planned: set = set()
+
+    def converted(folder: str) -> dict:
+        if folder not in listings:
+            done: dict = {}
+            try:
+                for entry in os.scandir(os.path.join(output_root, folder)):
+                    done[os.path.normcase(entry.name)] = entry
+            except OSError:
+                pass                    # nothing converted into it yet
+            listings[folder] = done
+        return listings[folder]
+
     for folder in folders:
         source_dir = os.path.join(source_root, folder)
-        target_dir = os.path.join(output_root, folder)
         try:
             entries = sorted(os.scandir(source_dir), key=lambda e: e.name)
         except OSError:
             missing.append(source_dir)
             continue
-        done: dict = {}
-        try:
-            for entry in os.scandir(target_dir):
-                done[os.path.normcase(entry.name)] = entry
-        except OSError:
-            pass                        # nothing converted into it yet
         for entry in entries:
             name = entry.name
             stem, ext = os.path.splitext(name)
@@ -79,28 +94,60 @@ def scan_sources(folders: list, extensions: set, overwrite: bool,
                     continue
             except OSError:
                 continue
+            pid = post_id_from(name)
+            record = emeta.get(pid) if (emeta is not None and pid) else None
+            dest = (category_audit.route(folder, pid, record, categories or folders,
+                                         overrides)
+                    if by_tags else folder)
             target_name = stem + ".mp4"
-            target = os.path.join(target_dir, target_name)
+            target = os.path.join(output_root, dest, target_name)
+            if by_tags:
+                if os.path.normcase(target) in planned:
+                    skipped += 1        # the same post, saved twice
+                    continue
+                planned.add(os.path.normcase(target))
             if not overwrite:
-                existing = done.get(os.path.normcase(target_name))
-                try:
-                    converted = existing is not None and existing.stat().st_size > 0
-                except OSError:
-                    converted = False
-                if converted:
+                done = False
+                # Converted already where Grabber put it counts too: a
+                # clip whose tags changed since is the Library's Check
+                # categories' to move, not this scan's to convert twice.
+                for where in dict.fromkeys((dest, folder)):
+                    existing = converted(where).get(os.path.normcase(target_name))
+                    try:
+                        done = existing is not None and existing.stat().st_size > 0
+                    except OSError:
+                        done = False
+                    if done:
+                        break
+                if done:
                     skipped += 1
                     continue
             cells: dict = {}
-            pid = post_id_from(name)
-            record = emeta.get(pid) if (emeta is not None and pid) else None
             if record and not record.get("missing"):
                 cells = {
                     "artist": ", ".join(record.get("artist") or []) or "—",
                     "rating": (record.get("rating") or "").upper() or "—",
                     "_tags": record.get("tags", ""),
                 }
-            rows.append((folder, name, entry.path, target, cells))
+            rows.append((dest, name, entry.path, target, cells))
     return rows, skipped, missing, ""
+
+
+def untagged_sources(folders: list, extensions: set, source_root: str, emeta) -> list:
+    """Post IDs in these source folders with nothing cached for them."""
+    pids: list = []
+    for folder in folders:
+        try:
+            names = os.listdir(os.path.join(source_root, folder))
+        except OSError:
+            continue
+        for name in names:
+            if os.path.splitext(name)[1].lower() not in extensions:
+                continue
+            pid = post_id_from(name)
+            if pid and emeta.get(pid) is None:
+                pids.append(pid)
+    return pids
 
 
 class ConvertTab(ctk.CTkFrame):
@@ -737,47 +784,35 @@ class ConvertTab(ctk.CTkFrame):
         self.e621_btn.configure(state="disabled")
         self._set_status(self.F("fetching"), T.ACCENT2)
         # Paced inside e621.fetch, for every fetcher at once.
+        requests = -(-len(todo) // BATCH_SIZE) if self.emeta.batching else len(todo)
         self.log(f"{self.F('fetching')} · {len(todo)} posts "
-                 f"(~{fmt_time(len(todo) * (PACE + 0.1))})", "head")
+                 f"(~{fmt_time(requests * (PACE + 0.5))})", "head")
 
         def work():
-            hits = miss = 0
-            in_a_row = 0
+            total = len(todo)
+
+            def progress(done, _total):
+                self.ui(self._set_status,
+                        f"{self.F('fetching')} {done}/{total}", T.ACCENT2)
+
+            out = {"hits": 0, "missing": 0, "failed": 0, "error": ""}
             try:
-                for index, task in enumerate(todo):
-                    record = self.emeta.fetch(task.pid, self.cfg.e621_user, self.cfg.e621_key)
-                    if record.get("error") and not record.get("missing"):
-                        miss += 1
-                        self.log(f"  #{task.pid}: {record['error']}", "warn")
-                        # A run of failures is the connection or the rate
-                        # limit, not the posts. Nothing is cached from
-                        # one, so stopping loses nothing but the wait.
-                        in_a_row += 1
-                        if in_a_row >= GIVE_UP_AFTER:
-                            self.log(f"Stopped after {in_a_row} failures in a "
-                                     "row - e621 is not answering. Nothing was "
-                                     "cached; press Fetch again later.", "warn")
-                            break
-                    elif record.get("missing"):
-                        miss += 1
-                        in_a_row = 0
-                        self.ui(self._apply_meta, task)
-                    else:
-                        hits += 1
-                        in_a_row = 0
-                        self.ui(self._apply_meta, task)
-                    if index % 5 == 0:
-                        self.ui(self._set_status,
-                                f"{self.F('fetching')} {index + 1}/{len(todo)}", T.ACCENT2)
-                    if index % 10 == 9:
-                        self.emeta.checkpoint()
+                # A hundred to a request - see E621Meta.fetch_all.
+                out = self.emeta.fetch_all([t.pid for t in todo], self.cfg.e621_user,
+                                           self.cfg.e621_key, progress=progress)
+                for task in todo:
+                    self.ui(self._apply_meta, task)
             finally:
-                self.emeta.save()
                 self.busy_tool = False
                 self.ui(self.e621_btn.configure, state="normal")
                 self.ui(self._set_status,
                         self.F("watching") if self.watch_flag.is_set() else self.F("idle"),
                         T.ACCENT if self.watch_flag.is_set() else T.FAINT)
+                hits, miss = out["hits"], out["missing"] + out["failed"]
+                if out["failed"]:
+                    self.log(f"{out['failed']} not fetched ({out['error']}) - "
+                             "nothing was cached for them; press Fetch again "
+                             "later.", "warn")
                 message = self.F("fetch_done", n=hits, m=miss)
                 self.log(message, "ok" if hits else "warn")
                 self.ui(self.toaster.show, message, "ok" if hits else "warn")
@@ -830,10 +865,11 @@ class ConvertTab(ctk.CTkFrame):
 
     def _watch_candidates(self) -> list:
         extensions = self.cfg.source_ext_set
+        overrides = dict(self.cfg.category_overrides)
+        categories = list(self.cfg.subfolders)
         found = []
         for folder in list(self._active_folders):
             source_dir = os.path.join(self.cfg.source_root, folder)
-            target_dir = os.path.join(self.cfg.output_root, folder)
             if not os.path.isdir(source_dir):
                 continue
             try:
@@ -844,8 +880,13 @@ class ConvertTab(ctk.CTkFrame):
                 stem, ext = os.path.splitext(name)
                 if ext.lower() not in extensions:
                     continue
-                target = os.path.join(target_dir, stem + ".mp4")
-                if os.path.exists(target) and os.path.getsize(target) > 0:
+                # Where the scan would put it - see scan_sources.
+                pid = post_id_from(name)
+                dest = category_audit.route(folder, pid, self.emeta.get(pid) if pid else None,
+                                            categories, overrides)
+                targets = {os.path.join(self.cfg.output_root, where, stem + ".mp4")
+                           for where in (dest, folder)}
+                if any(os.path.exists(t) and os.path.getsize(t) > 0 for t in targets):
                     continue
                 found.append(os.path.join(source_dir, name))
         return found
@@ -1174,7 +1215,7 @@ class ConvertTab(ctk.CTkFrame):
                             continue
                         try:
                             os.makedirs(dest_dir, exist_ok=True)
-                            shutil.move(path, dest)
+                            transfer(path, dest, "move")
                             promoted += 1
                             self.log(f"Promoted  {name}   {info.resolution} @ "
                                      f"{info.fps_text}", "ok")
@@ -1284,9 +1325,24 @@ class ConvertTab(ctk.CTkFrame):
         job = (folders, self.cfg.source_ext_set, bool(self.reencode.get()),
                self.cfg.source_root, self.cfg.output_root)
 
+        fetch = self.cfg.e621_enabled
+        user, key = self.cfg.e621_user, self.cfg.e621_key
+        overrides = dict(self.cfg.category_overrides)
+        categories = list(self.cfg.subfolders)
+
         def work():
             try:
-                found = scan_sources(*job, emeta=self.emeta)
+                if fetch:
+                    # Tags first, so new clips are sorted by them: a few
+                    # seconds for a hundred new posts. Two failures and it
+                    # gives up - e621 being down must not hold the scan,
+                    # and an untagged clip just stays where Grabber put it.
+                    pids = untagged_sources(folders, job[1], job[3], self.emeta)
+                    if pids:
+                        self.ui(self.table.empty_hint, f"Fetching tags for {len(pids)} new clips…")
+                        self.emeta.fetch_all(pids, user, key, give_up=2)
+                found = scan_sources(*job, emeta=self.emeta, by_tags=True,
+                                     overrides=overrides, categories=categories)
             except Exception as exc:          # never leave the tab "scanning"
                 found = ([], 0, [], str(exc))
             self.ui(self._scan_done, gen, folders, found, then)

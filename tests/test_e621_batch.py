@@ -377,3 +377,36 @@ def test_the_background_trickle_does_not(instant):
     meta.fetch_many = lambda p, *a: seen.append(list(library_tab.awake.reasons)) or original(p, *a)
     tab._run_fetch(pids(3), 0, ambient=True)
     assert seen == [[]]
+
+
+# ── fetch_all, and what a record keeps ─────────────────────────────────
+
+def test_fetch_all_asks_a_hundred_at_a_time_and_looks_up_the_rest(meta, monkeypatch):
+    pids = [str(1000 + i) for i in range(150)]
+
+    def answer(url):
+        if "posts.json" in url:
+            return {"posts": [post(p) for p in ids_in(url) if p != "1007"]}
+        return 404                                  # 1007, on its own: gone
+    asked = serve(monkeypatch, answer)
+    seen = []
+    out = meta.fetch_all(pids, progress=lambda done, total: seen.append((done, total)))
+    assert len(asked) == 3                          # two searches and one lookup
+    assert out == {"hits": 149, "missing": 1, "failed": 0, "error": ""}
+    assert meta.get("1007")["missing"]
+    assert seen[-1] == (150, 150)
+
+
+def test_fetch_all_gives_up_after_a_run_of_failures(meta, monkeypatch):
+    asked = serve(monkeypatch, lambda url: 503)
+    out = meta.fetch_all([str(1000 + i) for i in range(250)], give_up=2)
+    assert len(asked) == 2
+    assert out["failed"] == 250 and out["error"] == "HTTP 503"
+    assert meta.get("1000") is None                 # nothing cached from a failure
+
+
+def test_votes_are_rechecked_weekly_at_the_slowest():
+    day = 86400
+    assert e621._refresh_interval_seconds(3 * day) == day
+    assert e621._refresh_interval_seconds(20 * day) == 2 * day
+    assert e621._refresh_interval_seconds(5 * 365 * day) == 7 * day

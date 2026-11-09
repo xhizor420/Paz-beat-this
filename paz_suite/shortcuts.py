@@ -13,7 +13,7 @@ from .theme import T, font, label_style, px, window_size
 from .widgets import tip
 from . import icons
 
-TAB_ORDER = ("Convert", "Library", "Vault", "Beat This")
+TAB_ORDER = ("Convert", "Library", "Vault", "Proxies", "Beat This")
 
 # (group, ((keys, what), ...)) per tab. Keep in step with PazApp._bind_keys
 # and each tab's own local bindings.
@@ -70,6 +70,12 @@ SHORTCUTS = {
             ("F5", "Look up the pasted list"),
         )),
     ),
+    "Proxies": (
+        ("Proxies", (
+            ("F5", "Scan for clips without a proxy"),
+            ("Esc", "Stop making proxies"),
+        )),
+    ),
     "Beat This": (
         ("Beat This", (
             ("F5", "Analyze the song"),
@@ -78,7 +84,7 @@ SHORTCUTS = {
 }
 
 ACCENTS = {"Convert": "ACCENT", "Library": "ACCENT2", "Vault": "ACCENT3",
-           "Beat This": "ACCENT4"}
+           "Proxies": "ACCENT5", "Beat This": "ACCENT4"}
 
 
 class ShortcutsWindow(ctk.CTkToplevel):

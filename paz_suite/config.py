@@ -130,6 +130,9 @@ class AppConfig:
     min_height: int = 2160
     min_fps: float = 60.0
     transfer_mode: str = "copy"  # copy | move | hardlink
+    # Post ID -> folder: clips that stay where they are whatever their
+    # e621 tags say - see category_audit.route.
+    category_overrides: dict = field(default_factory=dict)
 
     # ── Convert: interface ───────────────────────────────────────────────
     auto_preview: bool = False
@@ -214,22 +217,27 @@ class AppConfig:
     # refresh" posts (see E621Meta.is_stale) alongside the genuinely
     # uncached ones, so scores/tags on posts already in the library
     # quietly stay current without ever re-checking the whole library
-    # at once. 0 disables the ambient refresh (manual only).
-    library_stale_refresh_budget: int = 150
+    # at once. 0 disables the ambient refresh (manual only). Posts, not
+    # requests: a hundred go in one, so 3000 is thirty requests, half a
+    # minute in the background.
+    library_stale_refresh_budget: int = 3000
     # And how many never-fetched posts one ambient run may pull. A
     # separate, larger number than the refresh budget on purpose: an
     # untagged clip cannot be searched by artist, character or species
     # at all, so clearing that backlog is worth more than topping up a
     # score that is already roughly right. The ambient fetch does not
     # make the tab busy (see _run_fetch), so this is a trickle in the
-    # background rather than a wait - at the default delay, 600 posts is
-    # about six minutes of it, and anything the user asks for cancels it
+    # background rather than a wait - a hundred posts to a request, 5000
+    # is about a minute of it, and anything the user asks for cancels it
     # and picks up where it left off next time. 0 means "as many as
     # there are".
-    library_fetch_budget: int = 600
+    library_fetch_budget: int = 5000
     # Set once, when the two budgets were split - see
     # _upgrade_fetch_budget.
     fetch_budget_upgraded: bool = False
+    # Set once, when re-checks went a hundred to a request - see
+    # _upgrade_refresh_budget.
+    refresh_budget_batched: bool = False
     # Width of the Library's inspector column in pixels, as dragged by its
     # handle. 0 means "work it out from the window", which is the default
     # and what the handle's double-click restores.
@@ -323,6 +331,7 @@ class AppConfig:
             changed = cfg._upgrade_banner_slot() or changed
             changed = cfg._upgrade_layout_sizes() or changed
             changed = cfg._upgrade_fetch_budget() or changed
+            changed = cfg._upgrade_refresh_budget() or changed
             changed = cfg._upgrade_thumb_width() or changed
             if changed:
                 cfg.save()
@@ -421,6 +430,24 @@ class AppConfig:
         if self.library_stale_refresh_budget == self.OLD_REFRESH_BUDGET:
             self.library_stale_refresh_budget = \
                 AppConfig.library_stale_refresh_budget
+        return True
+
+    OLD_BATCHED_BUDGET = 150
+    OLD_FETCH_BUDGET = 600
+
+    def _upgrade_refresh_budget(self) -> bool:
+        """Raise the re-check budget from 150, the default from when each
+        post was its own request, to today's. 150 was two requests' worth
+        once they went a hundred at a time - too few to keep the scores of
+        a ten-thousand-clip library current. Only the old default moves."""
+        if self.refresh_budget_batched:
+            return False
+        self.refresh_budget_batched = True
+        if self.library_stale_refresh_budget in (self.OLD_BATCHED_BUDGET,
+                                                 self.OLD_REFRESH_BUDGET):
+            self.library_stale_refresh_budget = AppConfig.library_stale_refresh_budget
+        if self.library_fetch_budget == self.OLD_FETCH_BUDGET:
+            self.library_fetch_budget = AppConfig.library_fetch_budget
         return True
 
     # Widths that mean "nobody picked this" — the two defaults this

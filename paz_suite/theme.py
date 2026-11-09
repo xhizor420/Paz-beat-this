@@ -50,6 +50,9 @@ class T:
     ACCENT4      = "#FFB03D"  # amber — Beat This
     ACCENT4_HOV  = "#FFCC80"
     ACCENT4_DEEP = "#4A3110"
+    ACCENT5      = "#59C3FF"  # sky — Proxies
+    ACCENT5_HOV  = "#9AD9FF"
+    ACCENT5_DEEP = "#11324A"
 
     # Cycled to auto-assign each new Vault project its own mark, kept
     # distinct from the four tab identities above so a marked clip's

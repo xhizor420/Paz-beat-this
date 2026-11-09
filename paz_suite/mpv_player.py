@@ -166,6 +166,9 @@ class MpvPlayer:
         self._pending: dict = {}
         self._failed = False
         self._starting = False
+        # Bumped by shutdown(): a start still under way when it changes
+        # was cancelled, and must not leave its mpv.exe behind.
+        self._gen = 0
         # Called when mpv turns out not to be usable, so the caller can
         # go back to the built-in engine. Set by whoever builds this.
         self.on_unavailable = None
@@ -202,19 +205,30 @@ class MpvPlayer:
             return True
         if not mpv_path():
             return False
+        # The window handle is read here, on the UI thread: Tk is not to
+        # be called from the start thread.
+        try:
+            wid = self.widget.winfo_id()
+        except Exception:
+            return False
         self._starting = True
-        threading.Thread(target=self._start_blocking, args=(vo,),
+        threading.Thread(target=self._start_blocking, args=(vo, wid, self._gen),
                          daemon=True).start()
         return True
 
-    def _start_blocking(self, vo: str = None) -> None:
+    def _start_blocking(self, vo: str = None, wid: int = 0, gen: int = 0) -> None:
         ok = False
         try:
-            ok = self._spawn(vo)
+            ok = self._spawn(vo, wid)
         except Exception:
             ok = False
         finally:
             self._starting = False
+        if gen != self._gen:
+            # Shut down while starting: what was just started is unowned.
+            if ok or self._proc is not None:
+                self.shutdown()
+            return
         if ok:
             self._alive = True
             threading.Thread(target=self._reader, daemon=True).start()
@@ -228,16 +242,14 @@ class MpvPlayer:
                            "mpv wouldn't start, or wouldn't accept a "
                            "connection. Falling back to the built-in player.")
 
-    def _spawn(self, vo: str = None) -> bool:
+    def _spawn(self, vo: str = None, wid: int = 0) -> bool:
         binary = mpv_path()
         if not binary:
             return False
         # Default to the configured override rather than "", so it applies
         # however mpv comes to be started - load() gets there before play().
         vo = self.vo if vo is None else vo
-        try:
-            wid = self.widget.winfo_id()
-        except Exception:
+        if not wid:
             return False
 
         self._ipc = self._ipc_address()
@@ -301,6 +313,7 @@ class MpvPlayer:
         return False
 
     def shutdown(self) -> None:
+        self._gen += 1
         self._alive = False
         self._starting = False
         try:

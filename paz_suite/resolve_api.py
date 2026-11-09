@@ -184,6 +184,76 @@ def _find_bin(pool, name: str):
     return pool.AddSubFolder(root, name) or root
 
 
+def _every_clip(folder):
+    """Every clip in a media-pool folder and all the folders under it."""
+    for clip in (folder.GetClipList() or []) if hasattr(folder, "GetClipList") else []:
+        yield clip
+    for sub in folder.GetSubFolderList() or []:
+        yield from _every_clip(sub)
+
+
+def _same_file(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and \
+        os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _link_pool(pool, proxy_for, skip=None) -> tuple:
+    """Link `proxy_for(clip's file)` to every clip in the pool that has one
+    and is not linked to it yet. (linked, already, refused)."""
+    linked = already = refused = 0
+    root = pool.GetRootFolder() if pool is not None else None
+    if root is None:
+        return 0, 0, 0
+    for clip in _every_clip(root):
+        if skip is not None and skip(clip):
+            continue
+        try:
+            path = clip.GetClipProperty("File Path") or ""
+        except Exception:
+            continue
+        proxy = proxy_for(path) if path else ""
+        if not proxy or not os.path.exists(proxy):
+            continue
+        try:
+            current = clip.GetClipProperty("Proxy Media Path") or ""
+        except Exception:
+            current = ""
+        if _same_file(current, proxy):
+            already += 1
+            continue
+        try:
+            ok = clip.LinkProxyMedia(proxy)
+        except Exception:
+            ok = False
+        if ok:
+            linked += 1
+        else:
+            refused += 1
+    return linked, already, refused
+
+
+def link_proxies(proxy_for) -> tuple:
+    """Link a proxy to every clip in the open project that has one -
+    clips added by hand, by drag and drop, or before the proxy was made.
+    `proxy_for(path)` gives the proxy for a clip's file, or "".
+    Returns (ok, message, linked)."""
+    project, problem = current_project()
+    if project is None:
+        return False, problem, 0
+    linked, already, refused = _link_pool(project.GetMediaPool(), proxy_for)
+    if not (linked or already or refused):
+        return True, "No clip in the open Resolve project has a proxy yet.", 0
+    bits = []
+    if linked:
+        bits.append(f"linked {linked} proxy{'s' if linked != 1 else ''}")
+    if already:
+        bits.append(f"{already} already linked")
+    if refused:
+        bits.append(f"{refused} turned down by Resolve")
+    message = "Resolve: " + ", ".join(bits) + "."
+    return True, message, linked
+
+
 def import_clips(clips: list, bin_name: str = "") -> tuple:
     """Add clips to the open project's media pool.
 
@@ -221,18 +291,19 @@ def import_clips(clips: list, bin_name: str = "") -> tuple:
         if previous:
             pool.SetCurrentFolder(previous)
 
-    if not items:
-        return False, ("Resolve didn't import anything. Clips already in the "
-                        "media pool are skipped, so this usually means they "
-                        "were already there.")
-
     # AddItemListToMediaPool returns items in the order it accepted them,
     # which is not necessarily the order asked for, and skips duplicates -
-    # so match proxies back up by file name rather than by position.
-    proxies = {os.path.basename(master): proxy for master, proxy in wanted if proxy}
+    # so match proxies back up by the file rather than by position. By its
+    # full path first: two categories can hold the same file name, and
+    # going by name alone gave both clips whichever proxy came last.
+    by_path = {os.path.normcase(os.path.normpath(master)): proxy
+               for master, proxy in wanted if proxy}
+    by_name = {os.path.basename(master): proxy for master, proxy in wanted if proxy}
     linked = mismatched = 0
     for item in items:
-        proxy = proxies.get(item.GetClipProperty("File Name"))
+        where = item.GetClipProperty("File Path") or ""
+        proxy = (by_path.get(os.path.normcase(os.path.normpath(where))) if where
+                 else by_name.get(item.GetClipProperty("File Name")))
         if not proxy or not os.path.exists(proxy):
             continue
         try:
@@ -242,6 +313,23 @@ def import_clips(clips: list, bin_name: str = "") -> tuple:
                 mismatched += 1
         except Exception:
             mismatched += 1
+
+    # Clips that were in the media pool already were skipped by the import
+    # above - and so had no proxy linked. Link theirs too.
+    done = {id(item) for item in items}
+    extra, _same, extra_refused = _link_pool(
+        pool, lambda path: by_path.get(os.path.normcase(os.path.normpath(path))),
+        skip=lambda clip: id(clip) in done)
+    linked += extra
+    mismatched += extra_refused
+
+    if not items:
+        if extra:
+            return True, (f"Already in the media pool - linked {extra} "
+                          f"prox{'ies' if extra != 1 else 'y'} to them.")
+        return False, ("Resolve didn't import anything. Clips already in the "
+                        "media pool are skipped, so this usually means they "
+                        "were already there.")
 
     where = f" into '{bin_name}'" if bin_name else ""
     message = f"Added {len(items)} clip{'s' if len(items) != 1 else ''}{where}."

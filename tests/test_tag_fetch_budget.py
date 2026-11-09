@@ -176,6 +176,9 @@ def test_nothing_untagged_means_no_fetch_at_all():
     tab = FakeTab(count=5, cached=[str(1000 + i) for i in range(5)])
     tab._fetch_tags()
     assert tab.fetched is None
+    assert tab.status == []                 # the background run keeps quiet
+    tab._fetch_tags(full=True)
+    assert tab.fetched is None
     assert tab.status and "already tagged" in tab.status[-1]
 
 
